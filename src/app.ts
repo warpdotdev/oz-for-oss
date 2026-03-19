@@ -65,7 +65,8 @@ export function deleteTodo(position: number): void {
 }
 
 export function searchTodos(query: string): void {
-  const results = todos.filter((todo) => todo.text.includes(query));
+  const lowerQuery = query.toLowerCase();
+  const results = todos.filter((todo) => todo.text.toLowerCase().includes(lowerQuery));
 
   if (results.length === 0) {
     console.log(`No todos matching "${query}".`);
