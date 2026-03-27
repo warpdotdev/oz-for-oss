@@ -24,7 +24,7 @@ This skill produces two files:
   - **feature** labels — identify a capability or request type (e.g. `enhancement`, `bug`, `documentation`).
   - **status** labels — identify workflow state (e.g. `triaged`, `needs-info`, `wontfix`).
 - If the repository has very few or no labels, seed the config with sensible defaults:
-  - `triaged` (status), `bug` (feature), `enhancement` (feature), `documentation` (feature), `needs-info` (status)
+  - `triaged` (status), `bug` (feature), `enhancement` (feature), `documentation` (feature), `needs-info` (status), `duplicate` (status)
   - `repro:high`, `repro:medium`, `repro:low`, `repro:unknown` (status)
 
 ### 2. Analyze recent issues

@@ -4,14 +4,16 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from triage_new_issues import format_issue_comments, resolve_issue_number_override
+from triage_new_issues import format_issue_comments, format_recent_open_issues, resolve_issue_number_override
 
 from oz_workflows.triage import (
     ORIGINAL_REPORT_END,
     ORIGINAL_REPORT_START,
+    build_duplicate_comment,
     compose_triaged_issue_body,
     dedupe_strings,
     discover_issue_templates,
+    extract_duplicate_issues,
     extract_original_issue_report,
     format_stakeholders_for_prompt,
     load_stakeholders,
@@ -207,6 +209,74 @@ class FormatIssueCommentsTest(unittest.TestCase):
             exclude_comment_id=2,
         )
         self.assertEqual(rendered, "- @alice [MEMBER] (2026-03-24T00:00:00Z): Earlier context")
+
+
+class ExtractDuplicateIssuesTest(unittest.TestCase):
+    def test_returns_numbers_from_valid_list(self) -> None:
+        result = {"duplicate_of": [10, 20]}
+        self.assertEqual(extract_duplicate_issues(result), [10, 20])
+
+    def test_returns_empty_when_missing(self) -> None:
+        self.assertEqual(extract_duplicate_issues({}), [])
+
+    def test_returns_empty_for_non_list(self) -> None:
+        self.assertEqual(extract_duplicate_issues({"duplicate_of": "not a list"}), [])
+
+    def test_skips_invalid_entries(self) -> None:
+        result = {"duplicate_of": [5, "bad", None, -1, 0, 42]}
+        self.assertEqual(extract_duplicate_issues(result), [5, 42])
+
+    def test_handles_string_numbers(self) -> None:
+        result = {"duplicate_of": ["7", "12"]}
+        self.assertEqual(extract_duplicate_issues(result), [7, 12])
+
+
+class BuildDuplicateCommentTest(unittest.TestCase):
+    def test_single_duplicate(self) -> None:
+        comment = build_duplicate_comment([42])
+        self.assertIn("#42", comment)
+        self.assertIn("duplicate", comment.lower())
+        self.assertIn("2 business days", comment)
+
+    def test_multiple_duplicates(self) -> None:
+        comment = build_duplicate_comment([10, 20])
+        self.assertIn("#10", comment)
+        self.assertIn("#20", comment)
+
+    def test_empty_list_returns_empty(self) -> None:
+        self.assertEqual(build_duplicate_comment([]), "")
+
+
+class FormatRecentOpenIssuesTest(unittest.TestCase):
+    def test_formats_issues_excluding_current(self) -> None:
+        issues = [
+            {"number": 1, "title": "First issue", "labels": [{"name": "bug"}]},
+            {"number": 2, "title": "Second issue", "labels": []},
+            {"number": 3, "title": "Third issue", "labels": [{"name": "enhancement"}]},
+        ]
+        result = format_recent_open_issues(issues, exclude_number=2)
+        self.assertIn("#1", result)
+        self.assertIn("First issue", result)
+        self.assertIn("[bug]", result)
+        self.assertNotIn("#2", result)
+        self.assertIn("#3", result)
+
+    def test_skips_pull_requests(self) -> None:
+        issues = [
+            {"number": 1, "title": "A PR", "labels": [], "pull_request": {"url": "x"}},
+            {"number": 2, "title": "An issue", "labels": []},
+        ]
+        result = format_recent_open_issues(issues, exclude_number=0)
+        self.assertNotIn("#1", result)
+        self.assertIn("#2", result)
+
+    def test_returns_none_for_empty(self) -> None:
+        self.assertEqual(format_recent_open_issues([], exclude_number=1), "- None")
+
+    def test_respects_limit(self) -> None:
+        issues = [{"number": i, "title": f"Issue {i}", "labels": []} for i in range(1, 10)]
+        result = format_recent_open_issues(issues, exclude_number=0, limit=3)
+        self.assertEqual(result.count("- #"), 3)
 
 
 if __name__ == "__main__":

@@ -191,3 +191,34 @@ def compose_triaged_issue_body(visible_body: str, original_report: str) -> str:
     if not content:
         return appendix
     return f"{content}\n\n{appendix}"
+
+
+def extract_duplicate_issues(result: dict[str, Any]) -> list[int]:
+    """Return the list of issue numbers from the ``duplicate_of`` field, if any."""
+    raw = result.get("duplicate_of")
+    if not isinstance(raw, list):
+        return []
+    numbers: list[int] = []
+    for entry in raw:
+        try:
+            num = int(entry)
+        except (TypeError, ValueError):
+            continue
+        if num > 0:
+            numbers.append(num)
+    return numbers
+
+
+def build_duplicate_comment(duplicate_of: list[int]) -> str:
+    """Build a structured comment indicating the issue is a duplicate."""
+    if not duplicate_of:
+        return ""
+    if len(duplicate_of) == 1:
+        refs = f"#{duplicate_of[0]}"
+    else:
+        refs = ", ".join(f"#{n}" for n in duplicate_of)
+    return (
+        f"This issue appears to be a duplicate of {refs}.\n"
+        "\n"
+        "This issue will be closed in 2 business days."
+    )

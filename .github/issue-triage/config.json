@@ -39,6 +39,10 @@
     "area:workflow": {
       "color": "7057FF",
       "description": "GitHub workflows, Python automation, or Oz integration"
+    },
+    "duplicate": {
+      "color": "CFD3D7",
+      "description": "This issue is a duplicate of an existing issue"
     }
   }
 }

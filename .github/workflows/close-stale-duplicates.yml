@@ -1,0 +1,26 @@
+name: Close Stale Duplicates
+on:
+  schedule:
+    # Run once daily at 09:00 UTC on weekdays (Mon–Fri)
+    - cron: '0 9 * * 1-5'
+  workflow_dispatch: {}
+jobs:
+  close_stale_duplicates:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Close stale duplicate issues
+        uses: actions/stale@v9
+        with:
+          only-labels: duplicate
+          days-before-stale: -1
+          days-before-close: 2
+          close-issue-message: >-
+            Closing this issue as a duplicate. It will be tracked in the
+            original issue.
+          close-issue-reason: not_planned
+          exempt-issue-labels: pinned
+          stale-issue-label: ' '
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
