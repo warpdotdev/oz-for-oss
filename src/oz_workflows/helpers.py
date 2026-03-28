@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -48,8 +49,13 @@ def triggering_comment_prompt_text(event_payload: dict[str, Any]) -> str:
     return f"@{author_login} commented:\n{body}"
 
 
-def comment_metadata(workflow: str, issue_number: int) -> str:
-    return f'<!-- oz-agent-metadata: {{"type":"issue-status","workflow":"{workflow}","issue":{issue_number}}} -->'
+def comment_metadata(workflow: str, issue_number: int, run_id: str) -> str:
+    return f'<!-- oz-agent-metadata: {{"type":"issue-status","workflow":"{workflow}","issue":{issue_number},"run_id":"{run_id}"}} -->'
+
+
+def comment_metadata_prefix(workflow: str, issue_number: int) -> str:
+    """Return a prefix that matches any run of *workflow* on *issue_number*."""
+    return f'<!-- oz-agent-metadata: {{"type":"issue-status","workflow":"{workflow}","issue":{issue_number}'
 
 
 def split_comment_body(body: str, metadata: str) -> tuple[str, str]:
@@ -160,7 +166,9 @@ class WorkflowProgressComment:
         self.workflow = workflow
         self.event_payload = event_payload or {}
         self.requester_login = requester_login
-        self.metadata = comment_metadata(workflow, issue_number)
+        self._run_id = uuid.uuid4().hex
+        self.metadata = comment_metadata(workflow, issue_number, self._run_id)
+        self._metadata_prefix = comment_metadata_prefix(workflow, issue_number)
         self.comment_id: int | None = None
 
     def start(self, status_line: str) -> None:
@@ -175,22 +183,23 @@ class WorkflowProgressComment:
         self._append_sections([status_line])
 
     def cleanup(self) -> None:
-        """Delete the progress comment if one exists from this or a previous run."""
+        """Delete progress comments from this or any previous run of the same workflow."""
         if self.comment_id is not None:
             try:
                 self.github.delete_comment(self.owner, self.repo, self.comment_id)
             except Exception:
                 pass
             self.comment_id = None
-            return
-        existing = self._get_or_find_existing_comment()
-        if existing is not None:
+        # Also remove any other comments left by earlier runs of the same workflow.
+        for comment in self._find_all_workflow_comments():
+            cid = int(comment["id"])
+            if cid == self.comment_id:
+                continue
             try:
-                self.github.delete_comment(self.owner, self.repo, int(existing["id"]))
+                self.github.delete_comment(self.owner, self.repo, cid)
             except Exception:
                 pass
-            self.comment_id = None
-            self.comment_id = None
+        self.comment_id = None
 
     def _append_sections(self, sections: list[str]) -> None:
         normalized_sections = [section.strip() for section in sections if section and section.strip()]
@@ -235,6 +244,15 @@ class WorkflowProgressComment:
         if existing:
             self.comment_id = int(existing["id"])
         return existing
+
+    def _find_all_workflow_comments(self) -> list[dict[str, Any]]:
+        """Return all issue comments matching this workflow regardless of run_id."""
+        comments = self.github.list_issue_comments(self.owner, self.repo, self.issue_number)
+        return [
+            comment
+            for comment in comments
+            if isinstance(comment.get("body"), str) and self._metadata_prefix in comment["body"]
+        ]
 
 
 # Maps issue label names to conventional commit type prefixes.
