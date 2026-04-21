@@ -66,27 +66,28 @@ The [`oz-verify.yml`](.github/workflows/oz-verify.yml) reusable workflow lets an
 
 Usage:
 
-- Post `/oz-verify` as a new comment on a pull request to verify it with every verification skill in the repository (see *Authoring verification skills* below for the naming convention).
+- Post `/oz-verify` as a new comment on a pull request to verify it with every verification skill in the repository (see *Authoring verification skills* below for the frontmatter tag convention).
 - Post `/oz-verify <skill-name>` (e.g. `/oz-verify verify-login-flow`) to run a single verification skill.
 - Only comments from collaborators, members, and owners trigger the workflow.
 
-The workflow calls [`warpdotdev/oz-agent-action`](https://github.com/warpdotdev/oz-agent-action) with the [`verify-pr`](.agents/skills/verify-pr/SKILL.md) skill. That skill discovers verification skills, runs them against the PR HEAD, writes a consolidated markdown report, and posts it back to the PR as a new comment with a link to the workflow run.
+The workflow calls [`warpdotdev/oz-agent-action`](https://github.com/warpdotdev/oz-agent-action) with the [`verify-pr`](.agents/skills/verify-pr/SKILL.md) skill. That skill discovers verification skills, runs them against the PR HEAD, collects any screenshot/video artifacts they produce, writes a consolidated markdown report, and posts it back to the PR as a new comment — with artifacts embedded inline — along with a link to the workflow run.
 
 #### Required secrets and permissions
 
 - `WARP_API_KEY` must be set in repository or organization secrets.
-- The calling adapter grants `contents: read`, `issues: write`, and `pull-requests: write` so the agent can check out the PR and post the report.
+- The calling adapter grants `contents: write`, `issues: write`, and `pull-requests: write` so the agent can check out the PR, publish collected screenshot/video artifacts to the dedicated `oz-verify-artifacts` branch, and post the report. The `verify-pr` skill never pushes to the PR branch itself; `contents: write` is used only to maintain the artifacts branch.
 - Unlike most other workflows in this repo, `oz-verify.yml` does **not** require the `OZ_MGMT_GHA_APP_ID`/`OZ_MGMT_GHA_PRIVATE_KEY` GitHub App credentials. It uses the workflow's default `GITHUB_TOKEN` so downstream repos can adopt it with only `WARP_API_KEY`.
 
 #### Authoring verification skills
 
 A verification skill is any skill that follows this convention:
 
-- It lives at `.agents/skills/<name>/SKILL.md` and its directory name contains `verify` or `test` (case-insensitive) — e.g. `verify-login/`, `test-checkout/`, `e2e-tests/`, or `smoke-verify/`.
-- Its frontmatter `description` makes it clear that the skill performs end-to-end verification / testing of a user-facing feature or flow. Skills whose directory name happens to match but whose description is about something else (spec authoring, unit-level helpers, release tooling, etc.) are skipped.
+- It lives at `.agents/skills/<name>/SKILL.md` and exposes standard skill frontmatter (`name`, `description`).
+- Its frontmatter declares `verification: true` as a top-level field. This tag is the single source of truth for whether `/oz-verify` runs the skill — directory name and description wording do not matter.
 - It reads the checked-out PR HEAD and reports pass/fail for the behavior it validates.
+- When relevant, it writes screenshot or short video evidence to `verification_artifacts/<skill-name>/` (or any other path in the working tree); the `verify-pr` skill scans for untracked media files after all skills have run and embeds them in the PR comment via the `oz-verify-artifacts` branch.
 
-Verification skills should be read-only: they can run the repository's tests, scripts, or tooling, but must not commit, push, or modify tracked files. The `verify-pr` skill collects each skill's pass/fail status and assembles the consolidated report; see [`.agents/skills/verify-pr/SKILL.md`](.agents/skills/verify-pr/SKILL.md) for the expected report structure and behavior.
+Verification skills should be read-only with respect to tracked files: they can run the repository's tests, scripts, or tooling, but must not commit, push, or modify tracked files. The `verify-pr` skill collects each skill's pass/fail status, publishes any screenshots or videos they produce, and assembles the consolidated report; see [`.agents/skills/verify-pr/SKILL.md`](.agents/skills/verify-pr/SKILL.md) for the expected report structure, artifact-embedding behavior, and the `oz-verify-artifacts` branch convention.
 
 ### 5. Bootstrap triage configuration (optional)
 

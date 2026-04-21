@@ -1,10 +1,10 @@
 name: Oz Verify
 # Reusable workflow that runs end-to-end verification on a pull request via the
 # Oz agent. It discovers any "verification" skills present in the repository
-# (skills under `.agents/skills/` whose directory name contains `verify` or
-# `test` and whose description covers end-to-end verification), executes them
-# against the PR's HEAD, and posts a consolidated report comment back on the
-# PR.
+# (skills under `.agents/skills/` whose `SKILL.md` frontmatter declares
+# `verification: true`), executes them against the PR's HEAD, collects any
+# screenshot/video artifacts those skills produce, and posts a consolidated
+# report comment back on the PR with those artifacts embedded inline.
 #
 # This workflow is intentionally self-contained: it calls
 # `warpdotdev/oz-agent-action` directly and does not depend on the shared
@@ -12,6 +12,10 @@ name: Oz Verify
 # repositories can adopt `/oz-verify` with nothing more than a lightweight
 # adapter workflow, a `WARP_API_KEY` secret, and (optionally) their own
 # verification skills.
+#
+# `contents: write` is granted so the `verify-pr` skill can publish collected
+# screenshot/video artifacts to the dedicated `oz-verify-artifacts` branch; the
+# skill never pushes to the PR branch itself.
 on:
   workflow_call:
     inputs:
@@ -42,7 +46,7 @@ jobs:
     name: Run Oz verification
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       issues: write
       pull-requests: write
     steps:
@@ -102,17 +106,27 @@ jobs:
               {filter_line}
 
               Follow the `verify-pr` skill's instructions exactly:
-              1. Discover verification skills in the repository.
-              2. Run the verification skills against the checked-out PR HEAD.
-              3. Write a consolidated markdown report to `verification_report.md`
+              1. Discover verification skills in the repository by scanning
+                 `.agents/skills/*/SKILL.md` and keeping only skills whose
+                 frontmatter declares `verification: true`.
+              2. Run each discovered verification skill against the checked-out
+                 PR HEAD.
+              3. Collect any screenshot/video artifacts those skills produce
+                 (untracked `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.mp4`,
+                 `.mov`, `.webm` files) and publish them to the
+                 `oz-verify-artifacts` branch under
+                 `pr-{pr_number}/run-${{GITHUB_RUN_ID}}/<skill-name>/` so the
+                 report can embed them via `raw.githubusercontent.com` URLs.
+              4. Write a consolidated markdown report to `verification_report.md`
                  at the repository root. The report must list each skill that
-                 ran, its pass/fail status, and any output or artifacts worth
-                 linking.
-              4. Post the report back to the PR as a new comment. Include a
+                 ran, its pass/fail status, any output worth linking, and
+                 embed collected screenshots/videos inline.
+              5. Post the report back to the PR as a new comment. Include a
                  link to this workflow run ({run_url}) at the bottom of the
                  comment so reviewers can jump to logs.
-              5. Do not push commits or modify tracked files; verification is
-                 read-only by default.
+              6. Do not push commits to the PR branch or modify tracked files;
+                 verification is read-only for the PR. Pushing to the
+                 `oz-verify-artifacts` branch is the only sanctioned write.
               """
           ).strip()
 

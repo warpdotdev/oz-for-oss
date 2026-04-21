@@ -1,6 +1,6 @@
 ---
 name: verify-pr
-description: Run end-to-end verification on a checked-out pull request by discovering and executing the repository's verification skills (skills whose directory name contains `verify` or `test` and whose description covers end-to-end verification), then posting a consolidated report comment. Use when the `/oz-verify` slash command is invoked on a PR.
+description: Run end-to-end verification on a checked-out pull request by discovering and executing the repository's verification skills (skills whose frontmatter declares `verification: true`), collecting any screenshot/video artifacts they produce, and posting a consolidated report comment that embeds those artifacts. Use when the `/oz-verify` slash command is invoked on a PR.
 ---
 
 # verify-pr
@@ -13,18 +13,28 @@ This skill is the entry point for the `/oz-verify` workflow. It does not define 
 
 1. Discovers verification skills in the repository.
 2. Runs each discovered skill against the checked-out PR HEAD.
-3. Writes a consolidated markdown report to `verification_report.md`.
-4. Posts that report back to the PR as a new comment.
+3. Collects any screenshot or video artifacts the skills produce.
+4. Writes a consolidated markdown report to `verification_report.md`.
+5. Posts that report — with artifacts embedded inline — back to the PR as a new comment.
 
 ## Convention for verification skills
 
 A skill is treated as a verification skill when **all** of the following are true:
 
-- It lives at `.agents/skills/<name>/SKILL.md` and its directory name contains `verify` or `test` (case-insensitive). Matches include `verify-login/`, `test-checkout/`, `e2e-tests/`, and `smoke-verify/`.
-- It exposes standard skill frontmatter (`name`, `description`).
-- Its `description` communicates that it performs end-to-end verification / validation / testing of a user-facing feature or flow. Skills whose description is clearly about something unrelated (unit-level helpers, spec authoring, release tooling, etc.) are skipped even if the directory name happens to contain `verify` or `test`.
+- It lives at `.agents/skills/<name>/SKILL.md` and exposes standard skill frontmatter (`name`, `description`).
+- Its frontmatter declares `verification: true` (top-level boolean field). This is the single source of truth — neither the skill's directory name nor its description opts it in or out.
 
-A naming convention is used — rather than a tag in the frontmatter — so that adding or removing a verification skill is obvious from the repository's directory tree and grep-able during code review. Downstream repositories are free to define their own verification skills; this skill does not prescribe their shape beyond the naming convention and the end-to-end intent signalled by the description.
+A frontmatter tag is used — rather than a naming convention — so that adding or removing a verification skill is an explicit, reviewable decision in the skill's own metadata rather than something implied by a directory name or by how the description happens to be worded. Downstream repositories are free to define their own verification skills; this skill does not prescribe their shape beyond the `verification: true` tag and the expectation that they perform end-to-end verification of the checked-out PR.
+
+Example verification-skill frontmatter:
+
+```
+---
+name: verify-login
+description: Exercise the login flow end-to-end against a checked-out PR and report pass/fail.
+verification: true
+---
+```
 
 ## Inputs
 
@@ -39,17 +49,19 @@ The PR is already checked out at HEAD by the calling workflow, so `git`, `gh`, a
 
 ### 1. Discover verification skills
 
-List every directory under `.agents/skills/` whose name contains `verify` or `test` (case-insensitive) — e.g. `ls .agents/skills/ | grep -iE 'verify|test'` or an equivalent `find` invocation. For each match, read `SKILL.md` and capture:
+List every `.agents/skills/*/SKILL.md` in the repository. For each one, parse the YAML frontmatter and keep it only when the frontmatter has `verification: true`.
+
+A grep-friendly first pass (`grep -lE '^verification:\s*true' .agents/skills/*/SKILL.md`) is fine; confirm with a proper YAML parse before treating a match as authoritative, since a matching line outside the frontmatter block is not a valid opt-in.
+
+For each matching skill, capture:
 
 - `name` from the frontmatter
 - `description` from the frontmatter
 - the absolute skill path
 
-Then filter that candidate set down to skills whose `description` clearly indicates end-to-end verification, validation, or testing of a user-facing feature or flow. Drop candidates whose description is obviously about something else (spec authoring, unit-level helpers, release tooling, etc.), even if their directory name matched.
-
 If a `skill_filter` is provided, keep only the skill whose `name` matches exactly. If no skill matches, record that fact and continue — the report should make it clear the filter was a no-op.
 
-If no verification skills are found at all, write a short report explaining that no verification skills (skills whose directory name contains `verify` or `test` and whose description covers end-to-end verification) exist in the repository and link to this skill's documentation.
+If no verification skills are found at all, write a short report explaining that no skills declare `verification: true` in their frontmatter and link to this skill's documentation.
 
 ### 2. Run each verification skill
 
@@ -60,9 +72,34 @@ For each discovered skill:
 - Capture any output, logs, or artifact references that would help a reviewer understand the result.
 - If a skill fails or errors, continue running the remaining skills — one skill's failure should not block the rest.
 
-Verification is expected to be **read-only**. Do not stage files, create commits, push branches, or modify tracked files. If a verification skill mutates the working tree, leave those changes uncommitted and flag them in the report.
+Verification is expected to be **read-only** for tracked files. Do not stage files, create commits on the PR branch, push the PR branch, or modify tracked files. Verification skills may write screenshot/video artifacts to the working tree (see next step); those files are not intended to be committed to the PR branch.
 
-### 3. Write the consolidated report
+### 3. Collect screenshot and video artifacts
+
+Verification skills may produce screenshots or short videos as evidence (e.g. a screenshot of a rendered UI, a short screen recording of a flow). By convention, verification skills write these to `verification_artifacts/<skill-name>/` relative to the repository root, but the skill also scans the whole working tree for untracked media files so skills that use other locations still work.
+
+After all verification skills have run, scan the working tree for untracked files with any of these extensions (case-insensitive):
+
+- Images: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`
+- Videos: `.mp4`, `.mov`, `.webm`
+
+Use `git ls-files --others --exclude-standard` to restrict the scan to untracked files so tracked media already in the repository is never republished. Group each matched file by the verification skill that produced it (by path prefix when possible, otherwise under a shared `misc/` bucket).
+
+For every matched file, publish it to a dedicated long-lived branch so the PR comment can reference it via a stable public raw URL:
+
+- Branch name: `oz-verify-artifacts` (a single orphan branch that accumulates runs; create it if it does not exist yet).
+- Path within the branch: `pr-<pr_number>/run-<run_id>/<skill-name>/<original-filename>`. Use `${GITHUB_RUN_ID}` from the environment for `<run_id>` when available; otherwise fall back to a timestamp.
+- Commit message: `verify-pr: artifacts for PR #<pr_number> run <run_id>`.
+
+Use `git worktree add` to stage the push without disturbing the PR checkout, push with the workflow's `GITHUB_TOKEN`, and construct raw URLs of the form:
+
+```
+https://raw.githubusercontent.com/<owner>/<repo>/oz-verify-artifacts/pr-<pr_number>/run-<run_id>/<skill-name>/<filename>
+```
+
+If pushing to `oz-verify-artifacts` fails (for example, because the workflow does not have `contents: write`), skip the embed step and fall back to listing the artifacts as plain filenames in the report along with a note about the missing permission. Do not block the rest of the run on artifact publishing.
+
+### 4. Write the consolidated report
 
 Write `verification_report.md` at the repository root. Use this structure:
 
@@ -75,6 +112,12 @@ Discovered N verification skill(s): `verify-foo`, `verify-bar`.
 ### `verify-foo` — ✅ Passed
 <one-paragraph summary plus any relevant output>
 
+**Artifacts:**
+
+![login-success](https://raw.githubusercontent.com/<owner>/<repo>/oz-verify-artifacts/pr-123/run-456/verify-foo/login-success.png)
+
+<video src="https://raw.githubusercontent.com/<owner>/<repo>/oz-verify-artifacts/pr-123/run-456/verify-foo/login.mp4" controls></video>
+
 ### `verify-bar` — ❌ Failed
 <one-paragraph summary of what failed, with error excerpts>
 
@@ -83,9 +126,11 @@ Oz run: <session link if available>
 Workflow run: <run URL provided by the caller>
 ```
 
-Keep each per-skill section short enough to render cleanly as a GitHub comment. Link out to logs or artifacts instead of inlining long output.
+Embed images with standard Markdown image syntax (`![alt](url)`) so GitHub renders them inline. Embed videos with an HTML `<video controls>` tag pointing at the raw URL; GitHub's comment renderer honors the tag for common container formats. When artifacts could not be published (for example, the branch push failed), list them as plain filenames instead and note why they are not embedded.
 
-### 4. Post the report back to the PR
+Keep each per-skill section short enough to render cleanly as a GitHub comment. Link out to logs instead of inlining long text output; keep visual evidence inline as embeds because that is what a reviewer most wants to see at a glance.
+
+### 5. Post the report back to the PR
 
 Post the contents of `verification_report.md` as a new issue comment on the originating PR using `gh api` or `gh pr comment`. Always post a new comment — do not attempt to edit prior `/oz-verify` comments. Treating each run as a fresh comment keeps the audit trail clear and avoids races between concurrent runs.
 
@@ -95,8 +140,8 @@ If posting the comment fails, leave `verification_report.md` on disk and surface
 
 - Prefer running skills in a stable order (alphabetical by skill name) so repeated `/oz-verify` runs produce comparable reports.
 - Treat skill-level failures as data to report, not as reasons to abort the whole run.
-- Keep the report concise. Long tool output belongs in linked logs, not in the PR comment.
-- Never commit or push changes from a `/oz-verify` run.
+- Keep the report concise. Long tool output belongs in linked logs, not in the PR comment; visual artifacts belong inline.
+- Never commit or push to the PR branch from a `/oz-verify` run. Pushing artifacts to the dedicated `oz-verify-artifacts` branch is the only sanctioned write.
 
 ## Related Skills
 
