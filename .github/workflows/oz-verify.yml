@@ -75,6 +75,7 @@ jobs:
           REQUESTER: ${{ inputs.requester }}
           SKILL_FILTER: ${{ inputs.skill_filter }}
           REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
@@ -85,6 +86,7 @@ jobs:
           repository = os.environ["REPOSITORY"]
           requester = (os.environ.get("REQUESTER") or "").strip()
           skill_filter = (os.environ.get("SKILL_FILTER") or "").strip()
+          run_id = os.environ.get("RUN_ID", "")
           run_url = os.environ.get("RUN_URL", "")
 
           requester_line = (
@@ -115,7 +117,7 @@ jobs:
                  (untracked `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.mp4`,
                  `.mov`, `.webm` files) and publish them to the
                  `oz-verify-artifacts` branch under
-                 `pr-{pr_number}/run-${{GITHUB_RUN_ID}}/<skill-name>/` so the
+                 `pr-{pr_number}/run-{run_id}/<skill-name>/` so the
                  report can embed them via `raw.githubusercontent.com` URLs.
               4. Write a consolidated markdown report to `verification_report.md`
                  at the repository root. The report must list each skill that
