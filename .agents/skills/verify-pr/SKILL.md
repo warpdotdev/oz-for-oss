@@ -1,6 +1,6 @@
 ---
 name: verify-pr
-description: Run end-to-end verification on a checked-out pull request by discovering and executing the repository's `verify-*` skills, then posting a consolidated report comment. Use when the `/oz-verify` slash command is invoked on a PR.
+description: Run end-to-end verification on a checked-out pull request by discovering and executing the repository's verification skills (skills whose directory name contains `verify` or `test` and whose description covers end-to-end verification), then posting a consolidated report comment. Use when the `/oz-verify` slash command is invoked on a PR.
 ---
 
 # verify-pr
@@ -20,11 +20,11 @@ This skill is the entry point for the `/oz-verify` workflow. It does not define 
 
 A skill is treated as a verification skill when **all** of the following are true:
 
-- It lives at `.agents/skills/verify-<name>/SKILL.md` (directory name must start with `verify-`).
+- It lives at `.agents/skills/<name>/SKILL.md` and its directory name contains `verify` or `test` (case-insensitive). Matches include `verify-login/`, `test-checkout/`, `e2e-tests/`, and `smoke-verify/`.
 - It exposes standard skill frontmatter (`name`, `description`).
-- Its `description` communicates that it performs end-to-end verification / validation of a user-facing feature or flow.
+- Its `description` communicates that it performs end-to-end verification / validation / testing of a user-facing feature or flow. Skills whose description is clearly about something unrelated (unit-level helpers, spec authoring, release tooling, etc.) are skipped even if the directory name happens to contain `verify` or `test`.
 
-A naming convention is used — rather than a tag in the frontmatter — so that adding or removing a verification skill is obvious from the repository's directory tree and grep-able during code review. Downstream repositories are free to define their own `verify-*` skills; this skill does not prescribe their shape beyond the naming convention.
+A naming convention is used — rather than a tag in the frontmatter — so that adding or removing a verification skill is obvious from the repository's directory tree and grep-able during code review. Downstream repositories are free to define their own verification skills; this skill does not prescribe their shape beyond the naming convention and the end-to-end intent signalled by the description.
 
 ## Inputs
 
@@ -39,15 +39,17 @@ The PR is already checked out at HEAD by the calling workflow, so `git`, `gh`, a
 
 ### 1. Discover verification skills
 
-List directories matching `.agents/skills/verify-*` (using `ls`, `find`, or equivalent). For each match, read `SKILL.md` and capture:
+List every directory under `.agents/skills/` whose name contains `verify` or `test` (case-insensitive) — e.g. `ls .agents/skills/ | grep -iE 'verify|test'` or an equivalent `find` invocation. For each match, read `SKILL.md` and capture:
 
 - `name` from the frontmatter
 - `description` from the frontmatter
 - the absolute skill path
 
+Then filter that candidate set down to skills whose `description` clearly indicates end-to-end verification, validation, or testing of a user-facing feature or flow. Drop candidates whose description is obviously about something else (spec authoring, unit-level helpers, release tooling, etc.), even if their directory name matched.
+
 If a `skill_filter` is provided, keep only the skill whose `name` matches exactly. If no skill matches, record that fact and continue — the report should make it clear the filter was a no-op.
 
-If no verification skills are found at all, write a short report explaining that no `verify-*` skills exist in the repository and link to this skill's documentation.
+If no verification skills are found at all, write a short report explaining that no verification skills (skills whose directory name contains `verify` or `test` and whose description covers end-to-end verification) exist in the repository and link to this skill's documentation.
 
 ### 2. Run each verification skill
 

@@ -66,7 +66,7 @@ The [`oz-verify.yml`](.github/workflows/oz-verify.yml) reusable workflow lets an
 
 Usage:
 
-- Post `/oz-verify` as a new comment on a pull request to verify it with every `verify-*` skill in the repository.
+- Post `/oz-verify` as a new comment on a pull request to verify it with every verification skill in the repository (see *Authoring verification skills* below for the naming convention).
 - Post `/oz-verify <skill-name>` (e.g. `/oz-verify verify-login-flow`) to run a single verification skill.
 - Only comments from collaborators, members, and owners trigger the workflow.
 
@@ -82,8 +82,8 @@ The workflow calls [`warpdotdev/oz-agent-action`](https://github.com/warpdotdev/
 
 A verification skill is any skill that follows this convention:
 
-- It lives at `.agents/skills/verify-<name>/SKILL.md`.
-- Its frontmatter `description` makes it clear that the skill performs end-to-end verification of a user-facing feature or flow.
+- It lives at `.agents/skills/<name>/SKILL.md` and its directory name contains `verify` or `test` (case-insensitive) — e.g. `verify-login/`, `test-checkout/`, `e2e-tests/`, or `smoke-verify/`.
+- Its frontmatter `description` makes it clear that the skill performs end-to-end verification / testing of a user-facing feature or flow. Skills whose directory name happens to match but whose description is about something else (spec authoring, unit-level helpers, release tooling, etc.) are skipped.
 - It reads the checked-out PR HEAD and reports pass/fail for the behavior it validates.
 
 Verification skills should be read-only: they can run the repository's tests, scripts, or tooling, but must not commit, push, or modify tracked files. The `verify-pr` skill collects each skill's pass/fail status and assembles the consolidated report; see [`.agents/skills/verify-pr/SKILL.md`](.agents/skills/verify-pr/SKILL.md) for the expected report structure and behavior.

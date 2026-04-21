@@ -1,15 +1,17 @@
 name: Oz Verify
 # Reusable workflow that runs end-to-end verification on a pull request via the
 # Oz agent. It discovers any "verification" skills present in the repository
-# (skills under `.agents/skills/verify-*/SKILL.md`), executes them against the
-# PR's HEAD, and posts a consolidated report comment back on the PR.
+# (skills under `.agents/skills/` whose directory name contains `verify` or
+# `test` and whose description covers end-to-end verification), executes them
+# against the PR's HEAD, and posts a consolidated report comment back on the
+# PR.
 #
 # This workflow is intentionally self-contained: it calls
 # `warpdotdev/oz-agent-action` directly and does not depend on the shared
 # Python helpers used by the rest of this repository's workflows, so downstream
 # repositories can adopt `/oz-verify` with nothing more than a lightweight
 # adapter workflow, a `WARP_API_KEY` secret, and (optionally) their own
-# `verify-*` skills.
+# verification skills.
 on:
   workflow_call:
     inputs:
