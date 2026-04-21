@@ -1,0 +1,67 @@
+name: Oz Verify (Local)
+# Local adapter that turns a `/oz-verify` comment on a pull request into an
+# invocation of the reusable `Oz Verify` workflow. The slash command must
+# appear on its own line (optionally followed by arguments) and may only be
+# issued by repository collaborators, members, or owners so that arbitrary
+# outside contributors cannot trigger agent runs that consume API credits.
+on:
+  issue_comment:
+    types: [created]
+concurrency:
+  group: oz-verify-${{ github.event.issue.number }}
+  cancel-in-progress: false
+jobs:
+  resolve:
+    if: >-
+      github.event.issue.pull_request != null &&
+      github.event.comment.user.type != 'Bot' &&
+      !endsWith(github.event.comment.user.login, '[bot]') &&
+      contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.comment.author_association) &&
+      startsWith(github.event.comment.body, '/oz-verify')
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.parse.outputs.should_run }}
+      skill_filter: ${{ steps.parse.outputs.skill_filter }}
+    steps:
+      - name: Parse slash command
+        id: parse
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import re
+
+          body = os.environ.get("COMMENT_BODY", "") or ""
+          # Accept `/oz-verify` either as the entire first line or followed by
+          # whitespace-delimited arguments on the same line. This keeps the
+          # parser predictable and avoids accidentally triggering on prose
+          # that happens to contain the token later in the body.
+          first_line = body.splitlines()[0].strip() if body.strip() else ""
+          match = re.match(r"^/oz-verify(?:\s+(.*))?$", first_line)
+          if not match:
+              print("should_run=false")
+              print("skill_filter=")
+          else:
+              argument = (match.group(1) or "").strip()
+              # Only the first argument is treated as a skill filter today.
+              # Additional arguments are reserved for future use.
+              skill_filter = argument.split()[0] if argument else ""
+              print("should_run=true")
+              print(f"skill_filter={skill_filter}")
+          PY
+  verify:
+    needs: [resolve]
+    if: needs.resolve.outputs.should_run == 'true'
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: ./.github/workflows/oz-verify.yml
+    with:
+      pr_number: ${{ github.event.issue.number }}
+      comment_id: ${{ github.event.comment.id }}
+      requester: ${{ github.event.comment.user.login }}
+      skill_filter: ${{ needs.resolve.outputs.skill_filter }}
+    secrets:
+      WARP_API_KEY: ${{ secrets.WARP_API_KEY }}

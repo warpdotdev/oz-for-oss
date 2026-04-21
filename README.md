@@ -56,10 +56,39 @@ Use the `*-local.yml` files in this repository as reference adapters. Copy them 
 - **Respond to triaged-issue comments** — [`respond-to-triaged-issue-comment-local.yml`](.github/workflows/respond-to-triaged-issue-comment-local.yml)
 - **Unready-assignment guard** — [`comment-on-unready-assigned-issue-local.yml`](.github/workflows/comment-on-unready-assigned-issue-local.yml)
 - **Review skill updates** — [`update-pr-review-local.yml`](.github/workflows/update-pr-review-local.yml) (scheduled weekly)
+- **On-demand PR verification (`/oz-verify`)** — [`oz-verify-local.yml`](.github/workflows/oz-verify-local.yml) (invokes [`oz-verify.yml`](.github/workflows/oz-verify.yml))
 
 Each adapter is deliberately thin — it defines the GitHub event triggers and conditions, then delegates to the reusable workflow.
 
-### 4. Bootstrap triage configuration (optional)
+### 4. `/oz-verify` slash command
+
+The [`oz-verify.yml`](.github/workflows/oz-verify.yml) reusable workflow lets any collaborator run end-to-end verification on a pull request on demand. Adopt it in a target repository by copying [`oz-verify-local.yml`](.github/workflows/oz-verify-local.yml) into `.github/workflows/` and changing the `uses:` ref to `warpdotdev/oz-for-oss/.github/workflows/oz-verify.yml@main`.
+
+Usage:
+
+- Post `/oz-verify` as a new comment on a pull request to verify it with every `verify-*` skill in the repository.
+- Post `/oz-verify <skill-name>` (e.g. `/oz-verify verify-login-flow`) to run a single verification skill.
+- Only comments from collaborators, members, and owners trigger the workflow.
+
+The workflow calls [`warpdotdev/oz-agent-action`](https://github.com/warpdotdev/oz-agent-action) with the [`verify-pr`](.agents/skills/verify-pr/SKILL.md) skill. That skill discovers verification skills, runs them against the PR HEAD, writes a consolidated markdown report, and posts it back to the PR as a new comment with a link to the workflow run.
+
+#### Required secrets and permissions
+
+- `WARP_API_KEY` must be set in repository or organization secrets.
+- The calling adapter grants `contents: read`, `issues: write`, and `pull-requests: write` so the agent can check out the PR and post the report.
+- Unlike most other workflows in this repo, `oz-verify.yml` does **not** require the `OZ_MGMT_GHA_APP_ID`/`OZ_MGMT_GHA_PRIVATE_KEY` GitHub App credentials. It uses the workflow's default `GITHUB_TOKEN` so downstream repos can adopt it with only `WARP_API_KEY`.
+
+#### Authoring verification skills
+
+A verification skill is any skill that follows this convention:
+
+- It lives at `.agents/skills/verify-<name>/SKILL.md`.
+- Its frontmatter `description` makes it clear that the skill performs end-to-end verification of a user-facing feature or flow.
+- It reads the checked-out PR HEAD and reports pass/fail for the behavior it validates.
+
+Verification skills should be read-only: they can run the repository's tests, scripts, or tooling, but must not commit, push, or modify tracked files. The `verify-pr` skill collects each skill's pass/fail status and assembles the consolidated report; see [`.agents/skills/verify-pr/SKILL.md`](.agents/skills/verify-pr/SKILL.md) for the expected report structure and behavior.
+
+### 5. Bootstrap triage configuration (optional)
 
 If you want the triage agent to apply area and status labels, run the `bootstrap-issue-config` skill on your target repository. The skill fetches existing labels and classifies them into area, feature, and status categories; analyzes recent issues and issue templates to discover additional labels; generates or updates `.github/issue-triage/config.json` with label definitions (colors and descriptions); generates or updates `.github/STAKEHOLDERS` by inspecting CODEOWNERS, recent git contributors, and existing stakeholder information; and creates any missing labels on the repository via the GitHub API.
 
