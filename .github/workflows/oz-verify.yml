@@ -143,7 +143,16 @@ jobs:
             echo "Agent produced verification_report.md; the skill is responsible for posting it."
             exit 0
           fi
-          body=$(printf '⚠️ The `/oz-verify` run did not produce a verification report.\n\nSee the [workflow run logs](%s) for details.' "$RUN_URL")
+          # Build the fallback comment body with a heredoc so the markdown
+          # backticks around `/oz-verify` don't trip shellcheck's SC2016
+          # (which fires on anything that looks like an expression inside
+          # single quotes).
+          body=$(cat <<EOF
+          ⚠️ The \`/oz-verify\` run did not produce a verification report.
+
+          See the [workflow run logs](${RUN_URL}) for details.
+          EOF
+          )
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
