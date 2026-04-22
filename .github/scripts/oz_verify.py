@@ -30,11 +30,12 @@ logger = logging.getLogger(__name__)
 # authoritatively from the Oz run.
 VERIFICATION_REPORT_FILENAME = "verification_report.md"
 
-# Marker that a verify-* skill embeds in `verification_report.md` wherever a
-# screenshot or video artifact should be rendered. The workflow substitutes
-# each placeholder with a signed-URL embed drawn from the run's artifacts.
-_ARTIFACT_PLACEHOLDER_RE = re.compile(
-    r"\{\{\s*OZ_ARTIFACT:\s*(?P<key>[^}]+?)\s*\}\}"
+# Matches standard Markdown image or link constructs of the form
+# ``![alt](url)`` or ``[text](url)``. The workflow rewrites any such URL
+# that refers to an uploaded artifact filename with the artifact's signed
+# download URL, so skills can reference evidence using plain Markdown.
+_MARKDOWN_LINK_RE = re.compile(
+    r"(?P<bang>!?)\[(?P<text>[^\]]*)\]\((?P<url>[^)\s]+)(?P<title>\s+\"[^\"]*\")?\)"
 )
 
 # Extensions used as a fallback when a FILE artifact's MIME type is missing
@@ -183,8 +184,8 @@ def collect_media_artifacts(run: RunItem) -> list[MediaArtifact]:
         mime_type = str(getattr(data, "mime_type", "") or "").strip()
         if artifact_type == "SCREENSHOT":
             # SCREENSHOT artifacts don't carry a filename; synthesize one
-            # from the artifact UID so placeholders can still reference it
-            # and so unreferenced embeds have a stable alt-text key.
+            # from the artifact UID so Markdown links can still reference
+            # it and so unreferenced embeds have a stable alt-text key.
             effective_filename = filename or f"screenshot-{artifact_uid[:8]}"
             effective_mime = mime_type or "image/png"
             collected.append(
@@ -255,47 +256,61 @@ def _format_media_embed(artifact: MediaArtifact) -> str:
     return f"![{filename}]({url})"
 
 
-def substitute_media_placeholders(
+def substitute_artifact_links(
     report: str, resolved: list[MediaArtifact]
-) -> tuple[str, list[str]]:
-    """Replace ``{{OZ_ARTIFACT:<name>}}`` placeholders with signed-URL embeds.
+) -> tuple[str, set[str]]:
+    """Rewrite Markdown image/link URLs that refer to uploaded artifacts.
 
-    Returns ``(substituted_report, unresolved_keys)``. Unresolved keys are
-    replaced with a short note so reviewers see that the skill referenced
-    an artifact that wasn't uploaded.
+    Scans *report* for standard Markdown image (``![alt](url)``) and link
+    (``[text](url)``) constructs. Whenever the URL matches the filename
+    (or basename) of an uploaded artifact in *resolved*, the URL is
+    replaced with the artifact's signed download URL; the surrounding
+    Markdown (alt text, title, image vs. link form) is preserved so
+    authors can choose how they want the evidence rendered.
+
+    Returns ``(substituted_report, referenced_filenames)``. The returned
+    set contains the filenames (as stored on the resolved artifact) of
+    every artifact that was rewritten at least once, so callers can tell
+    which uploaded artifacts were embedded inline versus appended as
+    additional evidence.
     """
-    by_filename = {
-        artifact.get("filename", ""): artifact
-        for artifact in resolved
-        if artifact.get("filename")
-    }
-    by_basename = {
-        (artifact.get("filename", "").rsplit("/", 1)[-1]): artifact
-        for artifact in resolved
-        if artifact.get("filename")
-    }
+    by_filename: dict[str, MediaArtifact] = {}
+    by_basename: dict[str, MediaArtifact] = {}
+    for artifact in resolved:
+        filename = artifact.get("filename", "")
+        if not filename:
+            continue
+        by_filename.setdefault(filename, artifact)
+        by_basename.setdefault(filename.rsplit("/", 1)[-1], artifact)
 
-    unresolved: list[str] = []
+    referenced: set[str] = set()
 
     def _replace(match: re.Match[str]) -> str:
-        key = match.group("key").strip()
-        # Try the full key first, then the basename of the key (so a
-        # placeholder like `{{OZ_ARTIFACT:verify-login/success.png}}`
-        # still matches an artifact uploaded as `success.png`), and
-        # finally the basename of the key against the basename map.
+        url = match.group("url")
+        # Absolute URLs never refer to a local artifact filename, so skip
+        # them up front to avoid surprising rewrites of links the author
+        # already pointed at an external resource.
+        if "://" in url or url.startswith("//"):
+            return match.group(0)
         artifact = (
-            by_filename.get(key)
-            or by_basename.get(key)
-            or by_filename.get(key.rsplit("/", 1)[-1])
-            or by_basename.get(key.rsplit("/", 1)[-1])
+            by_filename.get(url)
+            or by_basename.get(url)
+            or by_filename.get(url.rsplit("/", 1)[-1])
+            or by_basename.get(url.rsplit("/", 1)[-1])
         )
         if artifact is None:
-            unresolved.append(key)
-            return f"_(no uploaded artifact matched `{key}`)_"
-        return _format_media_embed(artifact)
+            return match.group(0)
+        download_url = artifact.get("download_url", "")
+        if not download_url:
+            return match.group(0)
+        referenced.add(artifact.get("filename", ""))
+        bang = match.group("bang")
+        text = match.group("text")
+        title = match.group("title") or ""
+        return f"{bang}[{text}]({download_url}{title})"
 
-    substituted = _ARTIFACT_PLACEHOLDER_RE.sub(_replace, report)
-    return substituted, unresolved
+    substituted = _MARKDOWN_LINK_RE.sub(_replace, report)
+    return substituted, referenced
 
 
 def _build_skill_section(result: VerificationResult) -> str:
@@ -318,7 +333,7 @@ def _build_skill_section(result: VerificationResult) -> str:
         lines.append("The skill produced no `verification_report.md` artifact.")
 
     # Append any media artifacts the skill uploaded but did not reference
-    # via a placeholder so the evidence still reaches the reviewer.
+    # via a Markdown link so the evidence still reaches the reviewer.
     artifacts = result.get("artifacts") or []
     unreferenced = [
         artifact
@@ -446,18 +461,20 @@ def _build_skill_prompt(
            the repository root. The report should:
            - Start with a one-line status (`✅ Passed`, `❌ Failed`, or `⚠️ Errored`).
            - Summarize what was verified and any output worth linking.
-           - Reference each uploaded screenshot/video artifact with the placeholder
-             `{{{{OZ_ARTIFACT:<filename>}}}}` where the filename matches the last
-             path component you pass to `oz-dev artifact upload`. The workflow
-             substitutes each placeholder with a signed-URL embed drawn from the
-             Oz run's artifacts, so do NOT construct image or video URLs yourself.
+           - Reference each uploaded screenshot/video artifact with a standard
+             Markdown image or link whose URL is the uploaded artifact's filename,
+             e.g. `![login success](login-success.png)` or `[demo](demo.mp4)`. The
+             workflow rewrites each such URL with a signed download URL drawn
+             from the Oz run's artifacts, so do NOT construct image or video
+             URLs yourself.
         4. For every screenshot or short video you want embedded in the PR comment,
            upload it as an artifact via:
                oz-dev artifact upload <path>
            The subcommand is `artifact` (singular); do not use `artifacts`.
            Supported media types are PNG, JPEG, GIF, WebP, MP4, MOV, and WebM.
-           After uploading each file, reference it from the report with the
-           `{{{{OZ_ARTIFACT:<filename>}}}}` placeholder described above.
+           After uploading each file, reference it from the report using a
+           standard Markdown image or link whose URL is the filename you passed
+           to `oz-dev artifact upload` (e.g. `![alt text](screenshot.png)`).
         5. Upload the report itself as an artifact so the workflow can fetch it:
                oz-dev artifact upload {VERIFICATION_REPORT_FILENAME}
         6. DO NOT post the report back to the PR yourself. The workflow consolidates
@@ -530,15 +547,9 @@ def _run_single_skill(
 
     media_artifacts = collect_media_artifacts(run)
     resolved_artifacts = resolve_media_download_urls(oz_client, media_artifacts)
-    substituted_report, unresolved = substitute_media_placeholders(
+    substituted_report, _referenced = substitute_artifact_links(
         report, resolved_artifacts
     )
-    if unresolved:
-        logger.warning(
-            "Skill %s referenced artifacts that were not uploaded: %s",
-            skill_name,
-            ", ".join(unresolved),
-        )
     return {
         "skill": skill_name,
         "description": skill.get("description", ""),

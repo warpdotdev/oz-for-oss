@@ -13,7 +13,7 @@ The orchestration loop lives in `.github/scripts/oz_verify.py`. That script:
 2. Runs each discovered skill as its own Oz agent run against the PR HEAD.
 3. Fetches the `verification_report.md` artifact the skill uploaded.
 4. Resolves signed download URLs for any screenshot/video artifacts the skill uploaded, via the Oz SDK.
-5. Substitutes `{{OZ_ARTIFACT:<filename>}}` placeholders in the report with signed-URL embeds.
+5. Rewrites standard Markdown image/link URLs in the report that refer to an uploaded artifact's filename with the artifact's signed download URL.
 6. Consolidates every skill's report into one comment and posts it back to the PR.
 
 Authors of a verification skill only need to worry about **step 2** — the single Oz run that exercises their verification — and about producing the artifacts that steps 3–5 consume.
@@ -58,7 +58,7 @@ Each verification skill MUST:
 3. **Write `verification_report.md` at the repository root** summarizing the run. The report should:
    - Start with a one-line status: `✅ Passed`, `❌ Failed`, or `⚠️ Errored`.
    - Summarize what was verified and any output worth linking.
-   - Reference screenshot/video evidence via the placeholder `{{OZ_ARTIFACT:<filename>}}`. The filename must match the last path component passed to `oz-dev artifact upload`. The workflow substitutes each placeholder with a signed-URL embed drawn from the Oz run's artifacts, so skills must **not** construct image or video URLs themselves.
+   - Reference screenshot/video evidence using a standard Markdown image or link whose URL is the uploaded artifact's filename, e.g. `![login success](login-success.png)` or `[demo](demo.mp4)`. The filename must match the last path component passed to `oz-dev artifact upload`. The workflow rewrites each such URL with a signed download URL drawn from the Oz run's artifacts, so skills must **not** construct image or video URLs themselves.
 
 4. **Upload screenshot/video evidence as Oz artifacts** via:
 
@@ -66,7 +66,7 @@ Each verification skill MUST:
    oz-dev artifact upload <path>
    ```
 
-   The subcommand is `artifact` (singular); do not use `artifacts`. Supported media types are PNG, JPEG, GIF, WebP, MP4, MOV, and WebM. Any uploaded artifact that is referenced by a matching `{{OZ_ARTIFACT:<filename>}}` placeholder is embedded inline at that location in the consolidated report; any uploaded artifact without a matching placeholder is appended to an **Additional artifacts** section for that skill so the evidence still reaches reviewers.
+   The subcommand is `artifact` (singular); do not use `artifacts`. Supported media types are PNG, JPEG, GIF, WebP, MP4, MOV, and WebM. Any uploaded artifact that is referenced from the report via a Markdown image or link pointing at its filename stays in place in the consolidated report with its URL rewritten to the signed download URL; any uploaded artifact without such a reference is appended to an **Additional artifacts** section for that skill so the evidence still reaches reviewers.
 
 5. **Upload the report itself as an artifact** so the workflow can fetch it deterministically:
 
@@ -84,7 +84,7 @@ Each verification skill MUST:
 Exercised the email + password login form with the test account. The session
 cookie was set and `/home` rendered.
 
-{{OZ_ARTIFACT:login-success.png}}
+![login success](login-success.png)
 
 <details>
 <summary>Console output</summary>
@@ -96,12 +96,12 @@ cookie was set and `/home` rendered.
 </details>
 ```
 
-After the run completes, the workflow replaces `{{OZ_ARTIFACT:login-success.png}}` with a markdown image embed pointing at the signed download URL for the uploaded `login-success.png` artifact, then posts a consolidated comment that includes this skill's section alongside the sections from every other discovered verification skill.
+After the run completes, the workflow rewrites the `login-success.png` URL to the signed download URL for the uploaded artifact of the same filename, then posts a consolidated comment that includes this skill's section alongside the sections from every other discovered verification skill.
 
 ## Best practices
 
-- Keep each per-skill report short. Link out to long logs instead of inlining them; keep visual evidence inline via the placeholder so reviewers see it at a glance.
-- Prefer filenames that are unique within a single run (e.g. prefix with the skill name) so the workflow's filename-based placeholder resolution is unambiguous.
+- Keep each per-skill report short. Link out to long logs instead of inlining them; keep visual evidence inline via a Markdown image or link so reviewers see it at a glance.
+- Prefer filenames that are unique within a single run (e.g. prefix with the skill name) so the workflow's filename-based URL resolution is unambiguous.
 - Treat skill-level failures as data to report, not as reasons to abort. The workflow runs each verification skill independently, and the consolidated report surfaces per-skill status so one failure doesn't hide the rest.
 
 ## Related skills

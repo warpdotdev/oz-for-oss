@@ -70,7 +70,7 @@ Usage:
 - Post `/oz-verify <skill-name>` (e.g. `/oz-verify verify-login-flow`) to run a single verification skill.
 - Only comments from collaborators, members, and owners trigger the workflow.
 
-The orchestration loop lives in [`.github/scripts/oz_verify.py`](.github/scripts/oz_verify.py). For each discovered verification skill, the script launches an Oz agent run with that skill against the PR HEAD, polls for a `verification_report.md` artifact, and uses the Oz SDK to resolve signed download URLs for any screenshot or video artifacts the skill uploaded. It substitutes `{{OZ_ARTIFACT:<filename>}}` placeholders in the report with inline image/video embeds and posts a single consolidated PR comment that includes every skill's report plus a link to the workflow run.
+The orchestration loop lives in [`.github/scripts/oz_verify.py`](.github/scripts/oz_verify.py). For each discovered verification skill, the script launches an Oz agent run with that skill against the PR HEAD, polls for a `verification_report.md` artifact, and uses the Oz SDK to resolve signed download URLs for any screenshot or video artifacts the skill uploaded. It rewrites any standard Markdown image or link URL in the report that points at an uploaded artifact's filename (e.g. `![login success](login-success.png)`) to that artifact's signed download URL, then posts a single consolidated PR comment that includes every skill's report plus a link to the workflow run.
 
 #### Required secrets and permissions
 
@@ -85,9 +85,9 @@ A verification skill is any skill that follows this convention:
 - It lives at `.agents/skills/<name>/SKILL.md` and exposes standard skill frontmatter (`name`, `description`).
 - Its frontmatter declares `verification: true` as a top-level field. This tag is the single source of truth for whether `/oz-verify` runs the skill — directory name and description wording do not matter.
 - It reads the checked-out PR HEAD and writes a concise `verification_report.md` with pass/fail status, then uploads that report (and any screenshot/video evidence) as Oz artifacts via `oz-dev artifact upload <path>`.
-- It references screenshot/video evidence from the report via `{{OZ_ARTIFACT:<filename>}}` placeholders. The workflow substitutes each placeholder with a signed-URL embed sourced from the Oz run's artifacts, so skills must not construct image or video URLs themselves.
+- It references screenshot/video evidence from the report using standard Markdown image or link syntax whose URL is the uploaded artifact's filename (e.g. `![login](login-success.png)`). The workflow rewrites each such URL with a signed URL sourced from the Oz run's artifacts, so skills must not construct image or video URLs themselves.
 
-Verification skills should be read-only with respect to tracked files: they can run the repository's tests, scripts, or tooling, but must not commit, push, or modify tracked files. See [`.agents/skills/verify-pr/SKILL.md`](.agents/skills/verify-pr/SKILL.md) for the full contract, including the report structure, the artifact-upload convention, and the placeholder syntax used for inline embeds.
+Verification skills should be read-only with respect to tracked files: they can run the repository's tests, scripts, or tooling, but must not commit, push, or modify tracked files. See [`.agents/skills/verify-pr/SKILL.md`](.agents/skills/verify-pr/SKILL.md) for the full contract, including the report structure, the artifact-upload convention, and the Markdown syntax used for inline embeds.
 
 ### 5. Bootstrap triage configuration (optional)
 

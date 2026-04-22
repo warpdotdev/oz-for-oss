@@ -17,7 +17,7 @@ from oz_verify import (
     collect_media_artifacts,
     discover_verification_skills,
     resolve_media_download_urls,
-    substitute_media_placeholders,
+    substitute_artifact_links,
 )
 
 
@@ -246,14 +246,13 @@ class ResolveMediaDownloadUrlsTest(unittest.TestCase):
         self.assertEqual(resolved, [])
 
 
-class SubstituteMediaPlaceholdersTest(unittest.TestCase):
-    def test_replaces_placeholders_with_embeds(self) -> None:
+class SubstituteArtifactLinksTest(unittest.TestCase):
+    def test_rewrites_markdown_image_and_link_urls(self) -> None:
         report = (
             "✅ Passed\n\n"
             "Here is the login screen:\n"
-            "{{OZ_ARTIFACT:login-success.png}}\n\n"
-            "And a demo:\n"
-            "{{ OZ_ARTIFACT: demo.mp4 }}\n"
+            "![login](login-success.png)\n\n"
+            "And a demo: [watch it](demo.mp4)\n"
         )
         resolved = [
             {
@@ -269,24 +268,43 @@ class SubstituteMediaPlaceholdersTest(unittest.TestCase):
                 "download_url": "https://signed.example/mp4",
             },
         ]
-        substituted, unresolved = substitute_media_placeholders(report, resolved)
-        self.assertIn(
-            "![login-success.png](https://signed.example/png)", substituted
+        substituted, referenced = substitute_artifact_links(report, resolved)
+        # Author's alt text/link text and image-vs-link form are preserved;
+        # only the URL is rewritten to the signed download URL.
+        self.assertIn("![login](https://signed.example/png)", substituted)
+        self.assertIn("[watch it](https://signed.example/mp4)", substituted)
+        self.assertEqual(
+            referenced, {"login-success.png", "demo.mp4"}
         )
-        self.assertIn(
-            '<video src="https://signed.example/mp4" controls></video>',
-            substituted,
+
+    def test_leaves_unmatched_links_alone(self) -> None:
+        report = (
+            "See [external docs](https://example.com/docs) and\n"
+            "![missing](nope.png)."
         )
-        self.assertEqual(unresolved, [])
+        substituted, referenced = substitute_artifact_links(report, [])
+        self.assertEqual(substituted, report)
+        self.assertEqual(referenced, set())
 
-    def test_records_unresolved_placeholders(self) -> None:
-        report = "Missing: {{OZ_ARTIFACT:nope.png}}"
-        substituted, unresolved = substitute_media_placeholders(report, [])
-        self.assertIn("no uploaded artifact matched `nope.png`", substituted)
-        self.assertEqual(unresolved, ["nope.png"])
+    def test_does_not_rewrite_absolute_urls(self) -> None:
+        # Even when an artifact happens to share a filename with the trailing
+        # path component of an absolute URL, the workflow must not rewrite
+        # fully-qualified links the author already wrote.
+        report = "[hosted elsewhere](https://cdn.example/login-success.png)"
+        resolved = [
+            {
+                "artifact_uid": "uid",
+                "filename": "login-success.png",
+                "mime_type": "image/png",
+                "download_url": "https://signed.example/x",
+            }
+        ]
+        substituted, referenced = substitute_artifact_links(report, resolved)
+        self.assertEqual(substituted, report)
+        self.assertEqual(referenced, set())
 
-    def test_resolves_basename_when_key_has_subdir_prefix(self) -> None:
-        report = "{{OZ_ARTIFACT:verify-login/success.png}}"
+    def test_resolves_basename_when_url_has_subdir_prefix(self) -> None:
+        report = "![alt](verify-login/success.png)"
         resolved = [
             {
                 "artifact_uid": "uid",
@@ -295,9 +313,24 @@ class SubstituteMediaPlaceholdersTest(unittest.TestCase):
                 "download_url": "https://signed.example/x",
             }
         ]
-        substituted, unresolved = substitute_media_placeholders(report, resolved)
-        self.assertIn("![success.png](https://signed.example/x)", substituted)
-        self.assertEqual(unresolved, [])
+        substituted, referenced = substitute_artifact_links(report, resolved)
+        self.assertIn("![alt](https://signed.example/x)", substituted)
+        self.assertEqual(referenced, {"success.png"})
+
+    def test_preserves_link_title(self) -> None:
+        report = '![alt](shot.png "a title")'
+        resolved = [
+            {
+                "artifact_uid": "uid",
+                "filename": "shot.png",
+                "mime_type": "image/png",
+                "download_url": "https://signed.example/x",
+            }
+        ]
+        substituted, _referenced = substitute_artifact_links(report, resolved)
+        self.assertIn(
+            '![alt](https://signed.example/x "a title")', substituted
+        )
 
 
 class FormatMediaEmbedTest(unittest.TestCase):
