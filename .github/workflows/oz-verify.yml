@@ -1,21 +1,12 @@
 name: Oz Verify
-# Reusable workflow that runs end-to-end verification on a pull request via the
-# Oz agent. It discovers any "verification" skills present in the repository
-# (skills under `.agents/skills/` whose `SKILL.md` frontmatter declares
-# `verification: true`), executes them against the PR's HEAD, collects any
-# screenshot/video artifacts those skills produce, and posts a consolidated
+# Reusable workflow that runs end-to-end verification on a pull request via
+# the Oz agent. The orchestration loop lives in `.github/scripts/oz_verify.py`
+# so the workflow itself is a thin shell that checks out the PR, sets up the
+# shared Oz Python environment, and hands off to the script. The script
+# discovers every skill whose frontmatter declares `verification: true`, runs
+# each one as its own Oz agent run, resolves signed download URLs for any
+# screenshot or video artifacts via the Oz SDK, and posts a consolidated
 # report comment back on the PR with those artifacts embedded inline.
-#
-# This workflow is intentionally self-contained: it calls
-# `warpdotdev/oz-agent-action` directly and does not depend on the shared
-# Python helpers used by the rest of this repository's workflows, so downstream
-# repositories can adopt `/oz-verify` with nothing more than a lightweight
-# adapter workflow, a `WARP_API_KEY` secret, and (optionally) their own
-# verification skills.
-#
-# `contents: write` is granted so the `verify-pr` skill can publish collected
-# screenshot/video artifacts to the dedicated `oz-verify-artifacts` branch; the
-# skill never pushes to the PR branch itself.
 on:
   workflow_call:
     inputs:
@@ -39,141 +30,79 @@ on:
         default: ""
         type: string
     secrets:
+      OZ_MGMT_GHA_APP_ID:
+        required: true
+      OZ_MGMT_GHA_PRIVATE_KEY:
+        required: true
       WARP_API_KEY:
         required: true
 jobs:
   verify:
     name: Run Oz verification
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    env:
+      WORKFLOW_CODE_REPOSITORY: warpdotdev/oz-for-oss
+      WORKFLOW_CODE_REF: ${{ github.repository == 'warpdotdev/oz-for-oss' && github.sha || 'main' }}
+      WORKFLOW_CODE_PATH: __oz_shared
     permissions:
-      contents: write
+      contents: read
+      id-token: write
       issues: write
       pull-requests: write
     steps:
-      - name: Acknowledge trigger comment
-        if: inputs.comment_id != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          COMMENT_ID: ${{ inputs.comment_id }}
-        run: |
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "/repos/${{ github.repository }}/issues/comments/${COMMENT_ID}/reactions" \
-            -f content="eyes" || true
+      - name: Create GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.OZ_MGMT_GHA_APP_ID }}
+          owner: ${{ github.repository_owner }}
+          private-key: ${{ secrets.OZ_MGMT_GHA_PRIVATE_KEY }}
       - name: Checkout PR
-        env:
-          GH_TOKEN: ${{ github.token }}
+        uses: actions/checkout@v5
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          fetch-depth: 0
+          token: ${{ steps.app_token.outputs.token }}
+      - name: Checkout workflow code
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.WORKFLOW_CODE_REPOSITORY }}
+          ref: ${{ env.WORKFLOW_CODE_REF }}
+          path: ${{ env.WORKFLOW_CODE_PATH }}
+          token: ${{ steps.app_token.outputs.token }}
+      - name: Authenticate to Google Cloud for staging secret access
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Resolve staging origin token
+        id: staging_origin_token
         run: |
-          gh pr checkout "${{ inputs.pr_number }}"
-          git --no-pager log -1 --oneline
-      - name: Construct verification prompt
-        id: prompt
+          token="$(gcloud --project=warp-server-staging secrets versions access latest --secret=staging-origin-token)"
+          printf '::add-mask::%s\n' "$token"
+          {
+            echo 'token<<EOF'
+            printf '%s\n' "$token"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - name: Set up Oz Python environment
+        uses: warpdotdev/oz-for-oss/.github/actions/setup-oz-python@main
+        with:
+          requirements-path: ${{ env.WORKFLOW_CODE_PATH }}/.github/scripts/requirements.txt
+      - name: Run Oz verification workflow
         env:
+          PYTHONPATH: ${{ env.WORKFLOW_CODE_PATH }}/.github/scripts
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          COMMENT_ID: ${{ inputs.comment_id }}
           REQUESTER: ${{ inputs.requester }}
           SKILL_FILTER: ${{ inputs.skill_filter }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import os
-          import textwrap
-
-          pr_number = os.environ["PR_NUMBER"]
-          repository = os.environ["REPOSITORY"]
-          requester = (os.environ.get("REQUESTER") or "").strip()
-          skill_filter = (os.environ.get("SKILL_FILTER") or "").strip()
-          run_id = os.environ.get("RUN_ID", "")
-          run_url = os.environ.get("RUN_URL", "")
-
-          requester_line = (
-              f"Requested by @{requester} via `/oz-verify`."
-              if requester
-              else "Triggered by `/oz-verify`."
-          )
-          filter_line = (
-              f"Only run the verification skill named `{skill_filter}`."
-              if skill_filter
-              else "Run every verification skill that applies."
-          )
-
-          prompt = textwrap.dedent(
-              f"""
-              You are running the `verify-pr` skill against pull request #{pr_number}
-              in {repository}. {requester_line}
-
-              {filter_line}
-
-              Follow the `verify-pr` skill's instructions exactly:
-              1. Discover verification skills in the repository by scanning
-                 `.agents/skills/*/SKILL.md` and keeping only skills whose
-                 frontmatter declares `verification: true`.
-              2. Run each discovered verification skill against the checked-out
-                 PR HEAD.
-              3. Collect any screenshot/video artifacts those skills produce
-                 (untracked `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.mp4`,
-                 `.mov`, `.webm` files) and publish them to the
-                 `oz-verify-artifacts` branch under
-                 `pr-{pr_number}/run-{run_id}/<skill-name>/` so the
-                 report can embed them via `raw.githubusercontent.com` URLs.
-              4. Write a consolidated markdown report to `verification_report.md`
-                 at the repository root. The report must list each skill that
-                 ran, its pass/fail status, any output worth linking, and
-                 embed collected screenshots/videos inline.
-              5. Post the report back to the PR as a new comment. Include a
-                 link to this workflow run ({run_url}) at the bottom of the
-                 comment so reviewers can jump to logs.
-              6. Do not push commits to the PR branch or modify tracked files;
-                 verification is read-only for the PR. Pushing to the
-                 `oz-verify-artifacts` branch is the only sanctioned write.
-              """
-          ).strip()
-
-          print("prompt<<PROMPT_EOF")
-          print(prompt)
-          print("PROMPT_EOF")
-          PY
-      - name: Run Oz verification agent
-        uses: warpdotdev/oz-agent-action@v1
-        env:
-          GH_TOKEN: ${{ github.token }}
-        with:
-          skill: verify-pr
-          prompt: ${{ steps.prompt.outputs.prompt }}
-          warp_api_key: ${{ secrets.WARP_API_KEY }}
-          model: ${{ vars.WARP_AGENT_MODEL || '' }}
-          mcp: ${{ vars.WARP_AGENT_MCP || '' }}
-          name: "Oz Verify PR #${{ inputs.pr_number }}"
-      - name: Fallback report if the agent did not post one
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          # If the agent already posted the report there is nothing to do.
-          # When the agent failed mid-run we still want to leave a pointer
-          # back to the workflow logs so contributors aren't left guessing.
-          if [ -f verification_report.md ]; then
-            echo "Agent produced verification_report.md; the skill is responsible for posting it."
-            exit 0
-          fi
-          # Build the fallback comment body with a heredoc so the markdown
-          # backticks around `/oz-verify` don't trip shellcheck's SC2016
-          # (which fires on anything that looks like an expression inside
-          # single quotes).
-          body=$(cat <<EOF
-          ⚠️ The \`/oz-verify\` run did not produce a verification report.
-
-          See the [workflow run logs](${RUN_URL}) for details.
-          EOF
-          )
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "/repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
-            -f "body=$body" || true
+          WARP_API_KEY: ${{ secrets.WARP_API_KEY }}
+          WARP_AGENT_MODEL: ${{ vars.WARP_AGENT_MODEL || '' }}
+          WARP_AGENT_MCP: ${{ vars.WARP_AGENT_MCP || '' }}
+          WARP_ENVIRONMENT_ID: ${{ vars.WARP_ENVIRONMENT_ID || '' }}
+          WARP_API_BASE_URL: https://staging.warp.dev/api/v1
+          WARP_ORIGIN_TOKEN_ENV_NAME: STAGING_ORIGIN_TOKEN
+          STAGING_ORIGIN_TOKEN: ${{ steps.staging_origin_token.outputs.token }}
+        run: python "${{ env.WORKFLOW_CODE_PATH }}/.github/scripts/oz_verify.py"

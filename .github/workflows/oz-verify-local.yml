@@ -55,6 +55,7 @@ jobs:
     if: needs.resolve.outputs.should_run == 'true'
     permissions:
       contents: read
+      id-token: write
       issues: write
       pull-requests: write
     uses: ./.github/workflows/oz-verify.yml
@@ -63,5 +64,4 @@ jobs:
       comment_id: ${{ github.event.comment.id }}
       requester: ${{ github.event.comment.user.login }}
       skill_filter: ${{ needs.resolve.outputs.skill_filter }}
-    secrets:
-      WARP_API_KEY: ${{ secrets.WARP_API_KEY }}
+    secrets: inherit
