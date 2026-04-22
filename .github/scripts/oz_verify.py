@@ -100,12 +100,47 @@ def _extract_frontmatter_value(frontmatter: str, key: str) -> str:
     return ""
 
 
+def _extract_metadata_value(frontmatter: str, key: str) -> str:
+    """Return the value of ``key`` nested under the top-level ``metadata:`` map.
+
+    The Agent Skills spec (https://agentskills.io/specification#metadata-field)
+    defines ``metadata`` as an optional, top-level mapping for client-specific
+    extensions. Values are specified as strings but YAML also tolerates bare
+    scalars like ``true`` — both forms are accepted and returned verbatim
+    (minus surrounding quotes) so callers can normalize as they see fit.
+    """
+    pattern = re.compile(
+        rf"^[ \t]+{re.escape(key)}\s*:\s*(?P<value>.*?)\s*$", re.IGNORECASE
+    )
+    in_metadata = False
+    for raw in frontmatter.splitlines():
+        line = raw.rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+        if line[:1] not in (" ", "\t"):
+            # A new top-level key starts here; we're no longer inside the
+            # metadata block (if we ever were).
+            stripped = line.split("#", 1)[0].strip().lower()
+            in_metadata = stripped == "metadata:"
+            continue
+        if not in_metadata:
+            continue
+        match = pattern.match(line)
+        if match:
+            return match.group("value").strip().strip('"').strip("'")
+    return ""
+
+
 def _frontmatter_declares_verification(skill_path: Path) -> bool:
-    """Return True when *skill_path*'s frontmatter has `verification: true`."""
+    """Return True when the skill's ``metadata.verification`` is ``true``.
+
+    Follows the Agent Skills spec by scoping the opt-in tag under the
+    optional ``metadata`` frontmatter map rather than as a top-level key.
+    """
     frontmatter = _read_frontmatter_block(skill_path)
     if frontmatter is None:
         return False
-    value = _extract_frontmatter_value(frontmatter, "verification").lower()
+    value = _extract_metadata_value(frontmatter, "verification").lower()
     return value == "true"
 
 
@@ -115,9 +150,10 @@ def discover_verification_skills(
     """Return sorted verification-skill descriptors from *workspace_root*.
 
     A skill qualifies when its ``.agents/skills/<name>/SKILL.md`` declares
-    ``verification: true`` in its YAML frontmatter. When *skill_filter* is
-    provided, results are narrowed to the skill whose directory name or
-    frontmatter ``name`` matches exactly.
+    ``verification: "true"`` under the ``metadata`` map of its YAML
+    frontmatter. When *skill_filter* is provided, results are narrowed to
+    the skill whose directory name or frontmatter ``name`` matches
+    exactly.
     """
     skills_dir = workspace_root / ".agents" / "skills"
     if not skills_dir.is_dir():
@@ -372,7 +408,8 @@ def build_consolidated_report(
     if not skills_considered:
         header_lines.append(
             "No verification skills were found. Authors can opt in by "
-            "declaring `verification: true` in a skill's frontmatter."
+            "setting `verification: \"true\"` under the `metadata` map "
+            "in a skill's frontmatter."
         )
     else:
         names = ", ".join(f"`{entry['name']}`" for entry in skills_considered)
@@ -604,8 +641,9 @@ def main() -> None:
         else:
             progress.start(
                 "I looked for verification skills in `.agents/skills/` but "
-                "found none with `verification: true` frontmatter. "
-                "See the `/oz-verify` docs for the opt-in convention."
+                "found none with `metadata.verification: \"true\"` in their "
+                "frontmatter. See the `/oz-verify` docs for the opt-in "
+                "convention."
             )
 
         try:
@@ -642,8 +680,9 @@ def main() -> None:
             if not skills:
                 completion_sections.append(
                     "No verification skills were discovered — add a "
-                    "`.agents/skills/verify-*/SKILL.md` with `verification: true` "
-                    "in its frontmatter to enable end-to-end verification."
+                    "`.agents/skills/verify-*/SKILL.md` that sets "
+                    "`verification: \"true\"` under its `metadata` "
+                    "frontmatter map to enable end-to-end verification."
                 )
             errored = [r for r in results if r.get("error")]
             if errored:

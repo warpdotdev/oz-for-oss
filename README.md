@@ -83,7 +83,7 @@ The orchestration loop lives in [`.github/scripts/oz_verify.py`](.github/scripts
 A verification skill is any skill that follows this convention:
 
 - It lives at `.agents/skills/<name>/SKILL.md` and exposes standard skill frontmatter (`name`, `description`).
-- Its frontmatter declares `verification: true` as a top-level field. This tag is the single source of truth for whether `/oz-verify` runs the skill — directory name and description wording do not matter.
+- Its frontmatter includes a top-level [`metadata`](https://agentskills.io/specification#metadata-field) mapping whose `verification` key is set to `"true"`. This tag is the single source of truth for whether `/oz-verify` runs the skill — directory name and description wording do not matter.
 - It reads the checked-out PR HEAD and writes a concise `verification_report.md` with pass/fail status, then uploads that report (and any screenshot/video evidence) as Oz artifacts via `oz-dev artifact upload <path>`.
 - It references screenshot/video evidence from the report using standard Markdown image or link syntax whose URL is the uploaded artifact's filename (e.g. `![login](login-success.png)`). The workflow rewrites each such URL with a signed URL sourced from the Oz run's artifacts, so skills must not construct image or video URLs themselves.
 

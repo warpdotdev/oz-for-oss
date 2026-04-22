@@ -3,10 +3,11 @@ name: Oz Verify
 # the Oz agent. The orchestration loop lives in `.github/scripts/oz_verify.py`
 # so the workflow itself is a thin shell that checks out the PR, sets up the
 # shared Oz Python environment, and hands off to the script. The script
-# discovers every skill whose frontmatter declares `verification: true`, runs
-# each one as its own Oz agent run, resolves signed download URLs for any
-# screenshot or video artifacts via the Oz SDK, and posts a consolidated
-# report comment back on the PR with those artifacts embedded inline.
+# discovers every skill whose frontmatter sets `verification: "true"` under
+# its top-level `metadata` map, runs each one as its own Oz agent run,
+# resolves signed download URLs for any screenshot or video artifacts via
+# the Oz SDK, and posts a consolidated report comment back on the PR with
+# those artifacts embedded inline.
 on:
   workflow_call:
     inputs:

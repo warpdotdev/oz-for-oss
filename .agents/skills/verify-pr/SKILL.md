@@ -9,7 +9,7 @@ This skill is not invoked directly by `/oz-verify`. It is the convention documen
 
 The orchestration loop lives in `.github/scripts/oz_verify.py`. That script:
 
-1. Discovers every skill whose frontmatter declares `verification: true`.
+1. Discovers every skill whose frontmatter sets `verification: "true"` under its top-level `metadata` map.
 2. Runs each discovered skill as its own Oz agent run against the PR HEAD.
 3. Fetches the `verification_report.md` artifact the skill uploaded.
 4. Resolves signed download URLs for any screenshot/video artifacts the skill uploaded, via the Oz SDK.
@@ -23,7 +23,7 @@ Authors of a verification skill only need to worry about **step 2** — the sing
 A skill is treated as a verification skill when **all** of the following are true:
 
 - It lives at `.agents/skills/<name>/SKILL.md` and exposes standard skill frontmatter (`name`, `description`).
-- Its frontmatter declares `verification: true` as a top-level boolean field. This is the single source of truth — neither the skill's directory name nor its description opts it in or out.
+- Its frontmatter includes a top-level [`metadata`](https://agentskills.io/specification#metadata-field) mapping whose `verification` key is set to `"true"`. This opt-in tag is the single source of truth — neither the skill's directory name nor its description opts it in or out.
 
 Example verification-skill frontmatter:
 
@@ -31,11 +31,12 @@ Example verification-skill frontmatter:
 ---
 name: verify-login
 description: Exercise the login flow end-to-end against a checked-out PR and report pass/fail.
-verification: true
+metadata:
+  verification: "true"
 ---
 ```
 
-A frontmatter tag is used — rather than a naming convention — so that adding or removing a verification skill is an explicit, reviewable decision in the skill's own metadata rather than something implied by a directory name or by how the description happens to be worded. Downstream repositories are free to define their own verification skills; this document does not prescribe their shape beyond the `verification: true` tag and the expectations below.
+A dedicated frontmatter tag is used — rather than a naming convention — so that adding or removing a verification skill is an explicit, reviewable decision in the skill's own metadata rather than something implied by a directory name or by how the description happens to be worded. The tag lives under `metadata` to follow the [Agent Skills specification](https://agentskills.io/specification#metadata-field), which reserves `metadata` for client-specific frontmatter extensions like this one. Downstream repositories are free to define their own verification skills; this document does not prescribe their shape beyond the `metadata.verification: "true"` tag and the expectations below.
 
 ## Inputs
 

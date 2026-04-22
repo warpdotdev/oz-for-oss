@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from oz_verify import (
     _build_skill_section,
     _extract_frontmatter_value,
+    _extract_metadata_value,
     _format_media_embed,
     _frontmatter_declares_verification,
     _mime_type_from_filename,
@@ -34,7 +35,8 @@ class FrontmatterParsingTest(unittest.TestCase):
                 "---\n"
                 "name: verify-foo\n"
                 "description: Foo.\n"
-                "verification: true\n"
+                "metadata:\n"
+                '  verification: "true"\n'
                 "---\n"
                 "# body\n",
                 encoding="utf-8",
@@ -43,7 +45,8 @@ class FrontmatterParsingTest(unittest.TestCase):
             self.assertIsNotNone(block)
             assert block is not None
             self.assertIn("name: verify-foo", block)
-            self.assertIn("verification: true", block)
+            self.assertIn("metadata:", block)
+            self.assertIn('verification: "true"', block)
 
     def test_frontmatter_block_missing_when_no_opening_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -54,32 +57,84 @@ class FrontmatterParsingTest(unittest.TestCase):
     def test_extract_frontmatter_value_handles_quotes_and_case(self) -> None:
         frontmatter = (
             'name: "verify-foo"\n'
-            "Verification: TRUE\n"
-            "  nested: value\n"  # indented — not top-level
+            "Description: A thing\n"
+            "metadata:\n"
+            '  verification: "true"\n'
             "# comment: ignored\n"
         )
         self.assertEqual(_extract_frontmatter_value(frontmatter, "name"), "verify-foo")
-        self.assertEqual(_extract_frontmatter_value(frontmatter, "verification"), "TRUE")
-        self.assertEqual(_extract_frontmatter_value(frontmatter, "nested"), "")
+        self.assertEqual(_extract_frontmatter_value(frontmatter, "description"), "A thing")
+        # Nested scalars (e.g. metadata.verification) must NOT leak out via
+        # the top-level accessor; callers need to use the metadata helper.
+        self.assertEqual(_extract_frontmatter_value(frontmatter, "verification"), "")
 
-    def test_frontmatter_declares_verification_requires_true_literal(self) -> None:
+    def test_extract_metadata_value_reads_nested_scalars(self) -> None:
+        frontmatter = (
+            "name: verify-foo\n"
+            "description: Foo.\n"
+            "metadata:\n"
+            "  author: example-org\n"
+            '  Verification: "TRUE"\n'
+            "other: top-level\n"
+            "  verification: ignored-when-not-in-metadata\n"
+        )
+        # Nested keys are resolved case-insensitively and trimmed of
+        # surrounding quotes, matching the top-level helper's contract.
+        self.assertEqual(
+            _extract_metadata_value(frontmatter, "author"), "example-org"
+        )
+        self.assertEqual(
+            _extract_metadata_value(frontmatter, "verification"), "TRUE"
+        )
+        # Indented lines that are not underneath `metadata:` must be
+        # ignored; the helper is strict about scope.
+        self.assertEqual(
+            _extract_metadata_value(frontmatter, "missing"), ""
+        )
+
+    def test_extract_metadata_value_returns_empty_when_no_metadata_block(
+        self,
+    ) -> None:
+        frontmatter = (
+            "name: verify-foo\n"
+            "description: Foo.\n"
+            "verification: true\n"  # top-level verification must not count
+        )
+        self.assertEqual(
+            _extract_metadata_value(frontmatter, "verification"), ""
+        )
+
+    def test_frontmatter_declares_verification_requires_metadata_true_literal(
+        self,
+    ) -> None:
         cases = [
-            ("verification: true", True),
-            ("verification: True", True),
-            ("verification: 'true'", True),
-            ("verification: false", False),
-            ("verification: yes", False),
+            # Opted in: verification is "true" (string) or true (bare) under
+            # the metadata map, in any case.
+            ('metadata:\n  verification: "true"', True),
+            ("metadata:\n  verification: true", True),
+            ("metadata:\n  verification: True", True),
+            ("metadata:\n  verification: 'true'", True),
+            # Opted out: any non-true value under metadata.
+            ("metadata:\n  verification: false", False),
+            ("metadata:\n  verification: yes", False),
+            # Not opted in: top-level verification key must be ignored now
+            # that the tag lives under the metadata map.
+            ("verification: true", False),
+            # Not opted in: no verification tag at all.
+            ("metadata:\n  author: example-org", False),
             ("", False),
         ]
         with tempfile.TemporaryDirectory() as tmp:
-            for index, (line, expected) in enumerate(cases):
-                with self.subTest(line=line):
+            for index, (block, expected) in enumerate(cases):
+                with self.subTest(block=block):
                     skill = Path(tmp) / f"skill_{index}.md"
                     skill.write_text(
-                        f"---\nname: verify-x\n{line}\n---\nbody\n",
+                        f"---\nname: verify-x\n{block}\n---\nbody\n",
                         encoding="utf-8",
                     )
-                    self.assertEqual(_frontmatter_declares_verification(skill), expected)
+                    self.assertEqual(
+                        _frontmatter_declares_verification(skill), expected
+                    )
 
 
 class DiscoverVerificationSkillsTest(unittest.TestCase):
@@ -88,19 +143,49 @@ class DiscoverVerificationSkillsTest(unittest.TestCase):
         skills_dir = root / ".agents" / "skills"
         _write_skill(
             skills_dir / "verify-login" / "SKILL.md",
-            "---\nname: verify-login\ndescription: Login flow.\nverification: true\n---\nbody\n",
+            (
+                "---\n"
+                "name: verify-login\n"
+                "description: Login flow.\n"
+                "metadata:\n"
+                '  verification: "true"\n'
+                "---\nbody\n"
+            ),
         )
         _write_skill(
             skills_dir / "verify-signup" / "SKILL.md",
-            "---\nname: verify-signup\ndescription: Signup flow.\nverification: true\n---\nbody\n",
+            (
+                "---\n"
+                "name: verify-signup\n"
+                "description: Signup flow.\n"
+                "metadata:\n"
+                '  verification: "true"\n'
+                "---\nbody\n"
+            ),
         )
         _write_skill(
             skills_dir / "implement-issue" / "SKILL.md",
             "---\nname: implement-issue\ndescription: Implement.\n---\nbody\n",
         )
+        # Opts out by using metadata.verification: false so we also cover
+        # the "wrong value under metadata" rejection path.
         _write_skill(
             skills_dir / "verify-ignore" / "SKILL.md",
-            "---\nname: verify-ignore\ndescription: Opted out.\nverification: false\n---\nbody\n",
+            (
+                "---\n"
+                "name: verify-ignore\n"
+                "description: Opted out.\n"
+                "metadata:\n"
+                '  verification: "false"\n'
+                "---\nbody\n"
+            ),
+        )
+        # A skill that still uses the deprecated top-level form must NOT
+        # be discovered — the tag now lives under the metadata map per
+        # the Agent Skills spec.
+        _write_skill(
+            skills_dir / "verify-legacy" / "SKILL.md",
+            "---\nname: verify-legacy\ndescription: Legacy flag.\nverification: true\n---\nbody\n",
         )
         return root
 
