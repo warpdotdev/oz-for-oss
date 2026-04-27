@@ -42,6 +42,7 @@ _MARKDOWN_LINK_RE = re.compile(
 # or generic (e.g. `application/octet-stream`).
 _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 _VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm")
+_TRUSTED_REQUESTER_ASSOCIATIONS = {"COLLABORATOR", "MEMBER", "OWNER"}
 
 
 class MediaArtifact(TypedDict, total=False):
@@ -62,6 +63,42 @@ class VerificationResult(TypedDict, total=False):
     artifacts: list[MediaArtifact]
     error: str
     session_link: str
+
+
+def _has_trusted_requester_association(association: str) -> bool:
+    normalized = (association or "").strip().upper()
+    return normalized in _TRUSTED_REQUESTER_ASSOCIATIONS
+
+
+def _is_confirmed_org_member(client: Github, *, org: str, login: str) -> bool:
+    normalized_org = (org or "").strip()
+    normalized_login = (login or "").strip().lstrip("@")
+    if not normalized_org or not normalized_login:
+        return False
+    try:
+        client.requester.requestJsonAndCheck(
+            "GET", f"/orgs/{normalized_org}/members/{normalized_login}"
+        )
+    except Exception as exc:
+        if getattr(exc, "status", None) == 404:
+            return False
+        raise
+    return True
+
+
+def _is_trusted_verification_requester(
+    client: Github,
+    *,
+    owner: str,
+    owner_type: str,
+    requester_login: str,
+    requester_association: str,
+) -> bool:
+    if _has_trusted_requester_association(requester_association):
+        return True
+    if (owner_type or "").strip().lower() != "organization":
+        return False
+    return _is_confirmed_org_member(client, org=owner, login=requester_login)
 
 
 def _read_frontmatter_block(skill_path: Path) -> str | None:
@@ -443,6 +480,35 @@ def _acknowledge_trigger_comment(pr: PullRequest, comment_id: int) -> None:
         )
 
 
+def _trusted_trigger_comment_details(
+    client: Github,
+    *,
+    pr: PullRequest,
+    owner: str,
+    owner_type: str,
+    comment_id: int,
+) -> tuple[str, str] | None:
+    comment = pr.get_issue_comment(comment_id)
+    requester_login = str(getattr(getattr(comment, "user", None), "login", "") or "")
+    requester_association = str(getattr(comment, "author_association", "") or "")
+    if _is_trusted_verification_requester(
+        client,
+        owner=owner,
+        owner_type=owner_type,
+        requester_login=requester_login,
+        requester_association=requester_association,
+    ):
+        return requester_login, requester_association
+    logger.info(
+        "Ignoring /oz-verify trigger from untrusted requester %s on PR #%s "
+        "(association=%s)",
+        requester_login or "unknown",
+        pr.number,
+        requester_association or "NONE",
+    )
+    return None
+
+
 def _workflow_run_url() -> str:
     server = optional_env("GITHUB_SERVER_URL") or "https://github.com"
     repository = optional_env("GITHUB_REPOSITORY")
@@ -611,7 +677,19 @@ def main() -> None:
         pr = github.get_pull(pr_number)
         if pr.state != "open":
             return
+        owner_type = str(getattr(getattr(github, "owner", None), "type", "") or "")
         if comment_id_raw and comment_id_raw.isdigit():
+            trusted_comment = _trusted_trigger_comment_details(
+                client,
+                pr=pr,
+                owner=owner,
+                owner_type=owner_type,
+                comment_id=int(comment_id_raw),
+            )
+            if trusted_comment is None:
+                return
+            if not (requester or "").strip():
+                requester = trusted_comment[0]
             _acknowledge_trigger_comment(pr, int(comment_id_raw))
 
         progress = WorkflowProgressComment(

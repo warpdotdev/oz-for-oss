@@ -12,6 +12,9 @@ from oz_verify import (
     _extract_metadata_value,
     _format_media_embed,
     _frontmatter_declares_verification,
+    _has_trusted_requester_association,
+    _is_confirmed_org_member,
+    _is_trusted_verification_requester,
     _mime_type_from_filename,
     _read_frontmatter_block,
     build_consolidated_report,
@@ -231,6 +234,86 @@ class MimeTypeTest(unittest.TestCase):
         for filename, expected in cases:
             with self.subTest(filename=filename):
                 self.assertEqual(_mime_type_from_filename(filename), expected)
+
+
+class VerificationRequesterTrustTest(unittest.TestCase):
+    def test_has_trusted_requester_association(self) -> None:
+        self.assertTrue(_has_trusted_requester_association("member"))
+        self.assertTrue(_has_trusted_requester_association("COLLABORATOR"))
+        self.assertFalse(_has_trusted_requester_association("CONTRIBUTOR"))
+
+    def test_confirmed_org_member_returns_true_when_membership_probe_succeeds(
+        self,
+    ) -> None:
+        client = MagicMock()
+        client.requester.requestJsonAndCheck.return_value = ({}, {})
+        self.assertTrue(
+            _is_confirmed_org_member(client, org="warpdotdev", login="alice")
+        )
+        client.requester.requestJsonAndCheck.assert_called_once_with(
+            "GET", "/orgs/warpdotdev/members/alice"
+        )
+
+    def test_confirmed_org_member_returns_false_on_404(self) -> None:
+        client = MagicMock()
+        exc = RuntimeError("not found")
+        setattr(exc, "status", 404)
+        client.requester.requestJsonAndCheck.side_effect = exc
+        self.assertFalse(
+            _is_confirmed_org_member(client, org="warpdotdev", login="alice")
+        )
+
+    def test_confirmed_org_member_reraises_non_404_errors(self) -> None:
+        client = MagicMock()
+        exc = RuntimeError("boom")
+        setattr(exc, "status", 500)
+        client.requester.requestJsonAndCheck.side_effect = exc
+        with self.assertRaises(RuntimeError):
+            _is_confirmed_org_member(client, org="warpdotdev", login="alice")
+
+    def test_trusted_requester_allows_static_association_without_probe(self) -> None:
+        client = MagicMock()
+        self.assertTrue(
+            _is_trusted_verification_requester(
+                client,
+                owner="warpdotdev",
+                owner_type="Organization",
+                requester_login="alice",
+                requester_association="MEMBER",
+            )
+        )
+        client.requester.requestJsonAndCheck.assert_not_called()
+
+    def test_trusted_requester_falls_back_to_org_membership_probe(self) -> None:
+        client = MagicMock()
+        client.requester.requestJsonAndCheck.return_value = ({}, {})
+        self.assertTrue(
+            _is_trusted_verification_requester(
+                client,
+                owner="warpdotdev",
+                owner_type="Organization",
+                requester_login="alice",
+                requester_association="CONTRIBUTOR",
+            )
+        )
+        client.requester.requestJsonAndCheck.assert_called_once_with(
+            "GET", "/orgs/warpdotdev/members/alice"
+        )
+
+    def test_trusted_requester_rejects_untrusted_user_repo_without_org_fallback(
+        self,
+    ) -> None:
+        client = MagicMock()
+        self.assertFalse(
+            _is_trusted_verification_requester(
+                client,
+                owner="octocat",
+                owner_type="User",
+                requester_login="alice",
+                requester_association="CONTRIBUTOR",
+            )
+        )
+        client.requester.requestJsonAndCheck.assert_not_called()
 
 
 class CollectMediaArtifactsTest(unittest.TestCase):

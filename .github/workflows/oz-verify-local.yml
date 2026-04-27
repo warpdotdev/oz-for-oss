@@ -1,9 +1,9 @@
 name: Oz Verify (Local)
 # Local adapter that turns a `/oz-verify` comment on a pull request into an
 # invocation of the reusable `Oz Verify` workflow. The slash command must
-# appear on its own line (optionally followed by arguments) and may only be
-# issued by repository collaborators, members, or owners so that arbitrary
-# outside contributors cannot trigger agent runs that consume API credits.
+# appear on its own line (optionally followed by arguments). The reusable
+# workflow re-checks the requester's trust level with the GitHub App token
+# before it launches any Oz agent runs.
 on:
   issue_comment:
     types: [created]
@@ -16,7 +16,6 @@ jobs:
       github.event.issue.pull_request != null &&
       github.event.comment.user.type != 'Bot' &&
       !endsWith(github.event.comment.user.login, '[bot]') &&
-      contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.comment.author_association) &&
       startsWith(github.event.comment.body, '/oz-verify')
     runs-on: ubuntu-latest
     outputs:

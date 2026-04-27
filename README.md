@@ -62,13 +62,13 @@ Each adapter is deliberately thin — it defines the GitHub event triggers and c
 
 ### 4. `/oz-verify` slash command
 
-The [`oz-verify.yml`](.github/workflows/oz-verify.yml) reusable workflow lets any collaborator run end-to-end verification on a pull request on demand. Adopt it in a target repository by copying [`oz-verify-local.yml`](.github/workflows/oz-verify-local.yml) into `.github/workflows/` and changing the `uses:` ref to `warpdotdev/oz-for-oss/.github/workflows/oz-verify.yml@main`.
+The [`oz-verify.yml`](.github/workflows/oz-verify.yml) reusable workflow lets collaborators and verified members of the repository owner's organization run end-to-end verification on a pull request on demand. Adopt it in a target repository by copying [`oz-verify-local.yml`](.github/workflows/oz-verify-local.yml) into `.github/workflows/` and changing the `uses:` ref to `warpdotdev/oz-for-oss/.github/workflows/oz-verify.yml@main`.
 
 Usage:
 
 - Post `/oz-verify` as a new comment on a pull request to verify it with every verification skill in the repository (see *Authoring verification skills* below for the frontmatter tag convention).
 - Post `/oz-verify <skill-name>` (e.g. `/oz-verify verify-login-flow`) to run a single verification skill.
-- Only comments from collaborators, members, and owners trigger the workflow.
+- Only comments from collaborators, repository members/owners, or confirmed members of the repository owner's organization trigger the workflow.
 
 The orchestration loop lives in [`.github/scripts/oz_verify.py`](.github/scripts/oz_verify.py). For each discovered verification skill, the script launches an Oz agent run with that skill against the PR HEAD, polls for a `verification_report.md` artifact, and uses the Oz SDK to resolve signed download URLs for any screenshot or video artifacts the skill uploaded. It rewrites any standard Markdown image or link URL in the report that points at an uploaded artifact's filename (e.g. `![login success](login-success.png)`) to that artifact's signed download URL, then posts a single consolidated PR comment that includes every skill's report plus a link to the workflow run.
 
