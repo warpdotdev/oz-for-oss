@@ -99,13 +99,40 @@ def build_state_store() -> StateStore:
 def build_workflow_handlers() -> Mapping[str, WorkflowHandlers]:
     """Return the workflow-handler registry used by the cron poller.
 
-    The registry is empty in this scaffold: concrete handlers are
-    introduced workflow-by-workflow as the control plane assumes
-    responsibility for each one. Until then the poller drains records
-    that no longer have a registered handler so KV does not grow
-    unboundedly during the cutover.
+    The handlers in :mod:`lib.handlers` mint a fresh GitHub App
+    installation token per drain so a stale token does not poison
+    multiple ticks. Imported lazily so the unit-test path (which
+    exercises :func:`run_cron_tick` with stubbed handlers) does not
+    need the GitHub or oz-agent SDK on PYTHONPATH.
     """
-    return {}
+    from lib.github_app import fetch_installation_token  # type: ignore[import-not-found]
+    from lib.handlers import build_handler_registry  # type: ignore[import-not-found]
+
+    import httpx
+    from github import Auth, Github
+
+    app_id = os.environ["OZ_GITHUB_APP_ID"]
+    private_key = os.environ["OZ_GITHUB_APP_PRIVATE_KEY"]
+    api_base = os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com")
+
+    class _HttpxClient:
+        def post(self, url, *, headers, timeout):
+            with httpx.Client(timeout=timeout) as client:
+                return client.post(url, headers=headers)
+
+    http = _HttpxClient()
+
+    def github_client_factory(installation_id: int) -> Github:
+        token = fetch_installation_token(
+            installation_id=installation_id,
+            app_id=app_id,
+            private_key=private_key,
+            http=http,
+            api_base=api_base,
+        )
+        return Github(auth=Auth.Token(token.token))
+
+    return build_handler_registry(github_client_factory=github_client_factory)
 
 
 def run_cron_tick(
