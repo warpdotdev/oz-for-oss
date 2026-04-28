@@ -235,18 +235,23 @@ def dispatch_run(
     skill_name: str | None,
     title: str,
     config: AmbientAgentConfigParam,
+    client: OzAPI | None = None,
 ) -> Any:
-    """Dispatch an Oz agent run without waiting for it to finish.
+    """Start an Oz agent run without waiting for it to finish.
 
-    Returns the raw response object from ``client.agent.run`` (which
-    carries at least a ``run_id`` attribute). Use this from contexts
-    that cannot afford to block on the run completing — most notably
-    the Vercel webhook handler, which must respond within GitHub's
-    ~10s delivery window. The cron poller resumes the work later by
-    calling ``client.agent.runs.retrieve(run_id)`` against the same
-    run id.
+    The Vercel webhook handler dispatches cloud runs in fire-and-forget
+    mode: it persists ``RunState`` keyed by the returned ``run_id`` and
+    returns 202 immediately. The cron poller then drains the run on the
+    next tick and applies the result back to GitHub.
+
+    The legacy GitHub Actions path still wants the synchronous behavior,
+    so :func:`run_agent` wraps this helper plus the existing polling
+    loop and surfaces the terminal :class:`RunItem`.
+
+    *client* is parameterized so callers (the cron poller, the webhook
+    handler) that have already constructed an :class:`OzAPI` instance can
+    reuse it.
     """
-    client = build_oz_client()
     request: AgentRunParams = {
         "prompt": prompt,
         "title": title,
@@ -255,7 +260,8 @@ def dispatch_run(
     }
     if skill_name:
         request["skill"] = skill_spec(skill_name)
-    return client.agent.run(**request)
+    sdk_client = client or build_oz_client()
+    return sdk_client.agent.run(**request)
 
 
 def run_agent(
@@ -270,19 +276,21 @@ def run_agent(
 ) -> RunItem:
     """Run an Oz agent and poll until it reaches a terminal state.
 
-    A blocking convenience wrapper around :func:`dispatch_run` plus a
-    polling loop. GitHub Actions entrypoints use this; the Vercel
-    control plane uses :func:`dispatch_run` directly and lets the cron
-    poller drain runs asynchronously.
+    Wraps :func:`dispatch_run` (fire-and-forget) plus a polling loop so
+    the legacy GitHub Actions entrypoints retain their synchronous
+    behavior. Cloud-mode dispatch in the Vercel control plane uses
+    :func:`dispatch_run` directly and lets the cron poller observe the
+    terminal state.
     """
+    client = build_oz_client()
     response = dispatch_run(
         prompt=prompt,
         skill_name=skill_name,
         title=title,
         config=config,
+        client=client,
     )
     run_id = response.run_id
-    client = build_oz_client()
     deadline = time.monotonic() + timeout_seconds
     last_state = None
 
