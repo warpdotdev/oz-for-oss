@@ -24,11 +24,13 @@ GitHub is still the control plane. Issues, labels, assignees, comments, pull req
 
 Most of the agent-backed workflows in this repo follow the same pattern:
 
-1. a reusable workflow in [`../.github/workflows/`](../.github/workflows/) decides that a unit of work should run
+1. a delivery surface decides that a unit of work should run — either a reusable workflow in [`../.github/workflows/`](../.github/workflows/), or the Vercel webhook receiver under [`../control-plane/`](../control-plane/)
 2. a Python entrypoint in [`../.github/scripts/`](../.github/scripts/) gathers context from GitHub and the repository
 3. that script assembles a task-specific prompt
 4. the script invokes Oz against one or more local skills in [`../.agents/skills/`](../.agents/skills/)
 5. the result is applied back to GitHub as labels, comments, branches, PRs, or reviews
+
+For the triage and review workflows, the Vercel control plane stores the in-flight Oz run id in Vercel KV at dispatch time and a 1-minute cron tick handles the apply step — the webhook handler returns 202 immediately so GitHub never sees a long-running response. The agent uploads its result via `oz artifact upload <name>.json` and the cron-side workflow handler downloads it through `oz_workflows.artifacts.load_*_artifact`. The GitHub Actions workflows continue to work in parallel until the operator flips the GitHub App webhook URL.
 
 That prompt-construction layer is important. The repo does not just say “run the review skill” or “run the triage skill.” It builds a concrete packet of issue or PR context around the skill:
 

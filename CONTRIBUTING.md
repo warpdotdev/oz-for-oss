@@ -45,3 +45,30 @@ Contributors can file issues, comment on issues and PRs, and open PRs directly. 
 ## A note on parallel work
 
 Marking an issue as ready is not meant to lock it. It just means the repo is open for that next chunk of work. Someone can take a swing at it with Oz, another coding agent, or by hand. If multiple people explore the same issue, that is still normal open source behavior and we will select the best implementation through normal review.
+
+## Local Vercel dev (control plane)
+
+The webhook receiver and cron poller live in [`control-plane/`](control-plane/). To iterate on them locally:
+
+```sh
+cd control-plane
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt pytest
+vercel dev
+```
+
+`vercel dev` boots the same Python entrypoints (`api/webhook.py`, `api/cron.py`) behind a local HTTP server. To replay a synthetic GitHub webhook delivery, sign the payload with the same `OZ_GITHUB_WEBHOOK_SECRET` Vercel uses and POST it at `/api/webhook`:
+
+```sh
+BODY='{"action":"opened","issue":{"number":42,"labels":[]}}'
+SECRET="$OZ_GITHUB_WEBHOOK_SECRET"
+SIGNATURE="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')"
+curl -sS -X POST http://localhost:3000/api/webhook \
+  -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: issues" \
+  -H "X-Hub-Signature-256: $SIGNATURE" \
+  --data "$BODY"
+```
+
+The handler returns 202 with the routed workflow id (or `null` when the event is intentionally ignored). Run `python -m pytest control-plane/tests` to exercise the same logic without the HTTP plumbing.

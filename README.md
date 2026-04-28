@@ -2,7 +2,12 @@
 
 Oz for OSS contains a set of workflows to help manage the overhead of maintaining an open-source project. It consists of workflows that trigger Oz agents to triage issues, generate product and tech specs, create implementation PRs, and review pull requests.
 
-The automation is organized as GitHub Actions workflows under `.github/workflows/` that invoke Python entrypoints in `.github/scripts/` (with shared helpers in `.github/scripts/oz_workflows/`), backed by triage label definitions in `.github/issue-triage/`, a CODEOWNERS-style stakeholder map in `.github/STAKEHOLDERS`, and committed spec artifacts under `specs/GH{number}/product.md` and `specs/GH{number}/tech.md`. Together these cover issue triage, product and tech spec creation, issue implementation scaffolding, PR issue-state enforcement, PR review orchestration, and unready-assignment guidance for Oz.
+There are two delivery surfaces:
+
+- **GitHub Actions workflows** under `.github/workflows/` invoke Python entrypoints in `.github/scripts/` (with shared helpers in `.github/scripts/oz_workflows/`).
+- **Vercel control plane** under [`control-plane/`](control-plane/) hosts a webhook receiver and a 1-minute cron poller that dispatches Warp-hosted cloud agent runs and applies their results back to GitHub.
+
+Both paths share the same Python helpers, agent prompts, and artifact contracts. The Vercel control plane stores in-flight cloud agent runs in Vercel KV and drains them on the cron tick. Triage label definitions live in `.github/issue-triage/`, the CODEOWNERS-style stakeholder map lives in `.github/STAKEHOLDERS`, and committed spec artifacts live under `specs/GH{number}/product.md` and `specs/GH{number}/tech.md`. Together these cover issue triage, product and tech spec creation, issue implementation scaffolding, PR issue-state enforcement, PR review orchestration, and unready-assignment guidance for Oz.
 
 ## Have an open-source project?
 
@@ -53,6 +58,7 @@ to customize agent behavior:
 | Variable | Description |
 |---|---|
 | `WARP_AGENT_MODEL` | Override the default Oz model (e.g. a specific model identifier). |
+| `WARP_REVIEW_TRIAGE_ENVIRONMENT_ID` | Optional: route the triage and PR-review workflows (`triage-new-issues`, `respond-to-triaged-issue-comment`, `review-pull-request`) to a dedicated cloud environment, separate from the default `WARP_ENVIRONMENT_ID` used by spec/implementation/comment-response workflows. When unset, those workflows fall back to `WARP_ENVIRONMENT_ID` and behave identically to the legacy single-environment setup. Useful for giving the lighter-weight triage/review pool tighter resource limits. |
 
 ### 3. Add local adapter workflows
 
@@ -105,6 +111,14 @@ If you want the triage agent to apply area and status labels, run the `bootstrap
 
 The skill is idempotent — re-running it merges new discoveries with existing configuration rather than overwriting it. The `config.json` file contains **only** label definitions; stakeholder ownership is managed separately in `.github/STAKEHOLDERS`, which uses the same glob-based syntax as GitHub CODEOWNERS files.
 
+## Vercel control plane
+
+[`control-plane/`](control-plane/) hosts the Vercel-deployed webhook receiver + cron poller that the GitHub App can route deliveries to instead of GitHub Actions. The webhook handler verifies the `X-Hub-Signature-256` HMAC, picks a workflow handler, and persists in-flight cloud run state in Vercel KV. The 1-minute cron tick reads the KV state, polls Oz for terminal status, and applies completed runs back to GitHub through workflow-specific result handlers.
+
+The control plane is the recommended steady-state delivery target — the webhook handler returns 202 in ~100ms and avoids the 30–90 second cold-start tax of every GitHub Actions job. The legacy GitHub Actions workflows in `.github/workflows/` continue to work in parallel until the operator flips the GitHub App's webhook URL; once the Vercel control plane is verified end-to-end, a follow-up PR can delete the workflow YAMLs.
+
+See [`control-plane/README.md`](control-plane/README.md) for the full deployment runbook (Vercel project setup, KV provisioning, secret variables, and the GitHub App webhook URL change).
+
 ## Local development
 
 ### Setup
@@ -118,8 +132,16 @@ python -m pip install -r .github/scripts/requirements.txt
 
 ### Run tests
 
+The legacy GitHub Actions Python suite:
+
 ```sh
 env PYTHONPATH=.github/scripts python -m unittest discover -s .github/scripts/tests
+```
+
+The Vercel control-plane suite:
+
+```sh
+python -m pytest control-plane/tests
 ```
 
 ### Run workflow entrypoints locally
