@@ -49,17 +49,22 @@ def build_state_store() -> StateStore:
     :file:`requirements.txt`.
     """
     try:
-        # ``vercel_kv`` is the binding name used by the official
-        # Vercel KV Python SDK. Imported lazily because the test suite
-        # runs without the package on PYTHONPATH.
-        from vercel_kv import KV  # type: ignore[import-not-found]
+        # Vercel KV is backed by Upstash Redis; the official Upstash
+        # Python SDK consumes the ``KV_REST_API_URL`` and
+        # ``KV_REST_API_TOKEN`` env vars Vercel injects when the KV
+        # resource is connected. Imported lazily because the test
+        # suite runs without the package on PYTHONPATH.
+        from upstash_redis import Redis  # type: ignore[import-not-found]
     except ImportError as exc:  # pragma: no cover - production-only path
         raise RuntimeError(
-            "vercel_kv is not installed; the production cron entrypoint "
-            "needs the Vercel KV SDK to read in-flight run state."
+            "upstash-redis is not installed; the production cron entrypoint "
+            "needs the Upstash Redis SDK to read in-flight run state."
         ) from exc
 
-    kv = KV()
+    kv = Redis(
+        url=os.environ["KV_REST_API_URL"],
+        token=os.environ["KV_REST_API_TOKEN"],
+    )
 
     class VercelKVStore:
         def put(self, key: str, value: str) -> None:
@@ -75,7 +80,18 @@ def build_state_store() -> StateStore:
             kv.delete(key)
 
         def keys(self, prefix: str) -> list[str]:
-            return list(kv.scan(prefix))
+            # Upstash returns ``[cursor, [keys]]``; walk the cursor
+            # until it loops back to 0 to collect every match.
+            pattern = f"{prefix}*"
+            found: list[str] = []
+            cursor: int | str = 0
+            while True:
+                result = kv.scan(cursor, match=pattern)
+                cursor = result[0]
+                found.extend(result[1])
+                if str(cursor) == "0":
+                    break
+            return found
 
     return VercelKVStore()
 

@@ -11,6 +11,7 @@ httpx>=0.24
 PyGithub>=2.9.0,<3
 PyJWT[crypto]>=2.8,<3
 PyYAML>=6.0,<7
-# Vercel KV adapter. Pinned loosely; update in lockstep with the
-# Vercel project's KV resource version.
-vercel-kv>=0.1
+# Upstash Redis client — the underlying engine for Vercel KV. Vercel
+# auto-injects KV_REST_API_URL / KV_REST_API_TOKEN that this client
+# consumes directly.
+upstash-redis>=1.0
