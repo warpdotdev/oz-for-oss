@@ -71,8 +71,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-    env:
-      TRIAGE_IMAGE: oz-for-oss-triage
     steps:
       - name: Create GitHub App token
         id: app_token
@@ -85,10 +83,6 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
-      - name: Build triage agent container
-        uses: warpdotdev/oz-for-oss/.github/actions/build-triage-image@main # main
-        with:
-          image-name: ${{ env.TRIAGE_IMAGE }}
       - name: Run inline issue response workflow
         uses: warpdotdev/oz-for-oss/.github/actions/run-oz-python-script@main # main
         with:
@@ -98,4 +92,6 @@ jobs:
           GH_APP_SLUG: ${{ steps.app_token.outputs.app-slug }}
           WARP_API_KEY: ${{ secrets.OSS_WARP_API_KEY }}
           WARP_AGENT_MODEL: ${{ vars.WARP_AGENT_MODEL || '' }}
+          WARP_ENVIRONMENT_ID: ${{ vars.WARP_ENVIRONMENT_ID || '' }}
+          WARP_REVIEW_TRIAGE_ENVIRONMENT_ID: ${{ vars.WARP_REVIEW_TRIAGE_ENVIRONMENT_ID || '' }}
           WARP_API_BASE_URL: https://app.warp.dev/api/v1
