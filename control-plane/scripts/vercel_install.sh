@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# Vercel install hook for the oz-for-oss control plane.
+# Local sync helper for the oz-for-oss control plane.
 #
-# Vercel's project root is ``control-plane/``, but the GitHub Actions
-# entrypoints we want to reuse live under ``.github/scripts/``. Vercel does
-# not ship those by default, so this script mirrors the package and the
-# four PR entrypoints into ``control-plane/lib/`` before Vercel's build
-# step runs. The mirrored copies are intentionally git-ignored so the
-# repository keeps a single source of truth at ``.github/scripts/``.
+# The control plane reuses the ``oz_workflows`` package and the four
+# PR-flow entrypoints from ``.github/scripts/``. The mirrored copies
+# live at ``control-plane/lib/oz_workflows/`` and
+# ``control-plane/lib/scripts/`` and ARE checked into the branch so
+# Vercel ships them as part of the function bundle without needing to
+# clone the rest of the repo at build time.
+#
+# Run this script after editing anything under ``.github/scripts/`` to
+# refresh the mirrored copies, then commit the diff. CI does not run
+# this script; Vercel does not run this script. It exists purely as a
+# convenience for local development so contributors can keep the
+# vendored copy in sync with the canonical source.
 #
 # After this script runs:
 #   - ``control-plane/lib/oz_workflows/`` is a copy of
@@ -19,11 +25,6 @@
 # ``vercel.json`` extends ``PYTHONPATH`` to ``".:lib"`` so the
 # Vercel function code can ``from oz_workflows.oz_client import ...``
 # and ``from scripts.review_pr import gather_review_context`` directly.
-#
-# The same script also installs the runtime Python deps via the
-# Vercel-provided ``pip``. We invoke it from the project's
-# ``installCommand`` so deps land before the Python builder snapshots
-# the function bundle.
 
 set -euo pipefail
 
@@ -96,17 +97,5 @@ for entrypoint in "${ENTRYPOINTS[@]}"; do
     cp "$src" "$dst"
 done
 
-# Install the Python runtime dependencies. Vercel's Python builder
-# normally runs ``pip install -r requirements.txt`` itself, but
-# ``installCommand`` overrides the default so we have to do it here.
-if command -v pip >/dev/null 2>&1; then
-    echo "vercel_install.sh: installing Python deps via pip"
-    pip install --upgrade --quiet -r "$PROJECT_ROOT/requirements.txt"
-elif command -v pip3 >/dev/null 2>&1; then
-    echo "vercel_install.sh: installing Python deps via pip3"
-    pip3 install --upgrade --quiet -r "$PROJECT_ROOT/requirements.txt"
-else
-    echo "vercel_install.sh: pip not available on PATH; skipping dependency install" >&2
-fi
-
-echo "vercel_install.sh: install hook complete"
+echo "vercel_install.sh: sync complete"
+echo "Don't forget to commit any changes under control-plane/lib/."
