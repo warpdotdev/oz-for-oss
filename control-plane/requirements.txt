@@ -1,0 +1,16 @@
+# Runtime dependencies for the Vercel-hosted Oz for OSS control plane.
+#
+# The webhook handler verifies GitHub signatures (stdlib only) but
+# every other entrypoint reaches GitHub via PyGithub or makes outbound
+# requests via httpx, mints GitHub App tokens via PyJWT, and dispatches
+# Oz cloud runs via the Oz Python SDK. These pins mirror the pins in
+# `.github/scripts/requirements.txt` so the control plane and the
+# legacy GitHub Actions runtime cannot drift on shared deps.
+oz-agent-sdk>=0.11.0
+httpx>=0.24
+PyGithub>=2.9.0,<3
+PyJWT[crypto]>=2.8,<3
+PyYAML>=6.0,<7
+# Vercel KV adapter. Pinned loosely; update in lockstep with the
+# Vercel project's KV resource version.
+vercel-kv>=0.1

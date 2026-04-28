@@ -1,0 +1,26 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "framework": null,
+  "functions": {
+    "api/webhook.py": {
+      "runtime": "python3.12",
+      "memory": 512,
+      "maxDuration": 30
+    },
+    "api/cron.py": {
+      "runtime": "python3.12",
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron",
+      "schedule": "* * * * *"
+    }
+  ],
+  "env": {
+    "PYTHONPATH": "."
+  }
+}
