@@ -2,6 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "framework": null,
+  "installCommand": "bash scripts/vercel_install.sh",
   "functions": {
     "api/webhook.py": {
       "memory": 512,
@@ -19,6 +20,6 @@
     }
   ],
   "env": {
-    "PYTHONPATH": "."
+    "PYTHONPATH": ".:lib"
   }
 }

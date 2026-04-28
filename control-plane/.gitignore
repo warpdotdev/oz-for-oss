@@ -1,0 +1,16 @@
+# Mirrored copies of `.github/scripts/oz_workflows` and the four PR
+# entrypoints created by `scripts/vercel_install.sh` before each Vercel
+# build. The repository keeps a single source of truth at
+# `.github/scripts/`; these duplicates only exist on the build runner.
+lib/oz_workflows/
+lib/scripts/
+
+# Local virtualenvs and Python build artifacts
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Vercel CLI output
+.vercel/
