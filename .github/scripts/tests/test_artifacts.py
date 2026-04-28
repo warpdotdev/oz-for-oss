@@ -7,11 +7,19 @@ from unittest.mock import MagicMock, patch
 import httpx
 
 from oz_workflows.artifacts import (
+    ISSUE_RESPONSE_FILENAME,
+    PR_METADATA_FILENAME,
+    REVIEW_FILENAME,
+    TRIAGE_RESULT_FILENAME,
     _DOWNLOAD_MAX_ATTEMPTS,
     _download_artifact_text,
     _download_artifact_json,
     _find_file_artifact,
+    load_issue_response_artifact,
     load_pr_metadata_artifact,
+    load_review_artifact,
+    load_run_artifact,
+    load_triage_artifact,
     poll_for_artifact,
     poll_for_text_artifact,
     try_load_pr_metadata_artifact,
@@ -317,7 +325,15 @@ class LoadPrMetadataArtifactTest(unittest.TestCase):
         mock_poll.return_value = expected
         result = load_pr_metadata_artifact("run-456")
         self.assertEqual(result, expected)
-        mock_poll.assert_called_once_with("run-456", filename="pr-metadata.json")
+        # ``load_pr_metadata_artifact`` is a thin wrapper around
+        # ``load_run_artifact`` (which delegates to ``poll_for_artifact``
+        # with the default polling parameters).
+        mock_poll.assert_called_once_with(
+            "run-456",
+            filename="pr-metadata.json",
+            timeout_seconds=120,
+            poll_interval_seconds=5,
+        )
 
     @patch("oz_workflows.artifacts.poll_for_artifact")
     def test_raises_when_missing_keys(self, mock_poll: MagicMock) -> None:
@@ -361,6 +377,114 @@ class LoadPrMetadataArtifactTest(unittest.TestCase):
         mock_poll.return_value = metadata
         result = load_pr_metadata_artifact("run-456")
         self.assertEqual(result, metadata)
+
+
+class WorkflowFilenameConstantsTest(unittest.TestCase):
+    """Lock in the workflow-specific artifact filenames.
+
+    The cloud-mode prompts and the cron poller both refer to these
+    filenames, so a typo or rename has to be intentional.
+    """
+
+    def test_filenames_are_canonical(self) -> None:
+        self.assertEqual(PR_METADATA_FILENAME, "pr-metadata.json")
+        self.assertEqual(TRIAGE_RESULT_FILENAME, "triage_result.json")
+        self.assertEqual(ISSUE_RESPONSE_FILENAME, "issue_response.json")
+        self.assertEqual(REVIEW_FILENAME, "review.json")
+
+
+class LoadRunArtifactTest(unittest.TestCase):
+    """Coverage for the workflow-agnostic :func:`load_run_artifact`."""
+
+    @patch("oz_workflows.artifacts.poll_for_artifact")
+    def test_forwards_filename_and_polling_kwargs(
+        self, mock_poll: MagicMock
+    ) -> None:
+        mock_poll.return_value = {"k": "v"}
+        result = load_run_artifact(
+            "run-1",
+            filename="custom.json",
+            timeout_seconds=200,
+            poll_interval_seconds=7,
+        )
+        self.assertEqual(result, {"k": "v"})
+        mock_poll.assert_called_once_with(
+            "run-1",
+            filename="custom.json",
+            timeout_seconds=200,
+            poll_interval_seconds=7,
+        )
+
+    @patch("oz_workflows.artifacts.poll_for_artifact")
+    def test_uses_default_polling_kwargs(self, mock_poll: MagicMock) -> None:
+        mock_poll.return_value = {}
+        load_run_artifact("run-1", filename="custom.json")
+        mock_poll.assert_called_once_with(
+            "run-1",
+            filename="custom.json",
+            timeout_seconds=120,
+            poll_interval_seconds=5,
+        )
+
+    @patch("oz_workflows.artifacts.poll_for_artifact")
+    def test_propagates_polling_failure(self, mock_poll: MagicMock) -> None:
+        # When the underlying poller raises (timeout, transport error,
+        # malformed JSON), ``load_run_artifact`` lets the exception
+        # surface so the caller can handle it explicitly.
+        mock_poll.side_effect = RuntimeError("timed out")
+        with self.assertRaises(RuntimeError):
+            load_run_artifact("run-1", filename="custom.json")
+
+
+class NamedArtifactWrapperTest(unittest.TestCase):
+    """The named wrappers must dispatch to the right filename.
+
+    The triage / respond-to-triaged / review pipelines all live in
+    different scripts; locking the filename here makes sure the agent
+    upload command and the cron poller stay in sync.
+    """
+
+    @patch("oz_workflows.artifacts.poll_for_artifact")
+    def test_load_triage_artifact_uses_triage_result_json(
+        self, mock_poll: MagicMock
+    ) -> None:
+        mock_poll.return_value = {"summary": "triaged", "labels": ["bug"]}
+        result = load_triage_artifact("run-1")
+        self.assertEqual(result, {"summary": "triaged", "labels": ["bug"]})
+        mock_poll.assert_called_once_with(
+            "run-1",
+            filename="triage_result.json",
+            timeout_seconds=120,
+            poll_interval_seconds=5,
+        )
+
+    @patch("oz_workflows.artifacts.poll_for_artifact")
+    def test_load_issue_response_artifact_uses_issue_response_json(
+        self, mock_poll: MagicMock
+    ) -> None:
+        mock_poll.return_value = {"analysis_comment": "hi"}
+        result = load_issue_response_artifact("run-1")
+        self.assertEqual(result, {"analysis_comment": "hi"})
+        mock_poll.assert_called_once_with(
+            "run-1",
+            filename="issue_response.json",
+            timeout_seconds=120,
+            poll_interval_seconds=5,
+        )
+
+    @patch("oz_workflows.artifacts.poll_for_artifact")
+    def test_load_review_artifact_uses_review_json(
+        self, mock_poll: MagicMock
+    ) -> None:
+        mock_poll.return_value = {"summary": "LGTM", "comments": []}
+        result = load_review_artifact("run-1")
+        self.assertEqual(result, {"summary": "LGTM", "comments": []})
+        mock_poll.assert_called_once_with(
+            "run-1",
+            filename="review.json",
+            timeout_seconds=120,
+            poll_interval_seconds=5,
+        )
 
 
 class TryLoadPrMetadataArtifactTest(unittest.TestCase):

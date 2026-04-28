@@ -220,20 +220,80 @@ def _download_text_with_retries(
 
 
 PR_METADATA_FILENAME = "pr-metadata.json"
+TRIAGE_RESULT_FILENAME = "triage_result.json"
+ISSUE_RESPONSE_FILENAME = "issue_response.json"
+REVIEW_FILENAME = "review.json"
 
 _PR_METADATA_REQUIRED_KEYS = ("branch_name", "pr_title", "pr_summary")
+
+
+def load_run_artifact(
+    run_id: str,
+    *,
+    filename: str,
+    timeout_seconds: int = 120,
+    poll_interval_seconds: int = 5,
+) -> dict[str, Any]:
+    """Load a named JSON artifact from a completed Oz run.
+
+    This is the workflow-agnostic entry point named in the cloud-mode
+    plan: callers identify the artifact by the filename the agent
+    uploaded via ``oz artifact upload <name>.json`` and the helper
+    polls the run's artifact list until the matching FILE artifact
+    appears, then downloads its signed URL and JSON-decodes the body.
+
+    Workflow-specific wrappers below (:func:`load_triage_artifact`,
+    :func:`load_issue_response_artifact`, :func:`load_review_artifact`,
+    :func:`load_pr_metadata_artifact`) layer on top of this function so
+    the per-workflow result schemas validate consistently while sharing
+    the same artifact-fetch pipeline.
+    """
+    return poll_for_artifact(
+        run_id,
+        filename=filename,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+
+
+def load_triage_artifact(run_id: str) -> dict[str, Any]:
+    """Load the ``triage_result.json`` artifact for a completed triage run.
+
+    Schema validation lives in ``triage_new_issues.apply_triage_result``
+    and the various ``extract_*`` helpers, which already tolerate
+    missing/extra keys; this loader keeps the contract narrow and
+    returns the raw decoded JSON object.
+    """
+    return load_run_artifact(run_id, filename=TRIAGE_RESULT_FILENAME)
+
+
+def load_issue_response_artifact(run_id: str) -> dict[str, Any]:
+    """Load the ``issue_response.json`` artifact for a respond-to-triaged run."""
+    return load_run_artifact(run_id, filename=ISSUE_RESPONSE_FILENAME)
+
+
+def load_review_artifact(run_id: str) -> dict[str, Any]:
+    """Load the ``review.json`` artifact for a completed PR review run.
+
+    The PR review pipeline normalizes the payload via
+    ``review_pr._normalize_review_payload`` after this loader returns,
+    which is where the strict ``summary``/``comments`` schema check
+    lives. This loader stays a thin wrapper so the cron poller can call
+    it without coupling to the review-specific normalization.
+    """
+    return load_run_artifact(run_id, filename=REVIEW_FILENAME)
 
 
 def load_pr_metadata_artifact(run_id: str) -> PrMetadata:
     """Load and validate the pr-metadata.json artifact from a completed Oz run.
 
-    The artifact must be a JSON object containing at least the keys
-    ``branch_name``, ``pr_title``, and ``pr_summary``.
+    Implemented as a thin wrapper around :func:`load_run_artifact` that
+    additionally enforces the ``{branch_name, pr_title, pr_summary}``
+    keys spec and trims-non-empty-string check on ``pr_summary`` so
+    spec/implementation workflows can rely on a structured
+    :class:`PrMetadata` value.
     """
-    metadata = poll_for_artifact(
-        run_id,
-        filename=PR_METADATA_FILENAME,
-    )
+    metadata = load_run_artifact(run_id, filename=PR_METADATA_FILENAME)
     missing = [key for key in _PR_METADATA_REQUIRED_KEYS if key not in metadata]
     if missing:
         raise RuntimeError(
