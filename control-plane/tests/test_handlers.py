@@ -1,0 +1,299 @@
+"""Tests for ``control_plane.lib.handlers``.
+
+The handlers wire together:
+
+- The artifact loader (``oz_workflows.artifacts.load_*_artifact``).
+- The result applier (``scripts.<workflow>.apply_*_result``).
+- The failure handler (``WorkflowProgressComment.report_error``).
+
+The tests stub the ``scripts.*`` and ``oz_workflows.*`` modules so the
+assertions stay focused on handler wiring (passing the right run state
+into apply, calling the right artifact loader, etc).
+"""
+
+from __future__ import annotations
+
+import sys
+import unittest
+from types import ModuleType
+from typing import Any
+from unittest.mock import MagicMock
+
+from . import conftest  # noqa: F401
+
+from lib.state import RunState
+
+
+def _ensure_module(name: str) -> ModuleType:
+    parts = name.split(".")
+    for i in range(1, len(parts) + 1):
+        sub = ".".join(parts[: i])
+        if sub not in sys.modules:
+            sys.modules[sub] = ModuleType(sub)
+    module = ModuleType(name)
+    sys.modules[name] = module
+    return module
+
+
+class _HandlerTestBase(unittest.TestCase):
+    """Mixin that owns the stub modules the handlers import lazily."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._module_keys = [
+            "scripts",
+            "scripts.review_pr",
+            "scripts.respond_to_pr_comment",
+            "scripts.verify_pr_comment",
+            "scripts.enforce_pr_issue_state",
+            "oz_workflows",
+            "oz_workflows.artifacts",
+            "oz_workflows.helpers",
+            "oz_workflows.verification",
+        ]
+        self._original_modules = {
+            key: sys.modules.get(key) for key in self._module_keys
+        }
+        # Always create fresh stubs that the handlers import lazily.
+        scripts = _ensure_module("scripts")
+        review = _ensure_module("scripts.review_pr")
+        respond = _ensure_module("scripts.respond_to_pr_comment")
+        verify = _ensure_module("scripts.verify_pr_comment")
+        enforce = _ensure_module("scripts.enforce_pr_issue_state")
+        scripts.review_pr = review  # type: ignore[attr-defined]
+        scripts.respond_to_pr_comment = respond  # type: ignore[attr-defined]
+        scripts.verify_pr_comment = verify  # type: ignore[attr-defined]
+        scripts.enforce_pr_issue_state = enforce  # type: ignore[attr-defined]
+        review.apply_review_result = MagicMock()  # type: ignore[attr-defined]
+        respond.apply_pr_comment_result = MagicMock()  # type: ignore[attr-defined]
+        verify.apply_verification_result = MagicMock()  # type: ignore[attr-defined]
+        verify.VERIFICATION_REPORT_FILENAME = "verification_report.json"  # type: ignore[attr-defined]
+        enforce.apply_issue_association_result = MagicMock()  # type: ignore[attr-defined]
+        oz = _ensure_module("oz_workflows")
+        artifacts = _ensure_module("oz_workflows.artifacts")
+        helpers = _ensure_module("oz_workflows.helpers")
+        verification = _ensure_module("oz_workflows.verification")
+        oz.artifacts = artifacts  # type: ignore[attr-defined]
+        oz.helpers = helpers  # type: ignore[attr-defined]
+        oz.verification = verification  # type: ignore[attr-defined]
+        artifacts.load_review_artifact = MagicMock(return_value={"summary": "ok"})  # type: ignore[attr-defined]
+        artifacts.load_run_artifact = MagicMock(return_value={"overall_status": "passed"})  # type: ignore[attr-defined]
+        artifacts.poll_for_artifact = MagicMock(return_value={"matched": True, "issue_number": 1})  # type: ignore[attr-defined]
+        helpers.WorkflowProgressComment = MagicMock(  # type: ignore[attr-defined]
+            return_value=MagicMock(report_error=MagicMock())
+        )
+        verification.list_downloadable_verification_artifacts = MagicMock(  # type: ignore[attr-defined]
+            return_value=[]
+        )
+
+    def tearDown(self) -> None:
+        for key, value in self._original_modules.items():
+            if value is None:
+                sys.modules.pop(key, None)
+            else:
+                sys.modules[key] = value
+        super().tearDown()
+
+
+def _state(workflow: str, *, payload_subset: dict[str, Any] | None = None) -> RunState:
+    return RunState(
+        run_id="run-1",
+        workflow=workflow,
+        repo="acme/widgets",
+        installation_id=42,
+        payload_subset=dict(
+            payload_subset
+            or {
+                "owner": "acme",
+                "repo": "widgets",
+                "pr_number": 7,
+                "requester": "alice",
+            }
+        ),
+    )
+
+
+def _factory(github_client: Any) -> Any:
+    return lambda installation_id: github_client
+
+
+class ReviewHandlersTest(_HandlerTestBase):
+    def test_artifact_loader_calls_load_review_artifact(self) -> None:
+        from lib.handlers import build_review_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_review_handlers(_factory(github_client))
+        result = handlers.artifact_loader("run-1")
+        self.assertEqual(result, {"summary": "ok"})
+
+    def test_result_applier_invokes_apply_review_result(self) -> None:
+        from lib.handlers import build_review_handlers
+
+        github_client = MagicMock()
+        repo_handle = MagicMock(name="repo")
+        github_client.get_repo.return_value = repo_handle
+        handlers = build_review_handlers(_factory(github_client))
+
+        state = _state("review-pull-request")
+        handlers.result_applier(state=state, result={"summary": "looks good"})
+
+        from scripts.review_pr import apply_review_result  # type: ignore[import-not-found]
+
+        apply_review_result.assert_called_once()
+        kwargs = apply_review_result.call_args.kwargs
+        self.assertIs(kwargs["context"], state.payload_subset)
+        self.assertEqual(kwargs["result"], {"summary": "looks good"})
+
+    def test_failure_handler_posts_workflow_error(self) -> None:
+        from lib.handlers import build_review_handlers
+
+        github_client = MagicMock()
+        repo_handle = MagicMock(name="repo")
+        github_client.get_repo.return_value = repo_handle
+        handlers = build_review_handlers(_factory(github_client))
+
+        progress = MagicMock(name="progress")
+        sys.modules["oz_workflows.helpers"].WorkflowProgressComment.return_value = progress  # type: ignore[attr-defined]
+
+        state = _state("review-pull-request")
+        handlers.failure_handler(state=state, run=MagicMock(state="FAILED"))
+        progress.report_error.assert_called_once()
+
+
+class RespondHandlersTest(_HandlerTestBase):
+    def test_artifact_loader_returns_empty_dict(self) -> None:
+        from lib.handlers import build_respond_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_respond_handlers(_factory(github_client))
+
+        # The respond-to-pr-comment loader is intentionally a no-op
+        # because the apply step polls the optional artifacts itself.
+        self.assertEqual(handlers.artifact_loader("run-1"), {})
+
+    def test_result_applier_invokes_apply_pr_comment_result(self) -> None:
+        from lib.handlers import build_respond_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_respond_handlers(_factory(github_client))
+
+        state = _state(
+            "respond-to-pr-comment",
+            payload_subset={
+                "owner": "acme",
+                "repo": "widgets",
+                "pr_number": 7,
+                "head_branch": "feature",
+                "trigger_kind": "review",
+                "review_reply_target_id": 999,
+                "requester": "alice",
+            },
+        )
+        handlers.result_applier(state=state, result={})
+        from scripts.respond_to_pr_comment import (  # type: ignore[import-not-found]
+            apply_pr_comment_result,
+        )
+
+        apply_pr_comment_result.assert_called_once()
+        kwargs = apply_pr_comment_result.call_args.kwargs
+        self.assertIs(kwargs["context"], state.payload_subset)
+        self.assertIs(kwargs["client"], github_client)
+
+
+class VerifyHandlersTest(_HandlerTestBase):
+    def test_artifact_loader_calls_load_run_artifact_with_report_filename(self) -> None:
+        from lib.handlers import build_verify_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_verify_handlers(_factory(github_client))
+
+        handlers.artifact_loader("run-1")
+        from oz_workflows.artifacts import (  # type: ignore[import-not-found]
+            load_run_artifact,
+        )
+
+        load_run_artifact.assert_called_once_with(
+            "run-1", filename="verification_report.json"
+        )
+
+    def test_result_applier_invokes_apply_verification_result(self) -> None:
+        from lib.handlers import build_verify_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_verify_handlers(_factory(github_client))
+
+        state = _state("verify-pr-comment")
+        handlers.result_applier(state=state, result={"overall_status": "passed"})
+        from scripts.verify_pr_comment import (  # type: ignore[import-not-found]
+            apply_verification_result,
+        )
+
+        apply_verification_result.assert_called_once()
+        kwargs = apply_verification_result.call_args.kwargs
+        self.assertEqual(kwargs["result"], {"overall_status": "passed"})
+
+
+class EnforceHandlersTest(_HandlerTestBase):
+    def test_artifact_loader_polls_issue_association_filename(self) -> None:
+        from lib.handlers import build_enforce_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_enforce_handlers(_factory(github_client))
+        handlers.artifact_loader("run-1")
+        from oz_workflows.artifacts import (  # type: ignore[import-not-found]
+            poll_for_artifact,
+        )
+
+        poll_for_artifact.assert_called_once_with(
+            "run-1", filename="issue_association.json"
+        )
+
+    def test_result_applier_invokes_apply_issue_association_result(self) -> None:
+        from lib.handlers import build_enforce_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_enforce_handlers(_factory(github_client))
+        state = _state("enforce-pr-issue-state")
+        handlers.result_applier(state=state, result={"matched": True, "issue_number": 1})
+        from scripts.enforce_pr_issue_state import (  # type: ignore[import-not-found]
+            apply_issue_association_result,
+        )
+
+        apply_issue_association_result.assert_called_once()
+        kwargs = apply_issue_association_result.call_args.kwargs
+        self.assertEqual(kwargs["result"], {"matched": True, "issue_number": 1})
+
+
+class HandlerRegistryTest(_HandlerTestBase):
+    def test_registry_includes_all_pr_workflows(self) -> None:
+        from lib.handlers import build_handler_registry
+        from lib.routing import (
+            WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+            WORKFLOW_RESPOND_TO_PR_COMMENT,
+            WORKFLOW_REVIEW_PR,
+            WORKFLOW_VERIFY_PR_COMMENT,
+        )
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        registry = build_handler_registry(github_client_factory=_factory(github_client))
+        self.assertEqual(
+            set(registry.keys()),
+            {
+                WORKFLOW_REVIEW_PR,
+                WORKFLOW_RESPOND_TO_PR_COMMENT,
+                WORKFLOW_VERIFY_PR_COMMENT,
+                WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+            },
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
