@@ -229,6 +229,35 @@ def skill_spec(skill_name: str) -> str:
     return f"{resolved_repo_slug}:{skill_path}"
 
 
+def dispatch_run(
+    *,
+    prompt: str,
+    skill_name: str | None,
+    title: str,
+    config: AmbientAgentConfigParam,
+) -> Any:
+    """Dispatch an Oz agent run without waiting for it to finish.
+
+    Returns the raw response object from ``client.agent.run`` (which
+    carries at least a ``run_id`` attribute). Use this from contexts
+    that cannot afford to block on the run completing — most notably
+    the Vercel webhook handler, which must respond within GitHub's
+    ~10s delivery window. The cron poller resumes the work later by
+    calling ``client.agent.runs.retrieve(run_id)`` against the same
+    run id.
+    """
+    client = build_oz_client()
+    request: AgentRunParams = {
+        "prompt": prompt,
+        "title": title,
+        "config": config,
+        "team": True,
+    }
+    if skill_name:
+        request["skill"] = skill_spec(skill_name)
+    return client.agent.run(**request)
+
+
 def run_agent(
     *,
     prompt: str,
@@ -239,19 +268,21 @@ def run_agent(
     poll_interval_seconds: int = 30,
     timeout_seconds: int = 60 * 60,
 ) -> RunItem:
-    """Run an Oz agent and poll until it reaches a terminal state."""
-    client = build_oz_client()
-    request: AgentRunParams = {
-        "prompt": prompt,
-        "title": title,
-        "config": config,
-        "team": True,
-    }
-    if skill_name:
-        request["skill"] = skill_spec(skill_name)
+    """Run an Oz agent and poll until it reaches a terminal state.
 
-    response = client.agent.run(**request)
+    A blocking convenience wrapper around :func:`dispatch_run` plus a
+    polling loop. GitHub Actions entrypoints use this; the Vercel
+    control plane uses :func:`dispatch_run` directly and lets the cron
+    poller drain runs asynchronously.
+    """
+    response = dispatch_run(
+        prompt=prompt,
+        skill_name=skill_name,
+        title=title,
+        config=config,
+    )
     run_id = response.run_id
+    client = build_oz_client()
     deadline = time.monotonic() + timeout_seconds
     last_state = None
 
