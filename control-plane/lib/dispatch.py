@@ -16,6 +16,7 @@ control plane is the active webhook target.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Protocol
 
@@ -35,6 +36,54 @@ WORKFLOW_ROLES: Mapping[str, str] = {
     "respond-to-triaged-issue-comment": _REVIEW_TRIAGE_ROLE,
     "review-pull-request": _REVIEW_TRIAGE_ROLE,
 }
+
+# Default workflow-code repo for skill resolution. Each cloud agent run
+# tells the Oz API where to fetch its core skill from via a fully
+# qualified ``<owner>/<repo>:<path>`` spec. The control plane lives in
+# ``warpdotdev/oz-for-oss`` so its bundled skills (``review-pr``,
+# ``implement-issue``, ``verify-pr``, ``triage-issue``, etc.) are
+# resolvable against that repo by default. Forks can override the
+# default by setting ``WORKFLOW_CODE_REPOSITORY=owner/repo`` in the
+# Vercel environment so their fork's bundled skills are used instead.
+# Repo-local override skills (e.g. ``review-pr-local``) live in the
+# consuming repo and are referenced inside the prompt body, not via
+# this skill spec.
+_DEFAULT_WORKFLOW_CODE_REPOSITORY = "warpdotdev/oz-for-oss"
+
+
+def _resolve_workflow_code_repo() -> str:
+    """Return the configured workflow-code repo slug (defaults to oz-for-oss)."""
+    raw = os.environ.get("WORKFLOW_CODE_REPOSITORY", "").strip()
+    if raw and "/" in raw:
+        return raw
+    return _DEFAULT_WORKFLOW_CODE_REPOSITORY
+
+
+def cloud_skill_spec(skill_name: str, *, workflow_repo: str | None = None) -> str:
+    """Format *skill_name* into the ``<repo>:<path>`` spec the Oz API requires.
+
+    Pass-through when *skill_name* already contains a ``:`` separator.
+    Otherwise: normalize the bare name into
+    ``.agents/skills/<name>/SKILL.md`` and prepend the workflow-code
+    repo (``WORKFLOW_CODE_REPOSITORY`` env override or
+    ``warpdotdev/oz-for-oss`` by default).
+
+    The Oz API rejects bare skill names with
+    ``invalid skill_spec format: missing ':' separator``; this helper
+    exists so the dispatcher can produce valid specs from inside the
+    Vercel runtime, which has no filesystem access to the skill files
+    that the legacy ``oz_workflows.oz_client.skill_spec`` checks against.
+    """
+    if not skill_name:
+        return skill_name
+    if ":" in skill_name:
+        return skill_name
+    repo = workflow_repo or _resolve_workflow_code_repo()
+    if skill_name.endswith("SKILL.md"):
+        skill_path = skill_name
+    else:
+        skill_path = f".agents/skills/{skill_name}/SKILL.md"
+    return f"{repo}:{skill_path}"
 
 
 def role_for_workflow(workflow: str) -> str:
@@ -127,11 +176,16 @@ def dispatch_run(
         raise ValueError("DispatchRequest.repo must be a 'owner/name' slug")
     role = role_for_workflow(request.workflow)
     config = dict(config_factory(request.config_name, role))
+    skill = (
+        cloud_skill_spec(request.skill_name)
+        if request.skill_name
+        else None
+    )
     response = runner(
         prompt=request.prompt,
         title=request.title,
         config=config,
-        skill=request.skill_name,
+        skill=skill,
         team=True,
     )
     run_id = str(getattr(response, "run_id", "") or "")
@@ -180,6 +234,7 @@ __all__ = [
     "DispatchResult",
     "PromptBuilder",
     "WORKFLOW_ROLES",
+    "cloud_skill_spec",
     "dispatch_run",
     "evaluate_route",
     "role_for_workflow",
