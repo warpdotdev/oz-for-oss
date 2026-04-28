@@ -10,9 +10,10 @@ Vercel's Python runtime invokes ``handler`` for each request to
    ``X-GitHub-Event``.
 3. Asks :func:`control_plane.lib.routing.route_event` which workflow
    should handle it.
-4. Returns 202 immediately. The actual cloud agent dispatch and
-   GitHub state mutations happen in the cron poller so the webhook
-   handler stays well within Vercel's per-request budget.
+4. Dispatches the cloud agent run, persists the in-flight run state,
+   and returns 202 with the run identifier. GitHub state mutations are
+   applied later by the cron poller so the webhook handler stays well
+   within Vercel's per-request budget.
 
 The handler is a thin BaseHTTPRequestHandler subclass to match the
 shape Vercel's Python runtime expects. Unit tests exercise the routing
