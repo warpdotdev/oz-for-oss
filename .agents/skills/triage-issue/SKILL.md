@@ -84,20 +84,24 @@ If a companion file is not referenced in the prompt, rely on the core contract a
 - If the prompt asks for a comment-based triage summary, populate `issue_body` with the markdown that should be posted in the issue thread.
 - Do not create commits, branches, pull requests, or durable GitHub comments by default.
 
-## Docker workflow mode
+## Cloud workflow mode
 
-The triage workflows now run inside a Docker container that exposes a
-writable volume at `/mnt/output`. When the prompt says you are running
-in a cloud or Docker workflow:
+The triage workflows now run as Warp-hosted cloud agent runs that
+inherit the workflow's repository checkout as the working directory.
+When the prompt says you are running in a cloud workflow:
 
 - still perform the triage as above
 - do not apply labels or edit the issue directly yourself
-- after validating `triage_result.json` (or the equivalent result file
-  the prompt names, e.g. `issue_response.json`) with `jq`, write the
-  file to `/mnt/output/<filename>.json`. The host driver reads that
-  file once the container exits, so you do not need to call any
-  artifact upload CLI.
-- do not run `oz artifact upload` or `oz-preview artifact upload`. The
-  stable `oz` CLI in this container does not expose an `artifact
-  upload` subcommand, and the host-side workflow reads the output
-  directly from the mounted volume instead.
+- after validating the result file the prompt names (for example
+  `triage_result.json` for triage runs or `issue_response.json` for
+  respond-to-triaged-issue-comment runs) with `jq`, upload it as an
+  artifact via `oz artifact upload <filename>.json` (or
+  `oz-preview artifact upload <filename>.json` if the `oz` CLI is not
+  available). The host workflow downloads the artifact after the run
+  reaches a terminal state and applies the result back to GitHub.
+- IMPORTANT: the upload subcommand is `artifact` (singular) on both
+  `oz` and `oz-preview`. Do not use `artifacts` (plural) — that is not
+  a valid subcommand and will fail.
+- do not write the result file to a `/mnt/...` mount path. The cloud
+  agent does not have any pre-defined mount; the workflow only reads
+  what you upload via the artifact CLI.

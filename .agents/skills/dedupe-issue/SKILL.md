@@ -53,3 +53,16 @@ Overridable categories:
 - repo-specific title and description normalizations (prefixes to strip, templates to ignore)
 
 If a companion file is not referenced in the prompt, rely on the core contract alone.
+
+## Cloud workflow mode
+
+Duplicate detection is invoked from the cloud-mode triage workflow,
+so the same artifact-upload contract applies whenever the prompt
+delegates here. When you populate the `duplicate_of` field in the
+triage result, do so within the same JSON document the triage
+workflow's prompt asks you to upload via `oz artifact upload
+triage_result.json` (or `oz-preview artifact upload
+triage_result.json` when the `oz` CLI is not available). Do not write
+the result to a `/mnt/...` mount path; the cloud agent has no such
+mount, and the host workflow only reads what you upload through the
+artifact CLI.
