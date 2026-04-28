@@ -1,18 +1,13 @@
 from __future__ import annotations
 from contextlib import closing
-from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
 from github import Auth, Github
 
 from oz_workflows.actions import notice
-from oz_workflows.docker_agent import (
-    REPO_MOUNT,
-    resolve_triage_image,
-    run_agent_in_docker,
-)
-from oz_workflows.env import load_event, optional_env, repo_parts, repo_slug, require_env, workspace
+from oz_workflows.artifacts import load_issue_response_artifact
+from oz_workflows.env import load_event, repo_parts, repo_slug, require_env, workspace
 from oz_workflows.helpers import (
     WorkflowProgressComment,
     format_issue_comments_for_prompt,
@@ -21,6 +16,11 @@ from oz_workflows.helpers import (
     is_trusted_commenter,
     record_run_session_link,
     triggering_comment_prompt_text,
+)
+from oz_workflows.oz_client import (
+    ROLE_REVIEW_TRIAGE,
+    build_agent_config,
+    run_agent,
 )
 from oz_workflows.triage import extract_original_issue_report
 
@@ -59,21 +59,14 @@ def build_respond_prompt(
     original_report: str,
     comments_text: str,
     triggering_comment_text: str,
-    host_workspace: Path,
-    container_workspace: str = REPO_MOUNT,
 ) -> str:
     """Return the inline-response prompt string for *issue_number*.
 
-    Pure function so the GitHub Actions entrypoint and the local testing
-    script in ``scripts/local_triage.py`` can build identical prompts.
-
-    ``host_workspace`` / ``container_workspace`` are accepted for parity
-    with :func:`triage_new_issues.build_triage_prompt`. The respond-to-
-    triaged prompt does not currently reference repo-local companion
-    skills by path, but both parameters are kept so callers can pass the
-    same arguments to both builders without special-casing.
+    Pure function so the GitHub Actions entrypoint can be tested in
+    isolation. The respond-to-triaged prompt does not currently
+    reference repo-local companion skills by path, but new arguments
+    can be added here when that changes.
     """
-    del host_workspace, container_workspace  # reserved for future companion-skill references
     labels_line = ", ".join(issue_labels) or "None"
     assignees_line = ", ".join(issue_assignees) or "None"
     return dedent(
@@ -125,7 +118,7 @@ def build_respond_prompt(
         - Do not include HTML metadata inside `analysis_comment`.
         - Validate `issue_response.json` with `jq`.
         - Do not create issue comments or make other GitHub changes.
-        - After validating the JSON, write the file to `/mnt/output/issue_response.json`. The host reads the file from that path once the container exits, so the agent does not need to call any artifact upload CLI.
+        - After validating the JSON, upload it as an artifact via `oz artifact upload issue_response.json` (or `oz-preview artifact upload issue_response.json` if the `oz` CLI is not available). Either CLI is acceptable — use whichever one is installed in the environment. The subcommand is `artifact` (singular) on both CLIs; do not use `artifacts`.
         """
     ).strip()
 
@@ -188,24 +181,23 @@ def main() -> None:
             original_report=original_report,
             comments_text=comments_text,
             triggering_comment_text=triggering_comment_text,
-            host_workspace=workspace(),
         )
 
-        triage_image = resolve_triage_image()
-        model = optional_env("WARP_AGENT_MODEL") or None
+        config = build_agent_config(
+            config_name="respond-to-triaged-issue-comment",
+            workspace=workspace(),
+            role=ROLE_REVIEW_TRIAGE,
+        )
         try:
-            run = run_agent_in_docker(
+            run = run_agent(
                 prompt=prompt,
                 skill_name="triage-issue",
                 title=f"Respond to triaged issue comment #{issue_number}",
-                image=triage_image,
-                repo_dir=workspace(),
-                output_filename="issue_response.json",
-                on_event=lambda current_run: record_run_session_link(progress, current_run),
-                model=model,
+                config=config,
+                on_poll=lambda current_run: record_run_session_link(progress, current_run),
             )
             record_run_session_link(progress, run)
-            result = run.output
+            result = load_issue_response_artifact(run.run_id)
             analysis_comment = extract_analysis_comment(result)
             if not analysis_comment:
                 analysis_comment = (

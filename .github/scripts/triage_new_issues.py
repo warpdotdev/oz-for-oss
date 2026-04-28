@@ -11,11 +11,7 @@ from github import Auth, Github
 from github.Repository import Repository
 
 from oz_workflows.actions import append_summary, warning
-from oz_workflows.docker_agent import (
-    REPO_MOUNT,
-    resolve_triage_image,
-    run_agent_in_docker,
-)
+from oz_workflows.artifacts import load_triage_artifact
 from oz_workflows.env import load_event, optional_env, repo_parts, repo_slug, require_env, workspace
 from oz_workflows.helpers import (
     get_field,
@@ -28,6 +24,11 @@ from oz_workflows.helpers import (
     issue_has_prior_triage,
     triggering_comment_prompt_text,
     WorkflowProgressComment,
+)
+from oz_workflows.oz_client import (
+    ROLE_REVIEW_TRIAGE,
+    build_agent_config,
+    run_agent,
 )
 from oz_workflows.repo_local import (
     format_repo_local_prompt_section,
@@ -122,9 +123,6 @@ def main() -> None:
         template_context = discover_issue_templates(workspace())
         recent_open_issues = load_recent_issues_for_dedupe(github)
 
-        triage_image = resolve_triage_image()
-        model = optional_env("WARP_AGENT_MODEL") or None
-
         for issue in issues:
             issue_number = int(get_field(issue, "number"))
             try:
@@ -137,8 +135,6 @@ def main() -> None:
                     triage_config=triage_config,
                     configured_labels=configured_labels,
                     repo_labels=repo_labels,
-                    triage_image=triage_image,
-                    model=model,
                     triggering_comment_id=triggering_comment_id,
                     triggering_comment_text=triggering_comment_text,
                     stakeholders_text=stakeholders_text,
@@ -187,8 +183,6 @@ def process_issue(
     triage_config: dict[str, Any],
     configured_labels: dict[str, Any],
     repo_labels: dict[str, Any],
-    triage_image: str,
-    model: str | None,
     triggering_comment_id: int | None,
     triggering_comment_text: str,
     stakeholders_text: str,
@@ -237,21 +231,23 @@ def process_issue(
         host_workspace=workspace(),
     )
 
+    config = build_agent_config(
+        config_name="triage-new-issues",
+        workspace=workspace(),
+        role=ROLE_REVIEW_TRIAGE,
+    )
     try:
-        run = run_agent_in_docker(
+        run = run_agent(
             prompt=prompt,
             skill_name="triage-issue",
             title=f"Triage issue #{issue_number}",
-            image=triage_image,
-            repo_dir=workspace(),
-            output_filename="triage_result.json",
-            on_event=lambda current_run: _record_triage_session_link(
+            config=config,
+            on_poll=lambda current_run: _record_triage_session_link(
                 progress, current_run, is_retriage=is_retriage
             ),
-            model=model,
         )
         _record_triage_session_link(progress, run, is_retriage=is_retriage)
-        result = run.output
+        result = load_triage_artifact(run.run_id)
         apply_triage_result(
             github,
             owner,
@@ -341,24 +337,6 @@ def process_issue(
         raise
 
 
-def _container_companion_path(
-    host_path: Path, *, host_workspace: Path, container_workspace: str = REPO_MOUNT
-) -> Path:
-    """Rewrite a host companion-skill path to its path inside the container.
-
-    The companion skill files live in the consuming repo's checkout, which
-    is mounted into the triage container at ``/mnt/repo`` (``REPO_MOUNT``).
-    The workflow prompts embed an absolute path reference so the agent
-    knows where to find the companion - that path must resolve inside the
-    container.
-    """
-    try:
-        rel = host_path.resolve().relative_to(host_workspace.resolve())
-    except ValueError:
-        return host_path
-    return Path(container_workspace) / rel
-
-
 def build_triage_prompt(
     *,
     owner: str,
@@ -377,15 +355,13 @@ def build_triage_prompt(
     template_context: dict[str, Any],
     recent_issues_text: str,
     host_workspace: Path,
-    container_workspace: str = REPO_MOUNT,
 ) -> str:
     """Return the triage prompt string for *issue_number*.
 
-    Pure function so the GitHub Actions entrypoint and the local testing
-    script in ``scripts/local_triage.py`` can build identical prompts.
-    The companion-skill paths referenced in the prompt are rewritten to
-    point inside the container, since the agent reads them from
-    ``{container_workspace}/.agents/skills/...``.
+    Pure function so the GitHub Actions entrypoint can be tested in
+    isolation. The companion-skill paths referenced in the prompt point
+    at the workspace checkout that the cloud agent inherits from the
+    workflow runner.
     """
     triage_companion_path = resolve_repo_local_skill_path(host_workspace, "triage-issue")
     dedupe_companion_path = resolve_repo_local_skill_path(host_workspace, "dedupe-issue")
@@ -471,35 +447,25 @@ def build_triage_prompt(
         - Populate `issue_body` with the markdown triage summary that should be posted as a separate issue comment. Do not rewrite the original issue description, and do not include HTML metadata in `issue_body`.
         - Validate `triage_result.json` with `jq`.
         - Do not create issue comments or make other GitHub changes.
-        - After validating the JSON, write the file to `/mnt/output/triage_result.json`. The host reads the file from that path once the container exits, so the agent does not need to call any artifact upload CLI.
+        - After validating the JSON, upload it as an artifact via `oz artifact upload triage_result.json` (or `oz-preview artifact upload triage_result.json` if the `oz` CLI is not available). Either CLI is acceptable — use whichever one is installed in the environment. The subcommand is `artifact` (singular) on both CLIs; do not use `artifacts`.
         """
     ).strip()
     # Append the fenced repo-local references after the base prompt so a
     # repository with no companion files yields the same prompt shape as
-    # before the core/local split. Rewrite the absolute companion paths to
-    # their locations inside the container so the agent can read them from
-    # the mounted repo.
+    # before the core/local split. The cloud agent inherits the workflow
+    # checkout's working directory, so the companion-skill paths can be
+    # passed through unchanged.
     companion_sections: list[str] = []
     if triage_companion_path is not None:
         companion_sections.append(
             format_repo_local_prompt_section(
-                "triage-issue",
-                _container_companion_path(
-                    triage_companion_path,
-                    host_workspace=host_workspace,
-                    container_workspace=container_workspace,
-                ),
+                "triage-issue", triage_companion_path
             ).rstrip()
         )
     if dedupe_companion_path is not None:
         companion_sections.append(
             format_repo_local_prompt_section(
-                "dedupe-issue",
-                _container_companion_path(
-                    dedupe_companion_path,
-                    host_workspace=host_workspace,
-                    container_workspace=container_workspace,
-                ),
+                "dedupe-issue", dedupe_companion_path
             ).rstrip()
         )
     if companion_sections:
