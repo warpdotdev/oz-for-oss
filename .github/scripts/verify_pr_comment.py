@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from contextlib import closing
+from pathlib import Path
 from textwrap import dedent
+from typing import Any, Mapping, TypedDict
 
 from github import Auth, Github
+from github.Repository import Repository
 
 from oz_workflows.actions import notice
-from oz_workflows.artifacts import poll_for_artifact
+from oz_workflows.artifacts import load_run_artifact, poll_for_artifact
 from oz_workflows.env import load_event, repo_parts, repo_slug, require_env, workspace
 from oz_workflows.helpers import (
     WorkflowProgressComment,
@@ -26,6 +29,92 @@ WORKFLOW_NAME = "verify-pr-comment"
 FETCH_CONTEXT_SCRIPT = ".agents/skills/implement-specs/scripts/fetch_github_context.py"
 VERIFY_PR_SKILL = "verify-pr"
 VERIFICATION_REPORT_FILENAME = "verification_report.json"
+
+
+class VerifyContext(TypedDict):
+    """Serializable context for a verify-pr-comment dispatch.
+
+    The control plane stores this dict verbatim in ``RunState.payload_subset``
+    so the cron poller can apply the result without re-fetching anything
+    from GitHub.
+    """
+
+    owner: str
+    repo: str
+    pr_number: int
+    base_branch: str
+    head_branch: str
+    trigger_comment_id: int
+    requester: str
+    verification_skills_text: str
+
+
+def gather_verify_context(
+    github: Repository,
+    *,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    trigger_comment_id: int,
+    requester: str,
+    workspace_path: Path,
+) -> VerifyContext:
+    """Gather the GitHub-side context needed to dispatch a verify run.
+
+    Returns a serializable :class:`VerifyContext`. The webhook handler
+    saves the dict on ``RunState.payload_subset`` and the cron poller
+    applies the result without re-fetching from GitHub.
+    """
+    pr = github.get_pull(pr_number)
+    verification_skills = discover_verification_skills(workspace_path)
+    verification_skills_text = format_verification_skills_for_prompt(
+        verification_skills,
+        workspace_root=workspace_path,
+    )
+    return VerifyContext(
+        owner=owner,
+        repo=repo,
+        pr_number=int(pr_number),
+        base_branch=str(pr.base.ref),
+        head_branch=str(pr.head.ref),
+        trigger_comment_id=int(trigger_comment_id),
+        requester=str(requester or ""),
+        verification_skills_text=verification_skills_text,
+    )
+
+
+def apply_verification_result(
+    github: Repository,
+    *,
+    context: Mapping[str, Any],
+    run: Any,
+    result: Mapping[str, Any],
+    artifacts: list[Mapping[str, Any]] | None = None,
+) -> None:
+    """Apply a completed verification report back to GitHub.
+
+    Mirrors the cleanup branch in :func:`main`: replaces the progress
+    comment body with the rendered report and (when present) any
+    downloadable verification artifacts the agent uploaded. The cron
+    poller passes through the same ``WorkflowProgressComment`` shape
+    that ``main`` constructs so the rendered comment metadata is
+    identical between the GitHub Actions and Vercel paths.
+    """
+    progress = WorkflowProgressComment(
+        github,
+        str(context["owner"]),
+        str(context["repo"]),
+        int(context["pr_number"]),
+        workflow=WORKFLOW_NAME,
+        requester_login=str(context.get("requester") or ""),
+    )
+    progress.replace_body(
+        render_verification_comment(
+            result,
+            session_link=str(getattr(run, "session_link", "") or ""),
+            artifacts=list(artifacts or []),
+        )
+    )
 
 
 def build_verification_prompt(
@@ -114,7 +203,8 @@ def main() -> None:
         pr = github.get_pull(pr_number)
         pr.get_issue_comment(trigger_comment_id).create_reaction("eyes")
 
-        verification_skills = discover_verification_skills(workspace())
+        workspace_path = workspace()
+        verification_skills = discover_verification_skills(workspace_path)
         progress = WorkflowProgressComment(
             github,
             owner,
@@ -134,18 +224,24 @@ def main() -> None:
             )
             return
 
-        prompt = build_verification_prompt(
+        context = gather_verify_context(
+            github,
             owner=owner,
             repo=repo,
             pr_number=pr_number,
-            base_branch=str(pr.base.ref),
-            head_branch=str(pr.head.ref),
             trigger_comment_id=trigger_comment_id,
             requester=requester,
-            verification_skills_text=format_verification_skills_for_prompt(
-                verification_skills,
-                workspace_root=workspace(),
-            ),
+            workspace_path=workspace_path,
+        )
+        prompt = build_verification_prompt(
+            owner=context["owner"],
+            repo=context["repo"],
+            pr_number=context["pr_number"],
+            base_branch=context["base_branch"],
+            head_branch=context["head_branch"],
+            trigger_comment_id=context["trigger_comment_id"],
+            requester=context["requester"],
+            verification_skills_text=context["verification_skills_text"],
         )
 
         config = build_agent_config(
@@ -165,12 +261,12 @@ def main() -> None:
                 run,
                 exclude_filenames={VERIFICATION_REPORT_FILENAME},
             )
-            progress.replace_body(
-                render_verification_comment(
-                    report,
-                    session_link=str(getattr(run, "session_link", "") or ""),
-                    artifacts=artifacts,
-                )
+            apply_verification_result(
+                github,
+                context=context,
+                run=run,
+                result=report,
+                artifacts=artifacts,
             )
         except Exception:
             progress.report_error()
