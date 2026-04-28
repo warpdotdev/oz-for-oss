@@ -76,19 +76,68 @@ def _resolve_session_sharing_public_access() -> str | None:
     return normalized
 
 
+# Roles understood by ``build_agent_config``. The role decides which
+# environment-id env var is consulted first when picking a cloud
+# environment for the run. ``"review-triage"`` covers the workflows that
+# share the dedicated review/triage environment (PR review, issue
+# triage, respond-to-triaged-issue-comment); every other workflow keeps
+# using ``WARP_ENVIRONMENT_ID`` directly.
+ROLE_REVIEW_TRIAGE = "review-triage"
+ROLE_DEFAULT = "default"
+_KNOWN_ROLES = {ROLE_DEFAULT, ROLE_REVIEW_TRIAGE}
+
+
+def _resolve_environment_id(role: str) -> str:
+    """Pick the Oz cloud environment id for *role*.
+
+    For ``review-triage`` callers the operator may set
+    ``WARP_REVIEW_TRIAGE_ENVIRONMENT_ID`` to point those workflows at a
+    dedicated environment (typically tighter resource limits); when that
+    variable is empty we fall back to ``WARP_ENVIRONMENT_ID`` so the
+    deployment behaves the same as the legacy single-environment setup.
+    Every other role reads ``WARP_ENVIRONMENT_ID`` directly.
+    """
+    if role == ROLE_REVIEW_TRIAGE:
+        review_triage_env = optional_env("WARP_REVIEW_TRIAGE_ENVIRONMENT_ID")
+        if review_triage_env:
+            return review_triage_env
+    return optional_env("WARP_ENVIRONMENT_ID")
+
+
 def build_agent_config(
     *,
     config_name: str,
     workspace: Path,
+    role: str = ROLE_DEFAULT,
 ) -> AmbientAgentConfigParam:
-    """Build the agent configuration payload sent to the Oz API."""
-    environment_id = optional_env("WARP_ENVIRONMENT_ID")
+    """Build the agent configuration payload sent to the Oz API.
+
+    *role* selects which environment-id env var is consulted. Pass
+    ``ROLE_REVIEW_TRIAGE`` for the review/triage agents so the operator
+    can route them onto ``WARP_REVIEW_TRIAGE_ENVIRONMENT_ID`` when
+    configured. Unknown role values fall back to the default lookup
+    rather than raising so future workflow additions don't have to
+    coordinate a corresponding update here before they ship.
+    """
+    environment_id = _resolve_environment_id(role)
     if not environment_id:
+        if role == ROLE_REVIEW_TRIAGE:
+            raise RuntimeError(
+                "Missing required Oz environment configuration. Set "
+                "WARP_REVIEW_TRIAGE_ENVIRONMENT_ID (preferred) or "
+                "WARP_ENVIRONMENT_ID to your Oz cloud environment UID "
+                "(find it with `oz environment list` or in the Oz web app)."
+            )
         raise RuntimeError(
             "Missing required Oz environment configuration. Set "
             "WARP_ENVIRONMENT_ID to your Oz cloud environment UID "
             "(find it with `oz environment list` or in the Oz web app)."
         )
+    if role not in _KNOWN_ROLES:
+        # Don't fail closed on an unrecognized role — log a warning so
+        # operators can spot a typo, and proceed with the default
+        # lookup that already produced ``environment_id``.
+        warning(f"Unknown build_agent_config role {role!r}; falling back to {ROLE_DEFAULT!r}.")
 
     config: AmbientAgentConfigParam = {
         "environment_id": environment_id,

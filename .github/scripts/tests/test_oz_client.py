@@ -9,6 +9,9 @@ from pathlib import Path
 
 from oz_workflows import oz_client
 from oz_workflows.oz_client import (
+    ROLE_DEFAULT,
+    ROLE_REVIEW_TRIAGE,
+    _resolve_environment_id,
     _workflow_code_root,
     build_agent_config,
     build_oz_client,
@@ -275,6 +278,148 @@ class BuildAgentConfigTest(unittest.TestCase):
             workspace=Path("/tmp"),
         )
         self.assertNotIn("session_sharing", dict(config))
+
+
+class BuildAgentConfigRoleTest(unittest.TestCase):
+    """Coverage for the ``role`` parameter on ``build_agent_config``.
+
+    The review/triage agents (PR review, issue triage,
+    ``respond-to-triaged-issue-comment``) optionally route onto a
+    dedicated cloud environment via ``WARP_REVIEW_TRIAGE_ENVIRONMENT_ID``
+    so an operator can give those workloads tighter resource limits than
+    the default environment used by spec/implementation runs. When the
+    review-triage variable is empty the resolver falls back to
+    ``WARP_ENVIRONMENT_ID`` so deployments without the override behave
+    identically to the legacy single-environment setup.
+    """
+
+    @patch.dict(
+        os.environ,
+        {
+            "WARP_ENVIRONMENT_ID": "default-env",
+            "WARP_REVIEW_TRIAGE_ENVIRONMENT_ID": "review-env",
+        },
+        clear=True,
+    )
+    def test_review_triage_role_prefers_review_triage_env(self) -> None:
+        config = build_agent_config(
+            config_name="review-pull-request",
+            workspace=Path("/tmp"),
+            role=ROLE_REVIEW_TRIAGE,
+        )
+        self.assertEqual(config["environment_id"], "review-env")
+
+    @patch.dict(
+        os.environ,
+        {"WARP_ENVIRONMENT_ID": "default-env"},
+        clear=True,
+    )
+    def test_review_triage_role_falls_back_to_default_env(self) -> None:
+        config = build_agent_config(
+            config_name="review-pull-request",
+            workspace=Path("/tmp"),
+            role=ROLE_REVIEW_TRIAGE,
+        )
+        self.assertEqual(config["environment_id"], "default-env")
+
+    @patch.dict(
+        os.environ,
+        {
+            "WARP_ENVIRONMENT_ID": "default-env",
+            "WARP_REVIEW_TRIAGE_ENVIRONMENT_ID": "   ",
+        },
+        clear=True,
+    )
+    def test_blank_review_triage_env_falls_back_to_default(self) -> None:
+        # ``optional_env`` already trims whitespace, so a value that's
+        # only whitespace must behave the same as an unset variable.
+        config = build_agent_config(
+            config_name="review-pull-request",
+            workspace=Path("/tmp"),
+            role=ROLE_REVIEW_TRIAGE,
+        )
+        self.assertEqual(config["environment_id"], "default-env")
+
+    @patch.dict(
+        os.environ,
+        {
+            "WARP_ENVIRONMENT_ID": "default-env",
+            "WARP_REVIEW_TRIAGE_ENVIRONMENT_ID": "review-env",
+        },
+        clear=True,
+    )
+    def test_default_role_ignores_review_triage_env(self) -> None:
+        config = build_agent_config(
+            config_name="create-spec-from-issue",
+            workspace=Path("/tmp"),
+            role=ROLE_DEFAULT,
+        )
+        self.assertEqual(config["environment_id"], "default-env")
+
+    @patch.dict(
+        os.environ,
+        {"WARP_REVIEW_TRIAGE_ENVIRONMENT_ID": "review-env"},
+        clear=True,
+    )
+    def test_review_triage_role_works_without_default_env(self) -> None:
+        # When only the review-triage variable is set, callers running
+        # in that role must succeed without ``WARP_ENVIRONMENT_ID``.
+        config = build_agent_config(
+            config_name="review-pull-request",
+            workspace=Path("/tmp"),
+            role=ROLE_REVIEW_TRIAGE,
+        )
+        self.assertEqual(config["environment_id"], "review-env")
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_review_triage_role_error_mentions_both_env_vars(self) -> None:
+        with self.assertRaises(RuntimeError) as ctx:
+            build_agent_config(
+                config_name="review-pull-request",
+                workspace=Path("/tmp"),
+                role=ROLE_REVIEW_TRIAGE,
+            )
+        message = str(ctx.exception)
+        self.assertIn("WARP_REVIEW_TRIAGE_ENVIRONMENT_ID", message)
+        self.assertIn("WARP_ENVIRONMENT_ID", message)
+
+    @patch.dict(
+        os.environ,
+        {"WARP_ENVIRONMENT_ID": "default-env"},
+        clear=True,
+    )
+    def test_unknown_role_uses_default_env_with_warning(self) -> None:
+        # An unrecognized role does not raise: the resolver falls
+        # through to ``WARP_ENVIRONMENT_ID`` and ``build_agent_config``
+        # emits a `::warning::` annotation so an operator can spot the
+        # typo without failing the workflow.
+        with patch("oz_workflows.oz_client.warning") as warn_mock:
+            config = build_agent_config(
+                config_name="review-pull-request",
+                workspace=Path("/tmp"),
+                role="unknown-role",
+            )
+        self.assertEqual(config["environment_id"], "default-env")
+        warn_mock.assert_called_once()
+        warn_message = warn_mock.call_args.args[0]
+        self.assertIn("unknown-role", warn_message)
+        self.assertIn(ROLE_DEFAULT, warn_message)
+
+    @patch.dict(
+        os.environ,
+        {
+            "WARP_ENVIRONMENT_ID": "default-env",
+            "WARP_REVIEW_TRIAGE_ENVIRONMENT_ID": "review-env",
+        },
+        clear=True,
+    )
+    def test_resolve_environment_id_dispatches_on_role(self) -> None:
+        self.assertEqual(_resolve_environment_id(ROLE_REVIEW_TRIAGE), "review-env")
+        self.assertEqual(_resolve_environment_id(ROLE_DEFAULT), "default-env")
+        # Unknown roles use the default lookup so they still resolve to
+        # ``WARP_ENVIRONMENT_ID`` rather than triggering an exception
+        # inside the resolver.
+        self.assertEqual(_resolve_environment_id("unknown"), "default-env")
 
 
 if __name__ == "__main__":
