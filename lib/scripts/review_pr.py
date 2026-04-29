@@ -223,11 +223,56 @@ def _normalize_reviewer_logins(
     return chooser.sample(eligible, k=sample_size)
 
 
+def _fallback_reviewer_pool(
+    allowed_logins: set[str],
+    *,
+    pr_author_login: str,
+    sample_size: int = _REVIEWER_SAMPLE_SIZE,
+    rng: random.Random | None = None,
+) -> list[str]:
+    """Random sample from the full STAKEHOLDERS roster.
+
+    Hardening for the APPROVE flow: every ``verdict == "APPROVE"`` run
+    must result in at least one human being requested for review on
+    the PR so the bot's downgraded-to-COMMENT review never lands
+    silently. When the agent's ``recommended_reviewers`` list comes
+    back empty (no stakeholder matched the changed file paths, the
+    agent omitted the field, or every match was filtered out as the
+    PR author / non-stakeholder login), this helper samples uniformly
+    from the full ``.github/STAKEHOLDERS`` roster so the workflow
+    still pings someone.
+
+    Returns an empty list only when the roster itself is empty after
+    excluding the PR author. At that point there is no human we can
+    request — the caller must fall back to a plain COMMENT review
+    without a reviewer request and surface the situation in logs.
+    """
+    if sample_size <= 0:
+        return []
+    pr_login = (pr_author_login or "").strip().lower()
+    pool = sorted(
+        login
+        for login in allowed_logins
+        if isinstance(login, str)
+        and login.strip()
+        and login.strip().lower() != pr_login
+    )
+    if not pool:
+        return []
+    chooser = rng if rng is not None else random
+    if len(pool) <= sample_size:
+        shuffled = list(pool)
+        chooser.shuffle(shuffled)
+        return shuffled
+    return chooser.sample(pool, k=sample_size)
+
+
 def _resolve_non_member_review_action(
     review: dict[str, Any],
     *,
     pr_author_login: str,
     allowed_logins: set[str] | None = None,
+    rng: random.Random | None = None,
 ) -> tuple[str, list[str]]:
     """Extract and validate the verdict + reviewer list for a non-member PR.
 
@@ -248,26 +293,70 @@ def _resolve_non_member_review_action(
       ``recommended_reviewers`` pool. The bot's own review on this PR
       stays a comment; the requested human is the one who approves.
 
+    Hardening for the APPROVE flow: when the agent's
+    ``recommended_reviewers`` list normalizes to an empty pool (no
+    matches, the agent omitted the field, or every match was filtered
+    out as the PR author / non-stakeholder login) AND a non-empty
+    ``allowed_logins`` set is provided, this helper falls back to a
+    uniform random pick from the full ``.github/STAKEHOLDERS`` roster
+    so the APPROVE flow always pings at least one human. Only when
+    that fallback also yields nothing (an empty roster, or a roster
+    that contains only the PR author) does the helper return an
+    empty reviewer list — at that point the caller posts the
+    ``COMMENT`` review without a reviewer request and surfaces the
+    situation in logs.
+
     Raises ``ValueError`` when the agent returned an unsupported
     ``verdict``. When ``allowed_logins`` is provided, any recommended
     reviewer whose login is not listed in ``.github/STAKEHOLDERS`` is
     dropped before the review request is issued so the agent cannot
     pull in reviewers outside of the repository's stakeholder roster.
+
+    *rng* is an optional :class:`random.Random` instance the helpers
+    use for sampling. Tests pass a deterministic instance so the
+    chosen reviewer is predictable; production runs leave it ``None``
+    and use :mod:`random`'s module-level state.
     """
     verdict_raw = str(review.get("verdict") or "").strip().upper()
     if verdict_raw not in _ALLOWED_NON_MEMBER_VERDICTS:
         raise ValueError(
             f"Review payload `verdict` must be one of {sorted(_ALLOWED_NON_MEMBER_VERDICTS)} for a non-member PR; got {verdict_raw!r}."
         )
-    reviewers = (
-        _normalize_reviewer_logins(
+    if verdict_raw == "APPROVE":
+        reviewers = _normalize_reviewer_logins(
             review.get("recommended_reviewers"),
             pr_author_login=pr_author_login,
             allowed_logins=allowed_logins,
+            rng=rng,
         )
-        if verdict_raw == "APPROVE"
-        else []
-    )
+        if not reviewers and allowed_logins:
+            # Hardening: APPROVE must always result in at least one
+            # human reviewer being requested. When the agent's curated
+            # list normalizes to an empty pool, fall back to a random
+            # pick from the full stakeholder roster so the workflow
+            # never silently lands an APPROVE-flavored review without
+            # any human ping.
+            fallback = _fallback_reviewer_pool(
+                allowed_logins,
+                pr_author_login=pr_author_login,
+                rng=rng,
+            )
+            if fallback:
+                logger.info(
+                    "review-pr: APPROVE flow falling back to stakeholder-roster pick %s "
+                    "because recommended_reviewers was empty after normalization",
+                    fallback,
+                )
+                reviewers = fallback
+            else:
+                logger.warning(
+                    "review-pr: APPROVE flow produced no recommended_reviewers and the "
+                    "stakeholder roster has no eligible logins (PR author %r excluded); "
+                    "posting COMMENT review without a reviewer request.",
+                    pr_author_login,
+                )
+    else:
+        reviewers = []
     # The bot only ever takes a ``REQUEST_CHANGES`` action against a
     # PR. Positive verdicts are downgraded to ``COMMENT`` so a human
     # has to be the one who actually approves; the reviewer request
@@ -1132,6 +1221,13 @@ def gather_review_context(
             - Only populate ``recommended_reviewers`` when the verdict
               is ``APPROVE``. Set it to an empty list on
               ``REQUEST_CHANGES``.
+            - If you genuinely cannot identify a matching stakeholder
+              for an ``APPROVE`` verdict (e.g. the changed files match
+              no rule), still emit ``recommended_reviewers: []``. The
+              workflow falls back to a uniformly random pick from the
+              full STAKEHOLDERS roster (excluding the PR author) so a
+              human is always pinged on APPROVE — do not invent or
+              copy logins to satisfy the field.
             - Extend the ``review.json`` shape with these two fields
               alongside ``summary``/``comments``:
               {{"verdict": "APPROVE" | "REQUEST_CHANGES", "recommended_reviewers": [string, ...]}}
@@ -1510,6 +1606,13 @@ def main() -> None:
                 - Only populate ``recommended_reviewers`` when the verdict
                   is ``APPROVE``. Set it to an empty list on
                   ``REQUEST_CHANGES``.
+                - If you genuinely cannot identify a matching stakeholder
+                  for an ``APPROVE`` verdict (e.g. the changed files match
+                  no rule), still emit ``recommended_reviewers: []``. The
+                  workflow falls back to a uniformly random pick from the
+                  full STAKEHOLDERS roster (excluding the PR author) so a
+                  human is always pinged on APPROVE — do not invent or
+                  copy logins to satisfy the field.
                 - Extend the ``review.json`` shape with these two fields
                   alongside ``summary``/``comments``:
                   {{"verdict": "APPROVE" | "REQUEST_CHANGES", "recommended_reviewers": [string, ...]}}

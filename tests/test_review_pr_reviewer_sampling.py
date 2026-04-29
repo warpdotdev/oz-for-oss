@@ -18,6 +18,7 @@ from . import conftest  # noqa: F401
 
 from scripts.review_pr import (  # type: ignore[import-not-found]
     _REVIEWER_SAMPLE_SIZE,
+    _fallback_reviewer_pool,
     _format_review_completion_message,
     _normalize_reviewer_logins,
     _resolve_non_member_review_action,
@@ -163,6 +164,39 @@ class NormalizeReviewerLoginsTest(unittest.TestCase):
         self.assertTrue(set(result).issubset({"alice", "bob", "carol", "dave"}))
 
 
+class FallbackReviewerPoolTest(unittest.TestCase):
+    def test_fallback_excludes_pr_author_and_samples_from_stakeholders(self) -> None:
+        rng = random.Random(0)
+        result = _fallback_reviewer_pool(
+            {"alice", "bob", "carol"},
+            pr_author_login="alice",
+            rng=rng,
+        )
+        self.assertEqual(len(result), 1)
+        self.assertIn(result[0], {"bob", "carol"})
+        self.assertNotIn("alice", result)
+
+    def test_fallback_excludes_pr_author_case_insensitively(self) -> None:
+        rng = random.Random(0)
+        result = _fallback_reviewer_pool(
+            {"alice", "bob"},
+            pr_author_login="ALICE",
+            rng=rng,
+        )
+        self.assertEqual(result, ["bob"])
+
+    def test_fallback_returns_empty_when_no_eligible_stakeholder_exists(self) -> None:
+        rng = random.Random(0)
+        self.assertEqual(
+            _fallback_reviewer_pool(set(), pr_author_login="alice", rng=rng),
+            [],
+        )
+        self.assertEqual(
+            _fallback_reviewer_pool({"alice"}, pr_author_login="alice", rng=rng),
+            [],
+        )
+
+
 class ResolveNonMemberReviewActionTest(unittest.TestCase):
     def test_approve_verdict_is_downgraded_to_comment_event(self) -> None:
         # The bot only ever takes ``REQUEST_CHANGES`` actions on PRs;
@@ -183,6 +217,71 @@ class ResolveNonMemberReviewActionTest(unittest.TestCase):
         self.assertEqual(len(reviewers), 1)
         self.assertIn(reviewers[0], {"alice", "bob", "carol"})
 
+    def test_approve_with_empty_recommendations_falls_back_to_stakeholder_roster(
+        self,
+    ) -> None:
+        rng = random.Random(0)
+        review = {
+            "verdict": "APPROVE",
+            "recommended_reviewers": [],
+        }
+        event, reviewers = _resolve_non_member_review_action(
+            review,
+            pr_author_login="dave",
+            allowed_logins={"alice", "bob", "carol"},
+            rng=rng,
+        )
+        self.assertEqual(event, "COMMENT")
+        self.assertEqual(len(reviewers), 1)
+        self.assertIn(reviewers[0], {"alice", "bob", "carol"})
+
+    def test_approve_with_omitted_recommendations_falls_back_to_stakeholder_roster(
+        self,
+    ) -> None:
+        rng = random.Random(0)
+        event, reviewers = _resolve_non_member_review_action(
+            {"verdict": "APPROVE"},
+            pr_author_login="dave",
+            allowed_logins={"alice", "bob", "carol"},
+            rng=rng,
+        )
+        self.assertEqual(event, "COMMENT")
+        self.assertEqual(len(reviewers), 1)
+        self.assertIn(reviewers[0], {"alice", "bob", "carol"})
+
+    def test_approve_with_invalid_self_and_non_stakeholder_candidates_falls_back(
+        self,
+    ) -> None:
+        rng = random.Random(0)
+        review = {
+            "verdict": "APPROVE",
+            "recommended_reviewers": ["@dave", "outsider", "", None],
+        }
+        event, reviewers = _resolve_non_member_review_action(
+            review,  # type: ignore[arg-type]
+            pr_author_login="dave",
+            allowed_logins={"alice", "bob"},
+            rng=rng,
+        )
+        self.assertEqual(event, "COMMENT")
+        self.assertEqual(len(reviewers), 1)
+        self.assertIn(reviewers[0], {"alice", "bob"})
+
+    def test_approve_with_no_allowed_logins_returns_no_reviewers(self) -> None:
+        rng = random.Random(0)
+        review = {
+            "verdict": "APPROVE",
+            "recommended_reviewers": [],
+        }
+        event, reviewers = _resolve_non_member_review_action(
+            review,
+            pr_author_login="dave",
+            allowed_logins=set(),
+            rng=rng,
+        )
+        self.assertEqual(event, "COMMENT")
+        self.assertEqual(reviewers, [])
+
     def test_request_changes_returns_real_request_changes_event(self) -> None:
         # ``REQUEST_CHANGES`` is the one verdict that does become a
         # real GitHub review action on the PR.
@@ -194,6 +293,21 @@ class ResolveNonMemberReviewActionTest(unittest.TestCase):
             review,
             pr_author_login="dave",
             allowed_logins={"alice", "bob"},
+        )
+        self.assertEqual(event, "REQUEST_CHANGES")
+        self.assertEqual(reviewers, [])
+
+    def test_request_changes_does_not_fallback_to_stakeholder_roster(self) -> None:
+        rng = random.Random(0)
+        review = {
+            "verdict": "REQUEST_CHANGES",
+            "recommended_reviewers": [],
+        }
+        event, reviewers = _resolve_non_member_review_action(
+            review,
+            pr_author_login="dave",
+            allowed_logins={"alice", "bob"},
+            rng=rng,
         )
         self.assertEqual(event, "REQUEST_CHANGES")
         self.assertEqual(reviewers, [])
