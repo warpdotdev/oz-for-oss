@@ -18,6 +18,7 @@ from . import conftest  # noqa: F401
 
 from scripts.review_pr import (  # type: ignore[import-not-found]
     _REVIEWER_SAMPLE_SIZE,
+    _format_review_completion_message,
     _normalize_reviewer_logins,
     _resolve_non_member_review_action,
 )
@@ -163,7 +164,10 @@ class NormalizeReviewerLoginsTest(unittest.TestCase):
 
 
 class ResolveNonMemberReviewActionTest(unittest.TestCase):
-    def test_approve_yields_one_reviewer(self) -> None:
+    def test_approve_verdict_is_downgraded_to_comment_event(self) -> None:
+        # The bot only ever takes ``REQUEST_CHANGES`` actions on PRs;
+        # an ``APPROVE`` verdict from the agent is posted as a plain
+        # ``COMMENT`` review so a human still has to actually approve.
         review = {
             "verdict": "APPROVE",
             "recommended_reviewers": ["alice", "bob", "carol"],
@@ -173,11 +177,15 @@ class ResolveNonMemberReviewActionTest(unittest.TestCase):
             pr_author_login="dave",
             allowed_logins={"alice", "bob", "carol"},
         )
-        self.assertEqual(event, "APPROVE")
+        self.assertEqual(event, "COMMENT")
+        # The reviewer-request payload is preserved on APPROVE so the
+        # workflow can still ping a human reviewer.
         self.assertEqual(len(reviewers), 1)
         self.assertIn(reviewers[0], {"alice", "bob", "carol"})
 
-    def test_request_changes_returns_no_reviewers(self) -> None:
+    def test_request_changes_returns_real_request_changes_event(self) -> None:
+        # ``REQUEST_CHANGES`` is the one verdict that does become a
+        # real GitHub review action on the PR.
         review = {
             "verdict": "REQUEST_CHANGES",
             "recommended_reviewers": ["alice", "bob"],
@@ -196,6 +204,31 @@ class ResolveNonMemberReviewActionTest(unittest.TestCase):
                 {"verdict": "COMMENT"},
                 pr_author_login="dave",
             )
+
+
+class FormatReviewCompletionMessageTest(unittest.TestCase):
+    def test_request_changes_message(self) -> None:
+        message = _format_review_completion_message("REQUEST_CHANGES", [])
+        self.assertIn("requested changes", message)
+        self.assertNotIn("approve", message.lower())
+
+    def test_comment_with_recommended_reviewers_mentions_them(self) -> None:
+        # ``COMMENT`` event with reviewers attached means the original
+        # verdict was ``APPROVE`` and the workflow downgraded it. The
+        # progress comment should call out who got pinged for human
+        # review and explicitly state that approval has to come from a
+        # maintainer.
+        message = _format_review_completion_message("COMMENT", ["alice"])
+        self.assertIn("@alice", message)
+        self.assertIn("maintainer can approve", message)
+        # Must NOT claim that the bot itself approved the PR.
+        self.assertNotIn("I approved", message)
+
+    def test_plain_comment_no_reviewers(self) -> None:
+        message = _format_review_completion_message("COMMENT", [])
+        self.assertIn("completed the review", message)
+        # Must NOT claim that the bot itself approved the PR.
+        self.assertNotIn("approved", message.lower())
 
 
 if __name__ == "__main__":

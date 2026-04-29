@@ -226,16 +226,27 @@ def _resolve_non_member_review_action(
     """Extract and validate the verdict + reviewer list for a non-member PR.
 
     Returns a tuple of ``(event, reviewers)`` where ``event`` is the
-    GitHub ``create_review`` event string (``"APPROVE"`` or
-    ``"REQUEST_CHANGES"``) and ``reviewers`` is the normalized list of
-    GitHub logins to request a review from (always empty on
-    ``REQUEST_CHANGES``). Raises ``ValueError`` when the agent returned
-    an unsupported ``verdict``.
+    GitHub ``create_review`` event string and ``reviewers`` is the
+    normalized list of GitHub logins to request a review from.
 
-    When ``allowed_logins`` is provided, any recommended reviewer whose
-    login is not listed in ``.github/STAKEHOLDERS`` is dropped before
-    the review request is issued so the agent cannot pull in reviewers
-    outside of the repository's stakeholder roster.
+    The agent's *verdict* is mapped onto ``event`` so the bot only ever
+    takes a ``REQUEST_CHANGES`` action against a PR; positive verdicts
+    are posted as plain ``COMMENT`` reviews so a human still has to
+    actually approve the PR. The mapping is:
+
+    - ``verdict == "REQUEST_CHANGES"`` → ``event = "REQUEST_CHANGES"``
+      with no reviewer request (the human reviewer should be pinged
+      only after the agent's blockers are resolved).
+    - ``verdict == "APPROVE"`` → ``event = "COMMENT"`` plus a reviewer
+      request that pings a randomly-sampled stakeholder from the
+      ``recommended_reviewers`` pool. The bot's own review on this PR
+      stays a comment; the requested human is the one who approves.
+
+    Raises ``ValueError`` when the agent returned an unsupported
+    ``verdict``. When ``allowed_logins`` is provided, any recommended
+    reviewer whose login is not listed in ``.github/STAKEHOLDERS`` is
+    dropped before the review request is issued so the agent cannot
+    pull in reviewers outside of the repository's stakeholder roster.
     """
     verdict_raw = str(review.get("verdict") or "").strip().upper()
     if verdict_raw not in _ALLOWED_NON_MEMBER_VERDICTS:
@@ -251,7 +262,12 @@ def _resolve_non_member_review_action(
         if verdict_raw == "APPROVE"
         else []
     )
-    return verdict_raw, reviewers
+    # The bot only ever takes a ``REQUEST_CHANGES`` action against a
+    # PR. Positive verdicts are downgraded to ``COMMENT`` so a human
+    # has to be the one who actually approves; the reviewer request
+    # below is what hands the PR off to that human.
+    event = "COMMENT" if verdict_raw == "APPROVE" else verdict_raw
+    return event, reviewers
 
 
 def _commentable_lines_for_patch(patch: str | None) -> dict[str, set[int]]:
@@ -512,20 +528,18 @@ def _format_review_completion_message(
     recommended_reviewers: list[str],
 ) -> str:
     """Build the progress-comment completion message for a posted review."""
-    if event == "APPROVE":
-        if recommended_reviewers:
-            mentions = ", ".join(f"@{login}" for login in recommended_reviewers)
-            base = (
-                "I approved this pull request and requested human review from: "
-                f"{mentions}."
-            )
-        else:
-            base = (
-                "I approved this pull request. No matching stakeholder was found "
-                "for the changed files, so no human reviewers were requested."
-            )
-    elif event == "REQUEST_CHANGES":
+    if event == "REQUEST_CHANGES":
         base = "I requested changes on this pull request and posted feedback."
+    elif recommended_reviewers:
+        # ``COMMENT`` review with a non-empty recommended-reviewer list
+        # means the agent's verdict was ``APPROVE`` and the request was
+        # downgraded to ``COMMENT`` so a human still has to approve.
+        mentions = ", ".join(f"@{login}" for login in recommended_reviewers)
+        base = (
+            "I reviewed this pull request and requested human review from: "
+            f"{mentions}. I left feedback as a comment so a maintainer can "
+            "approve."
+        )
     else:
         base = "I completed the review and posted feedback on this pull request."
     return _with_retrigger_hint(base)
@@ -1040,13 +1054,20 @@ def gather_review_context(
             - The PR author (@{pr_author_login or 'unknown'}) is not a
               repository member or collaborator, so this review must
               commit to a verdict rather than just leaving comments.
-            - Choose exactly one ``verdict`` for the review, using the
-              GitHub review event naming:
+            - Choose exactly one ``verdict`` for the review:
               - ``APPROVE`` when the PR looks ready for a human to
-                take over.
+                take over. The workflow always downgrades this to a
+                ``COMMENT`` review on the PR (never a real GitHub
+                approval) and pings a randomly-sampled human reviewer
+                from ``recommended_reviewers`` so a maintainer is the
+                one who actually approves.
               - ``REQUEST_CHANGES`` when the PR clearly needs rework
-                before a human should spend time reviewing it.
-              Never emit ``COMMENT`` for this PR.
+                before a human should spend time reviewing it. The
+                workflow posts this as a real ``REQUEST_CHANGES``
+                review on the PR and does not request a human
+                reviewer.
+              Never emit ``COMMENT`` for this PR — the workflow chooses
+              the GitHub review event from the ``verdict`` you pick.
             - Identify up to {_MAX_STAKEHOLDER_REVIEWERS} ``recommended_reviewers`` from
               ``.github/STAKEHOLDERS`` (CODEOWNERS-style syntax; later
               rules override earlier ones, most specific pattern wins
@@ -1067,8 +1088,8 @@ def gather_review_context(
               {{"verdict": "APPROVE" | "REQUEST_CHANGES", "recommended_reviewers": [string, ...]}}
             - Do not call GitHub yourself to post the review or to
               request reviewers — the workflow will use these fields
-              to post the formal pull-request review and, on
-              ``APPROVE``, request reviews from the listed logins.
+              to post the pull-request review and, on ``APPROVE``,
+              request a human reviewer from the listed logins.
 
             Stakeholders (from ``.github/STAKEHOLDERS``):
             {stakeholders_block}
@@ -1260,21 +1281,33 @@ def apply_review_result(
     else:
         event = "COMMENT"
         recommended_reviewers = []
-    if not summary and not comments and event == "COMMENT":
+    # The empty-feedback short-circuit still applies, but only when the
+    # agent's verdict produces no GitHub-visible side effects: no review
+    # body, no inline comments, plain ``COMMENT`` event, and no
+    # reviewer request to issue. APPROVE-downgraded-to-COMMENT runs
+    # with a ``recommended_reviewers`` entry must keep flowing through
+    # so the human reviewer ping still goes out.
+    if (
+        not summary
+        and not comments
+        and event == "COMMENT"
+        and not recommended_reviewers
+    ):
         progress.complete(
             _with_retrigger_hint(
                 "I completed the review and did not identify any actionable feedback for this pull request."
             )
         )
         return
-    review_body = (
-        f"{summary or 'Automated review'}\n\n{RETRIGGER_HINT}\n\n{POWERED_BY_SUFFIX}"
-    )
-    if comments:
-        pr.create_review(body=review_body, event=event, comments=comments)
-    else:
-        pr.create_review(body=review_body, event=event)
-    if event == "APPROVE" and recommended_reviewers:
+    if summary or comments or event == "REQUEST_CHANGES":
+        review_body = (
+            f"{summary or 'Automated review'}\n\n{RETRIGGER_HINT}\n\n{POWERED_BY_SUFFIX}"
+        )
+        if comments:
+            pr.create_review(body=review_body, event=event, comments=comments)
+        else:
+            pr.create_review(body=review_body, event=event)
+    if recommended_reviewers:
         try:
             pr.create_review_request(reviewers=recommended_reviewers)
         except GithubException:
@@ -1395,13 +1428,20 @@ def main() -> None:
                 - The PR author (@{pr_author_login or 'unknown'}) is not a
                   repository member or collaborator, so this review must
                   commit to a verdict rather than just leaving comments.
-                - Choose exactly one ``verdict`` for the review, using the
-                  GitHub review event naming:
+                - Choose exactly one ``verdict`` for the review:
                   - ``APPROVE`` when the PR looks ready for a human to
-                    take over.
+                    take over. The workflow always downgrades this to a
+                    ``COMMENT`` review on the PR (never a real GitHub
+                    approval) and pings a randomly-sampled human reviewer
+                    from ``recommended_reviewers`` so a maintainer is the
+                    one who actually approves.
                   - ``REQUEST_CHANGES`` when the PR clearly needs rework
-                    before a human should spend time reviewing it.
-                  Never emit ``COMMENT`` for this PR.
+                    before a human should spend time reviewing it. The
+                    workflow posts this as a real ``REQUEST_CHANGES``
+                    review on the PR and does not request a human
+                    reviewer.
+                  Never emit ``COMMENT`` for this PR — the workflow chooses
+                  the GitHub review event from the ``verdict`` you pick.
                 - Identify up to {_MAX_STAKEHOLDER_REVIEWERS} ``recommended_reviewers`` from
                   ``.github/STAKEHOLDERS`` (CODEOWNERS-style syntax; later
                   rules override earlier ones, most specific pattern wins
@@ -1422,8 +1462,8 @@ def main() -> None:
                   {{"verdict": "APPROVE" | "REQUEST_CHANGES", "recommended_reviewers": [string, ...]}}
                 - Do not call GitHub yourself to post the review or to
                   request reviewers — the workflow will use these fields
-                  to post the formal pull-request review and, on
-                  ``APPROVE``, request reviews from the listed logins.
+                  to post the pull-request review and, on ``APPROVE``,
+                  request a human reviewer from the listed logins.
 
                 Stakeholders (from ``.github/STAKEHOLDERS``):
                 {stakeholders_block}
@@ -1498,25 +1538,34 @@ def main() -> None:
             else:
                 event = "COMMENT"
                 recommended_reviewers = []
-            if not summary and not comments and event == "COMMENT":
+            if (
+                not summary
+                and not comments
+                and event == "COMMENT"
+                and not recommended_reviewers
+            ):
                 # For member PRs the legacy short-circuit stands: if the
                 # agent had nothing to say, skip posting an empty review.
-                # Non-member PRs always post so the verdict lands on the
-                # PR even when the agent has no inline comments.
+                # Non-member PRs whose verdict was downgraded to
+                # ``COMMENT`` keep flowing through when there is a human
+                # reviewer to ping so the reviewer request still goes
+                # out. ``REQUEST_CHANGES`` reviews always post so the
+                # verdict lands on the PR even with no inline comments.
                 progress.complete(
                     _with_retrigger_hint(
                         "I completed the review and did not identify any actionable feedback for this pull request."
                     )
                 )
                 return
-            review_body = (
-                f"{summary or 'Automated review'}\n\n{RETRIGGER_HINT}\n\n{POWERED_BY_SUFFIX}"
-            )
-            if comments:
-                pr.create_review(body=review_body, event=event, comments=comments)
-            else:
-                pr.create_review(body=review_body, event=event)
-            if event == "APPROVE" and recommended_reviewers:
+            if summary or comments or event == "REQUEST_CHANGES":
+                review_body = (
+                    f"{summary or 'Automated review'}\n\n{RETRIGGER_HINT}\n\n{POWERED_BY_SUFFIX}"
+                )
+                if comments:
+                    pr.create_review(body=review_body, event=event, comments=comments)
+                else:
+                    pr.create_review(body=review_body, event=event)
+            if recommended_reviewers:
                 try:
                     pr.create_review_request(reviewers=recommended_reviewers)
                 except GithubException:
