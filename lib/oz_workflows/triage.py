@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import base64
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from github.GithubException import GithubException, UnknownObjectException
+
 from .helpers import get_field, parse_datetime
+
+logger = logging.getLogger(__name__)
 
 ORIGINAL_REPORT_START = "<!-- oz-agent-original-report-start -->"
 ORIGINAL_REPORT_END = "<!-- oz-agent-original-report-end -->"
@@ -24,18 +30,18 @@ def load_triage_config(path: Path) -> dict[str, Any]:
     return parsed
 
 
-def load_stakeholders(path: Path) -> list[dict[str, Any]]:
-    """Parse a CODEOWNERS-style STAKEHOLDERS file into structured entries.
+STAKEHOLDERS_REPO_PATH = ".github/STAKEHOLDERS"
 
-    Each non-comment, non-blank line is expected to have the form:
-        <pattern> @owner1 @owner2 ...
 
-    Returns a list of dicts with ``pattern`` and ``owners`` keys.
+def _parse_stakeholders_lines(text: str) -> list[dict[str, Any]]:
+    """Parse the contents of a STAKEHOLDERS file into structured entries.
+
+    Shared by the workspace-backed :func:`load_stakeholders` and the
+    API-backed :func:`load_stakeholders_from_repo` so both delivery
+    surfaces produce byte-for-byte identical entries.
     """
     entries: list[dict[str, Any]] = []
-    if not path.exists():
-        return entries
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -47,6 +53,85 @@ def load_stakeholders(path: Path) -> list[dict[str, Any]]:
         if owners:
             entries.append({"pattern": pattern, "owners": owners})
     return entries
+
+
+def load_stakeholders(path: Path) -> list[dict[str, Any]]:
+    """Parse a CODEOWNERS-style STAKEHOLDERS file into structured entries.
+
+    Used by the legacy GitHub Actions paths that have the consuming
+    repository checked out under the runner's workspace. Vercel-mode
+    callers should use :func:`load_stakeholders_from_repo` instead so
+    the file is read via the GitHub API on the repository that
+    triggered the webhook.
+
+    Each non-comment, non-blank line is expected to have the form:
+        <pattern> @owner1 @owner2 ...
+
+    Returns a list of dicts with ``pattern`` and ``owners`` keys.
+    """
+    if not path.exists():
+        return []
+    return _parse_stakeholders_lines(path.read_text(encoding="utf-8"))
+
+
+def decode_repo_text_file(repo_handle: Any, path: str) -> str | None:
+    """Return the UTF-8 text contents of *path* in the consuming repo.
+
+    Wraps :meth:`github.Repository.Repository.get_contents` so the
+    caller does not have to handle base64 decoding or the
+    :class:`UnknownObjectException` that PyGithub raises when the
+    file is absent. Returns ``None`` when the file is missing,
+    points at a directory, or cannot be UTF-8 decoded so callers can
+    fall back to empty defaults without aborting the dispatch path.
+
+    The Vercel webhook hands repository-relative paths
+    (e.g. ``.github/STAKEHOLDERS``) into this helper because the
+    consuming repo is not checked out on the function's filesystem.
+    """
+    try:
+        contents = repo_handle.get_contents(path)
+    except UnknownObjectException:
+        return None
+    except GithubException:
+        logger.exception(
+            "Failed to fetch %s from %s",
+            path,
+            getattr(repo_handle, "full_name", ""),
+        )
+        return None
+    if isinstance(contents, list):
+        # ``path`` resolved to a directory listing; the caller wanted a
+        # single file, so this is a configuration error from the host.
+        return None
+    raw = getattr(contents, "decoded_content", None)
+    if raw is None:
+        encoded = getattr(contents, "content", "") or ""
+        try:
+            raw = base64.b64decode(encoded)
+        except (ValueError, TypeError):
+            return None
+    try:
+        return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+    except UnicodeDecodeError:
+        return None
+
+
+def load_stakeholders_from_repo(repo_handle: Any) -> list[dict[str, Any]]:
+    """Load ``.github/STAKEHOLDERS`` for the repo behind *repo_handle*.
+
+    Drop-in API-backed counterpart to :func:`load_stakeholders`. The
+    Vercel webhook does not have the consuming repository checked out
+    locally, so cloud-mode callers (the ``triage-new-issues``,
+    ``review-pull-request``, etc. context gatherers) must pull the
+    file out of the repository via the GitHub API instead of relying
+    on a workspace path. Returns an empty list when the file is
+    missing so non-member PR enforcement degrades to "no stakeholder
+    suggestions" rather than aborting the dispatch.
+    """
+    text = decode_repo_text_file(repo_handle, STAKEHOLDERS_REPO_PATH)
+    if not text:
+        return []
+    return _parse_stakeholders_lines(text)
 
 
 def format_stakeholders_for_prompt(entries: list[dict[str, Any]]) -> str:

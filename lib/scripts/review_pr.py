@@ -36,7 +36,11 @@ from oz_workflows.repo_local import (
     format_repo_local_prompt_section,
     resolve_repo_local_skill_path,
 )
-from oz_workflows.triage import format_stakeholders_for_prompt, load_stakeholders
+from oz_workflows.triage import (
+    format_stakeholders_for_prompt,
+    load_stakeholders,
+    load_stakeholders_from_repo,
+)
 
 WORKFLOW_NAME = "review-pull-request"
 
@@ -1043,9 +1047,12 @@ def gather_review_context(
     non_member_review_section = ""
     stakeholder_logins: set[str] = set()
     if is_non_member:
-        stakeholders_entries = load_stakeholders(
-            workspace_path / ".github" / "STAKEHOLDERS"
-        )
+        # Load ``.github/STAKEHOLDERS`` directly from the repository
+        # that triggered the webhook. The Vercel function does not
+        # check out the consuming repo, so the workspace-backed
+        # ``load_stakeholders`` would always return an empty list and
+        # silently disable non-member reviewer enforcement.
+        stakeholders_entries = load_stakeholders_from_repo(github)
         stakeholder_logins = _stakeholder_logins(stakeholders_entries)
         stakeholders_block = format_stakeholders_for_prompt(stakeholders_entries)
         non_member_review_section = dedent(

@@ -53,12 +53,15 @@ from oz_workflows.helpers import (
 from oz_workflows.triage import (
     ORIGINAL_REPORT_END,
     ORIGINAL_REPORT_START,
+    STAKEHOLDERS_REPO_PATH,
     compose_triaged_issue_body,
+    decode_repo_text_file,
     dedupe_strings,
     discover_issue_templates,
     extract_original_issue_report,
     format_stakeholders_for_prompt,
     load_stakeholders,
+    load_stakeholders_from_repo,
     load_triage_config,
     select_recent_untriaged_issues,
 )
@@ -132,6 +135,108 @@ class LoadStakeholdersTest(unittest.TestCase):
 
     def test_returns_empty_for_missing_file(self) -> None:
         self.assertEqual(load_stakeholders(Path("/nonexistent/STAKEHOLDERS")), [])
+
+
+class DecodeRepoTextFileTest(unittest.TestCase):
+    """``decode_repo_text_file`` reads a file out of the consuming repo via the API.
+
+    The Vercel webhook does not have the consuming repo checked out
+    locally, so the cloud-mode helpers fetch repository files through
+    PyGithub. The helper has to tolerate the file being absent, the
+    path resolving to a directory, and the API raising on any other
+    failure so the dispatch path degrades to empty defaults instead
+    of aborting.
+    """
+
+    def test_returns_decoded_text_for_existing_file(self) -> None:
+        repo_handle = MagicMock()
+        contents = MagicMock()
+        contents.decoded_content = b"hello world\n"
+        repo_handle.get_contents.return_value = contents
+        self.assertEqual(
+            decode_repo_text_file(repo_handle, "path.txt"), "hello world\n"
+        )
+        repo_handle.get_contents.assert_called_once_with("path.txt")
+
+    def test_falls_back_to_base64_content(self) -> None:
+        # PyGithub exposes ``decoded_content`` for individual files but
+        # ``ContentFile`` instances retrieved via ``get_contents`` on
+        # an older version expose only the base64 ``content`` field.
+        # Verify the helper handles both shapes.
+        import base64 as _base64
+
+        repo_handle = MagicMock()
+        contents = MagicMock()
+        contents.decoded_content = None
+        contents.content = _base64.b64encode(b"fallback bytes").decode("ascii")
+        repo_handle.get_contents.return_value = contents
+        self.assertEqual(
+            decode_repo_text_file(repo_handle, "x"), "fallback bytes"
+        )
+
+    def test_returns_none_when_file_missing(self) -> None:
+        from github.GithubException import UnknownObjectException
+
+        repo_handle = MagicMock()
+        repo_handle.get_contents.side_effect = UnknownObjectException(
+            404, {"message": "Not Found"}, {}
+        )
+        self.assertIsNone(decode_repo_text_file(repo_handle, "missing"))
+
+    def test_returns_none_when_path_resolves_to_directory(self) -> None:
+        # ``get_contents`` returns a list when the path points at a
+        # directory; the helper expects a single file and refuses
+        # rather than papering over the configuration error.
+        repo_handle = MagicMock()
+        repo_handle.get_contents.return_value = [MagicMock(), MagicMock()]
+        self.assertIsNone(decode_repo_text_file(repo_handle, "some-dir"))
+
+    def test_returns_none_on_other_github_exceptions(self) -> None:
+        from github.GithubException import GithubException
+
+        repo_handle = MagicMock()
+        repo_handle.get_contents.side_effect = GithubException(
+            500, {"message": "server error"}, {}
+        )
+        self.assertIsNone(decode_repo_text_file(repo_handle, "path"))
+
+
+class LoadStakeholdersFromRepoTest(unittest.TestCase):
+    def test_loads_and_parses_repo_stakeholders(self) -> None:
+        repo_handle = MagicMock()
+        contents = MagicMock()
+        contents.decoded_content = (
+            b"# header comment\n"
+            b"/src/ @alice @bob\n"
+            b"\n"
+            b"/docs/ @carol\n"
+        )
+        repo_handle.get_contents.return_value = contents
+        entries = load_stakeholders_from_repo(repo_handle)
+        self.assertEqual(
+            entries,
+            [
+                {"pattern": "/src/", "owners": ["alice", "bob"]},
+                {"pattern": "/docs/", "owners": ["carol"]},
+            ],
+        )
+        repo_handle.get_contents.assert_called_once_with(STAKEHOLDERS_REPO_PATH)
+
+    def test_returns_empty_when_file_absent(self) -> None:
+        from github.GithubException import UnknownObjectException
+
+        repo_handle = MagicMock()
+        repo_handle.get_contents.side_effect = UnknownObjectException(
+            404, {"message": "Not Found"}, {}
+        )
+        self.assertEqual(load_stakeholders_from_repo(repo_handle), [])
+
+    def test_returns_empty_when_file_blank(self) -> None:
+        repo_handle = MagicMock()
+        contents = MagicMock()
+        contents.decoded_content = b""
+        repo_handle.get_contents.return_value = contents
+        self.assertEqual(load_stakeholders_from_repo(repo_handle), [])
 
 
 class FormatStakeholdersForPromptTest(unittest.TestCase):

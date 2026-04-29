@@ -38,11 +38,13 @@ from oz_workflows.repo_local import (
     resolve_repo_local_skill_path,
 )
 from oz_workflows.triage import (
+    decode_repo_text_file,
     dedupe_strings,
     discover_issue_templates,
     extract_original_issue_report,
     format_stakeholders_for_prompt,
     load_stakeholders,
+    load_stakeholders_from_repo,
     load_triage_config,
     select_recent_untriaged_issues,
 )
@@ -1037,37 +1039,13 @@ _ISSUE_TEMPLATE_DIR = ".github/ISSUE_TEMPLATE"
 
 
 def _decode_repo_text_file(repo_handle: Any, path: str) -> str | None:
-    """Return the UTF-8 text contents of *path* in the repo, or ``None``.
+    """Backward-compatible alias for :func:`oz_workflows.triage.decode_repo_text_file`.
 
-    Wraps :meth:`Repository.get_contents` so missing files / API errors
-    do not abort the dispatch path. Returns ``None`` when the file is
-    absent or cannot be decoded so callers can fall back to empty
-    defaults.
+    Kept as a private name so existing test fixtures that patch
+    ``scripts.triage_new_issues._decode_repo_text_file`` continue to
+    work after the implementation moved into ``oz_workflows.triage``.
     """
-    try:
-        contents = repo_handle.get_contents(path)
-    except UnknownObjectException:
-        return None
-    except GithubException:
-        logger.exception(
-            "Failed to fetch %s from %s",
-            path,
-            getattr(repo_handle, "full_name", ""),
-        )
-        return None
-    if isinstance(contents, list):
-        return None
-    raw = getattr(contents, "decoded_content", None)
-    if raw is None:
-        encoded = getattr(contents, "content", "") or ""
-        try:
-            raw = base64.b64decode(encoded)
-        except (ValueError, TypeError):
-            return None
-    try:
-        return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
-    except UnicodeDecodeError:
-        return None
+    return decode_repo_text_file(repo_handle, path)
 
 
 def _load_triage_config_from_repo(repo_handle: Any) -> dict[str, Any]:
@@ -1097,21 +1075,14 @@ def _load_triage_config_from_repo(repo_handle: Any) -> dict[str, Any]:
 
 
 def _load_stakeholders_from_repo(repo_handle: Any) -> list[dict[str, Any]]:
-    text = _decode_repo_text_file(repo_handle, _STAKEHOLDERS_PATH)
-    if not text:
-        return []
-    entries: list[dict[str, Any]] = []
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        owners = [p.lstrip("@") for p in parts[1:] if p.startswith("@")]
-        if owners:
-            entries.append({"pattern": parts[0], "owners": owners})
-    return entries
+    """Backward-compatible alias for :func:`oz_workflows.triage.load_stakeholders_from_repo`.
+
+    Kept as a private name so existing test fixtures that patch
+    ``scripts.triage_new_issues._load_stakeholders_from_repo``
+    continue to work after the implementation moved into
+    ``oz_workflows.triage``.
+    """
+    return load_stakeholders_from_repo(repo_handle)
 
 
 def _discover_issue_templates_from_repo(repo_handle: Any) -> dict[str, Any]:
