@@ -2,6 +2,7 @@ from __future__ import annotations
 from contextlib import closing
 import logging
 import os
+import random
 import re
 import subprocess
 import sys
@@ -41,9 +42,19 @@ WORKFLOW_NAME = "review-pull-request"
 
 logger = logging.getLogger(__name__)
 
-# Maximum number of human reviewers to request from STAKEHOLDERS so we don't
-# over-notify maintainers on a single non-member PR.
+# Maximum number of recommended-reviewer candidates the agent is asked to
+# identify from ``.github/STAKEHOLDERS``. The host-side selection step
+# uniformly samples a single login from that pool (see
+# ``_REVIEWER_SAMPLE_SIZE``), so the cap here only bounds how much
+# stakeholder context lands in the prompt; it does not directly
+# determine how many reviewers are requested on the PR.
 _MAX_STAKEHOLDER_REVIEWERS = 3
+# Number of human reviewers requested per non-member PR. Issue #399
+# pins this at 1 so we surface exactly one randomly-selected reviewer
+# rather than over-notifying every matching stakeholder. Tests pass a
+# different value to assert the underlying sampling logic on a larger
+# pool.
+_REVIEWER_SAMPLE_SIZE = 1
 # ``verdict`` values the agent is allowed to emit for non-member PRs. These
 # map directly to GitHub's ``event`` parameter on the create-review endpoint.
 _ALLOWED_NON_MEMBER_VERDICTS = {"APPROVE", "REQUEST_CHANGES"}
@@ -146,24 +157,35 @@ def _normalize_reviewer_logins(
     *,
     pr_author_login: str,
     allowed_logins: set[str] | None = None,
-    limit: int = _MAX_STAKEHOLDER_REVIEWERS,
+    sample_size: int = _REVIEWER_SAMPLE_SIZE,
+    rng: random.Random | None = None,
 ) -> list[str]:
-    """Normalize and cap a list of recommended reviewer logins from the agent.
+    """Normalize the agent's reviewer suggestions and pick a random sample.
 
-    Strips leading ``@`` characters, drops blanks and non-string entries,
-    de-duplicates while preserving first-seen order, removes the PR
-    author (GitHub rejects self-review requests), and caps the result
-    at ``limit`` entries so we don't over-notify maintainers.
+    Issue #399 calls for assigning exactly one randomly-selected human
+    reviewer per PR rather than every matching stakeholder. This helper
+    builds the full eligible candidate pool from the agent's suggestions
+    — stripping leading ``@`` characters, dropping blanks and non-string
+    entries, de-duplicating while preserving first-seen order, removing
+    the PR author (GitHub rejects self-review requests), and (when
+    ``allowed_logins`` is set) requiring each login to appear in
+    ``.github/STAKEHOLDERS`` — and then uniformly samples
+    ``sample_size`` logins from that pool.
 
-    When ``allowed_logins`` is provided, any candidate whose login does
-    not appear in that set (compared case-insensitively) is dropped so
-    the agent cannot request a review from someone outside of
-    ``.github/STAKEHOLDERS``. Passing ``None`` disables the enforcement
-    (keeping the legacy behavior that accepts any non-empty login).
+    Sampling uses :py:meth:`random.Random.sample` for an unbiased draw
+    without replacement. Tests pass an injected :class:`random.Random`
+    instance so the chosen reviewer is deterministic.
+
+    When ``allowed_logins`` is ``None`` the enforcement is disabled so
+    every non-empty candidate the agent supplied is eligible (the
+    legacy behavior used by callers that have already vetted the
+    pool).
     """
     if not isinstance(candidates, list):
         return []
-    normalized: list[str] = []
+    if sample_size <= 0:
+        return []
+    eligible: list[str] = []
     seen: set[str] = set()
     for candidate in candidates:
         if not isinstance(candidate, str):
@@ -178,10 +200,21 @@ def _normalize_reviewer_logins(
         if login in seen:
             continue
         seen.add(login)
-        normalized.append(login)
-        if len(normalized) >= limit:
-            break
-    return normalized
+        eligible.append(login)
+    if not eligible:
+        return []
+    chooser = rng if rng is not None else random
+    if len(eligible) <= sample_size:
+        # ``random.sample`` raises ``ValueError`` when ``k`` exceeds the
+        # population, so when the eligible pool is at-or-below the
+        # requested sample size we just return everything we have. The
+        # ordering is intentionally shuffled so callers don't rely on
+        # the agent's original ordering when fewer candidates are
+        # available than the sample size.
+        shuffled = list(eligible)
+        chooser.shuffle(shuffled)
+        return shuffled
+    return chooser.sample(eligible, k=sample_size)
 
 
 def _resolve_non_member_review_action(
@@ -1022,7 +1055,10 @@ def gather_review_context(
               more specific rules over catch-all rules, and strip any
               leading ``@`` from each login. Exclude the PR author
               (@{pr_author_login or 'unknown'}) — GitHub rejects
-              self-review requests.
+              self-review requests. The workflow uniformly samples
+              exactly one reviewer from the candidates you return,
+              so identifying every matching stakeholder gives the
+              random selection a meaningful pool.
             - Only populate ``recommended_reviewers`` when the verdict
               is ``APPROVE``. Set it to an empty list on
               ``REQUEST_CHANGES``.
@@ -1374,7 +1410,10 @@ def main() -> None:
                   more specific rules over catch-all rules, and strip any
                   leading ``@`` from each login. Exclude the PR author
                   (@{pr_author_login or 'unknown'}) — GitHub rejects
-                  self-review requests.
+                  self-review requests. The workflow uniformly samples
+                  exactly one reviewer from the candidates you return,
+                  so identifying every matching stakeholder gives the
+                  random selection a meaningful pool.
                 - Only populate ``recommended_reviewers`` when the verdict
                   is ``APPROVE``. Set it to an empty list on
                   ``REQUEST_CHANGES``.
