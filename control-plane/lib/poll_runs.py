@@ -55,6 +55,21 @@ class FailureHandler(Protocol):
     def __call__(self, *, state: RunState, run: Any) -> None: ...
 
 
+class NonTerminalHandler(Protocol):
+    """Updates the progress comment while a run is still pending.
+
+    The cron poller invokes this hook on every poll where the Oz run
+    has not yet reached a terminal state. It is the cron equivalent of
+    the legacy ``on_poll`` callback the GHA path passes to
+    :func:`run_agent` and is wired by :mod:`lib.handlers` to call
+    :func:`oz_workflows.helpers.record_run_session_link`. Implementations
+    must absorb their own exceptions so a transient GitHub API failure
+    cannot abort the cron tick.
+    """
+
+    def __call__(self, *, state: RunState, run: Any) -> None: ...
+
+
 @dataclass(frozen=True)
 class WorkflowHandlers:
     """Per-workflow handlers used by :func:`drain_in_flight_runs`."""
@@ -62,6 +77,7 @@ class WorkflowHandlers:
     artifact_loader: ArtifactLoader
     result_applier: ResultApplier
     failure_handler: FailureHandler | None = None
+    non_terminal_handler: NonTerminalHandler | None = None
 
 
 @dataclass(frozen=True)
@@ -121,6 +137,20 @@ def _process_one(
     current_state = _coerce_state(run)
     if current_state not in TERMINAL_STATES:
         state.attempts += 1
+        # Drive the workflow's progress comment forward (e.g. with the
+        # session-share link) before persisting the next-attempt
+        # snapshot. Failures here are absorbed by the handler itself so
+        # we do not let a transient GitHub API hiccup poison the rest
+        # of the cron tick.
+        if handler.non_terminal_handler is not None:
+            try:
+                handler.non_terminal_handler(state=state, run=run)
+            except Exception:
+                logger.exception(
+                    "non_terminal_handler for run %s (%s) raised; ignoring",
+                    state.run_id,
+                    state.workflow,
+                )
         save_run_state(store, state)
         return DrainOutcome(
             run_id=state.run_id,
@@ -200,6 +230,7 @@ __all__ = [
     "ArtifactLoader",
     "DrainOutcome",
     "FailureHandler",
+    "NonTerminalHandler",
     "ResultApplier",
     "RunRetriever",
     "TERMINAL_FAILURE_STATES",

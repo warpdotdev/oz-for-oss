@@ -53,12 +53,14 @@ def _make_handlers(
     artifact_loader=None,
     result_applier=None,
     failure_handler=None,
+    non_terminal_handler=None,
 ) -> Mapping[str, WorkflowHandlers]:
     return {
         "review-pull-request": WorkflowHandlers(
             artifact_loader=artifact_loader or (lambda run_id: {"summary": "ok"}),
             result_applier=result_applier or (lambda *, state, result: None),
             failure_handler=failure_handler,
+            non_terminal_handler=non_terminal_handler,
         )
     }
 
@@ -78,6 +80,59 @@ class DrainInFlightRunsTest(unittest.TestCase):
         self.assertEqual(outcomes[0].state, "RUNNING")
         self.assertFalse(outcomes[0].applied)
         # The state record should still be in KV with bumped attempts.
+        self.assertEqual(len(store.keys(RUN_STATE_KEY_PREFIX)), 1)
+
+    def test_pending_run_invokes_non_terminal_handler(self) -> None:
+        """On a non-terminal poll, the handler must drive progress forward.
+
+        This is the cron-side equivalent of the legacy ``on_poll``
+        callback the GHA path passes to ``run_agent``: the handler is
+        responsible for surfacing the session-share link on the
+        progress comment as soon as Oz reports it.
+        """
+        store = InMemoryStateStore()
+        _seed(store, _state())
+        run = SimpleNamespace(
+            state="RUNNING",
+            session_link="https://app.warp.dev/run/abc",
+            run_id="oz-run-123",
+        )
+        retriever = _FakeRetriever({"run-1": run})
+
+        recorded: list[dict[str, Any]] = []
+
+        def non_terminal(*, state: RunState, run: Any) -> None:
+            recorded.append({"state": state, "run": run})
+
+        outcomes = drain_in_flight_runs(
+            store=store,
+            retriever=retriever,
+            handlers=_make_handlers(non_terminal_handler=non_terminal),
+        )
+        self.assertEqual(outcomes[0].state, "RUNNING")
+        self.assertEqual(len(recorded), 1)
+        self.assertIs(recorded[0]["run"], run)
+        self.assertEqual(recorded[0]["state"].run_id, "run-1")
+        # The state record stays in KV with bumped attempts.
+        self.assertEqual(len(store.keys(RUN_STATE_KEY_PREFIX)), 1)
+
+    def test_non_terminal_handler_failure_is_swallowed(self) -> None:
+        """A bad ``non_terminal_handler`` must not stop the cron tick."""
+        store = InMemoryStateStore()
+        _seed(store, _state())
+        retriever = _FakeRetriever({"run-1": SimpleNamespace(state="RUNNING")})
+
+        def explode(*, state: RunState, run: Any) -> None:
+            raise RuntimeError("github down")
+
+        outcomes = drain_in_flight_runs(
+            store=store,
+            retriever=retriever,
+            handlers=_make_handlers(non_terminal_handler=explode),
+        )
+        # The drain still surfaces the in-flight outcome and keeps
+        # the record in KV for the next cron tick.
+        self.assertEqual(outcomes[0].state, "RUNNING")
         self.assertEqual(len(store.keys(RUN_STATE_KEY_PREFIX)), 1)
 
     def test_succeeded_run_invokes_applier_and_drains_record(self) -> None:

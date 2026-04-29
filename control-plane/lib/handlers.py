@@ -7,10 +7,19 @@ workflow. This module wires up:
 - ``artifact_loader``: a thin wrapper around the workflow-specific
   ``oz_workflows.artifacts.load_*_artifact`` helper.
 - ``result_applier``: mints a fresh App-installation token from the
-  saved ``installation_id``, builds a :class:`Github` client, and calls
-  the workflow-specific ``apply_*_result`` helper.
-- ``failure_handler``: posts a workflow-specific error message via
-  :class:`WorkflowProgressComment`.
+  saved ``installation_id``, builds a :class:`Github` client,
+  reconstructs the :class:`WorkflowProgressComment` posted at dispatch
+  time, and calls the workflow-specific ``apply_*_result`` helper with
+  it so the final ``progress.complete`` / ``progress.replace_body``
+  edits land on the original comment.
+- ``failure_handler``: rebuilds the same
+  :class:`WorkflowProgressComment` and calls
+  :meth:`WorkflowProgressComment.report_error` so the failure message
+  replaces the in-flight progress comment.
+- ``non_terminal_handler``: rebuilds the progress comment on each cron
+  tick where the run is still pending and calls
+  :func:`record_run_session_link` so the session-share link surfaces
+  to viewers as soon as Oz reports it.
 
 Each handler builds its GitHub client lazily inside the call so a
 single failing workflow cannot poison the rest of the cron tick. All
@@ -58,54 +67,165 @@ def _client_factory(install_id: int, factory: GithubClientFactory) -> Any:
     return factory(install_id)
 
 
-def build_review_handlers(github_client_factory: GithubClientFactory) -> WorkflowHandlers:
-    """Return :class:`WorkflowHandlers` for ``review-pull-request``."""
-    from oz_workflows.artifacts import load_review_artifact  # type: ignore[import-not-found]
+def _reconstruct_progress(
+    repo_handle: Any,
+    *,
+    state: RunState,
+    workflow: str,
+    review_reply_target: tuple[Any, int] | None = None,
+) -> Any:
+    """Rebuild the :class:`WorkflowProgressComment` posted at dispatch.
+
+    The Vercel webhook stashes ``progress_comment_id`` and
+    ``progress_run_id`` on ``state.payload_subset`` so the cron poller
+    can edit the same GitHub comment posted by the builder. The
+    fallback path (no stashed id) still works because
+    :class:`WorkflowProgressComment` falls back to a workflow-prefix
+    lookup when the ``GITHUB_RUN_ID`` is empty.
+    """
     from oz_workflows.helpers import (  # type: ignore[import-not-found]
         WorkflowProgressComment,
     )
+
+    payload = state.payload_subset or {}
+    pr_number = int(payload.get("pr_number") or 0)
+    if pr_number <= 0:
+        raise RuntimeError(
+            f"RunState.payload_subset for run {state.run_id!r} is missing pr_number"
+        )
+    owner, repo = _resolve_owner_repo(state)
+    progress_comment_id = int(payload.get("progress_comment_id") or 0)
+    progress_run_id = str(payload.get("progress_run_id") or "")
+    return WorkflowProgressComment(
+        repo_handle,
+        owner,
+        repo,
+        pr_number,
+        workflow=workflow,
+        requester_login=str(payload.get("requester") or ""),
+        review_reply_target=review_reply_target,
+        comment_id=progress_comment_id or None,
+        run_id=progress_run_id or None,
+    )
+
+
+def _record_session_link_safely(progress: Any, run: Any) -> None:
+    """Wrap :func:`record_run_session_link` so per-run failures stay local.
+
+    The cron poller already absorbs exceptions raised by the
+    ``non_terminal_handler``, but ``record_run_session_link`` itself is
+    intentionally tolerant of transient GitHub failures (it logs and
+    moves on). This wrapper keeps the contract identical between the
+    GHA ``on_poll`` path and the cron drain path.
+    """
+    from oz_workflows.helpers import (  # type: ignore[import-not-found]
+        record_run_session_link,
+    )
+
+    try:
+        record_run_session_link(progress, run)
+    except Exception:
+        logger.exception(
+            "record_run_session_link failed for progress comment on %s/%s issue #%s",
+            getattr(progress, "owner", ""),
+            getattr(progress, "repo", ""),
+            getattr(progress, "issue_number", 0),
+        )
+
+
+def _resolve_review_reply_target_for_state(
+    state: RunState, repo_handle: Any
+) -> tuple[Any, int] | None:
+    """Reconstruct the review-thread reply target stashed by the builder.
+
+    The respond-to-pr-comment builder runs against an inline review
+    comment and stashes the trigger comment id under
+    ``review_reply_target_id``. The cron poller can rebuild the
+    ``WorkflowProgressComment`` against the same review thread by
+    pairing that id with the PR handle. ``None`` falls back to issue-
+    level commenting.
+    """
+    payload = state.payload_subset or {}
+    review_reply_target_id = int(payload.get("review_reply_target_id") or 0)
+    if review_reply_target_id <= 0:
+        return None
+    pr_number = int(payload.get("pr_number") or 0)
+    if pr_number <= 0:
+        return None
+    pr = repo_handle.get_pull(pr_number)
+    return (pr, review_reply_target_id)
+
+
+def _report_workflow_error_with_progress(progress: Any) -> None:
+    """Wrap :meth:`WorkflowProgressComment.report_error` and absorb errors."""
+    try:
+        progress.report_error()
+    except Exception:
+        logger.exception(
+            "Failed to update workflow error comment for %s on issue #%s in %s/%s",
+            getattr(progress, "workflow", ""),
+            getattr(progress, "issue_number", 0),
+            getattr(progress, "owner", ""),
+            getattr(progress, "repo", ""),
+        )
+
+
+def build_review_handlers(github_client_factory: GithubClientFactory) -> WorkflowHandlers:
+    """Return :class:`WorkflowHandlers` for ``review-pull-request``."""
+    from oz_workflows.artifacts import load_review_artifact  # type: ignore[import-not-found]
     from scripts.review_pr import apply_review_result  # type: ignore[import-not-found]
 
     def loader(run_id: str) -> dict[str, Any]:
         return load_review_artifact(run_id)
 
     def applier(*, state: RunState, result: Mapping[str, Any]) -> None:
-        owner, repo = _resolve_owner_repo(state)
         client = _client_factory(state.installation_id, github_client_factory)
         repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_REVIEW_PR
+        )
         # The poller does not give us the original ``RunItem``; the
         # apply helpers only read ``run_id`` and ``session_link`` so an
         # adapter object suffices.
-        run_adapter = type("CronRunAdapter", (), {"run_id": state.run_id, "session_link": ""})()
+        run_adapter = type(
+            "CronRunAdapter",
+            (),
+            {"run_id": state.run_id, "session_link": progress.session_link},
+        )()
         try:
             apply_review_result(
                 repo_handle,
                 context=state.payload_subset,
                 run=run_adapter,
                 result=dict(result),
+                progress=progress,
             )
         except Exception:
-            _report_workflow_error(
-                repo_handle,
-                state=state,
-                workflow=WORKFLOW_REVIEW_PR,
-            )
+            _report_workflow_error_with_progress(progress)
             raise
 
     def failure(*, state: RunState, run: Any) -> None:
-        owner, repo = _resolve_owner_repo(state)
         client = _client_factory(state.installation_id, github_client_factory)
         repo_handle = client.get_repo(state.repo)
-        _report_workflow_error(
-            repo_handle,
-            state=state,
-            workflow=WORKFLOW_REVIEW_PR,
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_REVIEW_PR
         )
+        _record_session_link_safely(progress, run)
+        _report_workflow_error_with_progress(progress)
+
+    def non_terminal(*, state: RunState, run: Any) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_REVIEW_PR
+        )
+        _record_session_link_safely(progress, run)
 
     return WorkflowHandlers(
         artifact_loader=loader,
         result_applier=applier,
         failure_handler=failure,
+        non_terminal_handler=non_terminal,
     )
 
 
@@ -113,7 +233,6 @@ def build_respond_handlers(
     github_client_factory: GithubClientFactory,
 ) -> WorkflowHandlers:
     """Return :class:`WorkflowHandlers` for ``respond-to-pr-comment``."""
-    from oz_workflows.helpers import WorkflowProgressComment  # type: ignore[import-not-found]
     from scripts.respond_to_pr_comment import (  # type: ignore[import-not-found]
         apply_pr_comment_result,
     )
@@ -127,13 +246,25 @@ def build_respond_handlers(
         return {}
 
     def applier(*, state: RunState, result: Mapping[str, Any]) -> None:
-        owner, repo = _resolve_owner_repo(state)
         client = _client_factory(state.installation_id, github_client_factory)
         repo_handle = client.get_repo(state.repo)
+        review_reply_target = _resolve_review_reply_target_for_state(
+            state, repo_handle
+        )
+        progress = _reconstruct_progress(
+            repo_handle,
+            state=state,
+            workflow=WORKFLOW_RESPOND_TO_PR_COMMENT,
+            review_reply_target=review_reply_target,
+        )
         run_adapter = type(
             "CronRunAdapter",
             (),
-            {"run_id": state.run_id, "session_link": "", "created_at": None},
+            {
+                "run_id": state.run_id,
+                "session_link": progress.session_link,
+                "created_at": None,
+            },
         )()
         try:
             apply_pr_comment_result(
@@ -141,29 +272,46 @@ def build_respond_handlers(
                 context=state.payload_subset,
                 run=run_adapter,
                 client=client,
+                progress=progress,
             )
         except Exception:
-            _report_workflow_error(
-                repo_handle,
-                state=state,
-                workflow=WORKFLOW_RESPOND_TO_PR_COMMENT,
-            )
+            _report_workflow_error_with_progress(progress)
             raise
 
     def failure(*, state: RunState, run: Any) -> None:
-        owner, repo = _resolve_owner_repo(state)
         client = _client_factory(state.installation_id, github_client_factory)
         repo_handle = client.get_repo(state.repo)
-        _report_workflow_error(
+        review_reply_target = _resolve_review_reply_target_for_state(
+            state, repo_handle
+        )
+        progress = _reconstruct_progress(
             repo_handle,
             state=state,
             workflow=WORKFLOW_RESPOND_TO_PR_COMMENT,
+            review_reply_target=review_reply_target,
         )
+        _record_session_link_safely(progress, run)
+        _report_workflow_error_with_progress(progress)
+
+    def non_terminal(*, state: RunState, run: Any) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        review_reply_target = _resolve_review_reply_target_for_state(
+            state, repo_handle
+        )
+        progress = _reconstruct_progress(
+            repo_handle,
+            state=state,
+            workflow=WORKFLOW_RESPOND_TO_PR_COMMENT,
+            review_reply_target=review_reply_target,
+        )
+        _record_session_link_safely(progress, run)
 
     return WorkflowHandlers(
         artifact_loader=loader,
         result_applier=applier,
         failure_handler=failure,
+        non_terminal_handler=non_terminal,
     )
 
 
@@ -174,7 +322,6 @@ def build_verify_handlers(
     from oz_workflows.artifacts import (  # type: ignore[import-not-found]
         load_run_artifact,
     )
-    from oz_workflows.helpers import WorkflowProgressComment  # type: ignore[import-not-found]
     from oz_workflows.verification import (  # type: ignore[import-not-found]
         list_downloadable_verification_artifacts,
     )
@@ -187,13 +334,23 @@ def build_verify_handlers(
         return load_run_artifact(run_id, filename=VERIFICATION_REPORT_FILENAME)
 
     def applier(*, state: RunState, result: Mapping[str, Any]) -> None:
-        owner, repo = _resolve_owner_repo(state)
         client = _client_factory(state.installation_id, github_client_factory)
         repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_VERIFY_PR_COMMENT
+        )
         # The /oz-verify path renders the report into the progress
         # comment as soon as the run terminates; other reviewer-useful
         # artifacts (screenshots, logs, …) are linked via session.
-        run_adapter = type("CronRunAdapter", (), {"run_id": state.run_id, "session_link": "", "artifacts": None})()
+        run_adapter = type(
+            "CronRunAdapter",
+            (),
+            {
+                "run_id": state.run_id,
+                "session_link": progress.session_link,
+                "artifacts": None,
+            },
+        )()
         try:
             apply_verification_result(
                 repo_handle,
@@ -201,29 +358,34 @@ def build_verify_handlers(
                 run=run_adapter,
                 result=dict(result),
                 artifacts=[],
+                progress=progress,
             )
         except Exception:
-            _report_workflow_error(
-                repo_handle,
-                state=state,
-                workflow=WORKFLOW_VERIFY_PR_COMMENT,
-            )
+            _report_workflow_error_with_progress(progress)
             raise
 
     def failure(*, state: RunState, run: Any) -> None:
-        owner, repo = _resolve_owner_repo(state)
         client = _client_factory(state.installation_id, github_client_factory)
         repo_handle = client.get_repo(state.repo)
-        _report_workflow_error(
-            repo_handle,
-            state=state,
-            workflow=WORKFLOW_VERIFY_PR_COMMENT,
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_VERIFY_PR_COMMENT
         )
+        _record_session_link_safely(progress, run)
+        _report_workflow_error_with_progress(progress)
+
+    def non_terminal(*, state: RunState, run: Any) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_VERIFY_PR_COMMENT
+        )
+        _record_session_link_safely(progress, run)
 
     return WorkflowHandlers(
         artifact_loader=loader,
         result_applier=applier,
         failure_handler=failure,
+        non_terminal_handler=non_terminal,
     )
 
 
@@ -240,73 +402,51 @@ def build_enforce_handlers(
         return poll_for_artifact(run_id, filename="issue_association.json")
 
     def applier(*, state: RunState, result: Mapping[str, Any]) -> None:
-        owner, repo = _resolve_owner_repo(state)
         client = _client_factory(state.installation_id, github_client_factory)
         repo_handle = client.get_repo(state.repo)
-        run_adapter = type("CronRunAdapter", (), {"run_id": state.run_id, "session_link": ""})()
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_ENFORCE_PR_ISSUE_STATE
+        )
+        run_adapter = type(
+            "CronRunAdapter",
+            (),
+            {"run_id": state.run_id, "session_link": progress.session_link},
+        )()
         try:
             apply_issue_association_result(
                 repo_handle,
                 context=state.payload_subset,
                 run=run_adapter,
                 result=dict(result),
+                progress=progress,
             )
         except Exception:
-            _report_workflow_error(
-                repo_handle,
-                state=state,
-                workflow=WORKFLOW_ENFORCE_PR_ISSUE_STATE,
-            )
+            _report_workflow_error_with_progress(progress)
             raise
 
     def failure(*, state: RunState, run: Any) -> None:
-        owner, repo = _resolve_owner_repo(state)
         client = _client_factory(state.installation_id, github_client_factory)
         repo_handle = client.get_repo(state.repo)
-        _report_workflow_error(
-            repo_handle,
-            state=state,
-            workflow=WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_ENFORCE_PR_ISSUE_STATE
         )
+        _record_session_link_safely(progress, run)
+        _report_workflow_error_with_progress(progress)
+
+    def non_terminal(*, state: RunState, run: Any) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_ENFORCE_PR_ISSUE_STATE
+        )
+        _record_session_link_safely(progress, run)
 
     return WorkflowHandlers(
         artifact_loader=loader,
         result_applier=applier,
         failure_handler=failure,
+        non_terminal_handler=non_terminal,
     )
-
-
-def _report_workflow_error(repo_handle: Any, *, state: RunState, workflow: str) -> None:
-    """Best-effort: report a workflow-error progress comment on the originating PR."""
-    from oz_workflows.helpers import WorkflowProgressComment  # type: ignore[import-not-found]
-
-    payload = state.payload_subset or {}
-    pr_number = int(payload.get("pr_number") or 0)
-    if pr_number <= 0:
-        logger.warning(
-            "Skipping report_workflow_error for run %s; payload_subset has no pr_number",
-            state.run_id,
-        )
-        return
-    owner, repo = _resolve_owner_repo(state)
-    requester = str(payload.get("requester") or "")
-    progress = WorkflowProgressComment(
-        repo_handle,
-        owner,
-        repo,
-        pr_number,
-        workflow=workflow,
-        requester_login=requester,
-    )
-    try:
-        progress.report_error()
-    except Exception:
-        logger.exception(
-            "Failed to post workflow error comment for %s on PR #%s in %s",
-            workflow,
-            pr_number,
-            state.repo,
-        )
 
 
 def build_handler_registry(

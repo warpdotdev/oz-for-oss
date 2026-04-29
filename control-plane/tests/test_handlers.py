@@ -79,9 +79,28 @@ class _HandlerTestBase(unittest.TestCase):
         artifacts.load_review_artifact = MagicMock(return_value={"summary": "ok"})  # type: ignore[attr-defined]
         artifacts.load_run_artifact = MagicMock(return_value={"overall_status": "passed"})  # type: ignore[attr-defined]
         artifacts.poll_for_artifact = MagicMock(return_value={"matched": True, "issue_number": 1})  # type: ignore[attr-defined]
+        # Track every reconstructed progress comment so individual
+        # tests can assert ``complete`` / ``replace_body`` /
+        # ``report_error`` were invoked on the right instance.
+        self.progress_instances: list[MagicMock] = []
+
+        def _progress_factory(*args: Any, **kwargs: Any) -> MagicMock:
+            instance = MagicMock(
+                comment_id=kwargs.get("comment_id") or 0,
+                run_id=kwargs.get("run_id") or "",
+                session_link=kwargs.get("session_link") or "",
+                workflow=kwargs.get("workflow") or "",
+                owner=args[1] if len(args) > 1 else "",
+                repo=args[2] if len(args) > 2 else "",
+                issue_number=args[3] if len(args) > 3 else 0,
+            )
+            self.progress_instances.append(instance)
+            return instance
+
         helpers.WorkflowProgressComment = MagicMock(  # type: ignore[attr-defined]
-            return_value=MagicMock(report_error=MagicMock())
+            side_effect=_progress_factory
         )
+        helpers.record_run_session_link = MagicMock()  # type: ignore[attr-defined]
         verification.list_downloadable_verification_artifacts = MagicMock(  # type: ignore[attr-defined]
             return_value=[]
         )
@@ -135,7 +154,17 @@ class ReviewHandlersTest(_HandlerTestBase):
         github_client.get_repo.return_value = repo_handle
         handlers = build_review_handlers(_factory(github_client))
 
-        state = _state("review-pull-request")
+        state = _state(
+            "review-pull-request",
+            payload_subset={
+                "owner": "acme",
+                "repo": "widgets",
+                "pr_number": 7,
+                "requester": "alice",
+                "progress_comment_id": 8888,
+                "progress_run_id": "run-hex",
+            },
+        )
         handlers.result_applier(state=state, result={"summary": "looks good"})
 
         from scripts.review_pr import apply_review_result  # type: ignore[import-not-found]
@@ -144,6 +173,12 @@ class ReviewHandlersTest(_HandlerTestBase):
         kwargs = apply_review_result.call_args.kwargs
         self.assertIs(kwargs["context"], state.payload_subset)
         self.assertEqual(kwargs["result"], {"summary": "looks good"})
+        # The result_applier must hand a reconstructed progress
+        # comment to ``apply_review_result`` so the final ``complete``
+        # call lands on the same comment posted by the builder.
+        self.assertIs(kwargs["progress"], self.progress_instances[-1])
+        self.assertEqual(self.progress_instances[-1].comment_id, 8888)
+        self.assertEqual(self.progress_instances[-1].run_id, "run-hex")
 
     def test_failure_handler_posts_workflow_error(self) -> None:
         from lib.handlers import build_review_handlers
@@ -153,12 +188,27 @@ class ReviewHandlersTest(_HandlerTestBase):
         github_client.get_repo.return_value = repo_handle
         handlers = build_review_handlers(_factory(github_client))
 
-        progress = MagicMock(name="progress")
-        sys.modules["oz_workflows.helpers"].WorkflowProgressComment.return_value = progress  # type: ignore[attr-defined]
-
         state = _state("review-pull-request")
         handlers.failure_handler(state=state, run=MagicMock(state="FAILED"))
-        progress.report_error.assert_called_once()
+        # The failure handler reconstructs the progress comment and
+        # uses it to surface the error message in-place.
+        self.assertEqual(len(self.progress_instances), 1)
+        self.progress_instances[0].report_error.assert_called_once()
+
+    def test_non_terminal_handler_records_session_link(self) -> None:
+        from lib.handlers import build_review_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_review_handlers(_factory(github_client))
+
+        state = _state("review-pull-request")
+        run = MagicMock(state="RUNNING", session_link="https://app.warp.dev/run/abc", run_id="oz-run-123")
+        handlers.non_terminal_handler(state=state, run=run)
+        helpers = sys.modules["oz_workflows.helpers"]
+        helpers.record_run_session_link.assert_called_once_with(  # type: ignore[attr-defined]
+            self.progress_instances[-1], run
+        )
 
 
 class RespondHandlersTest(_HandlerTestBase):
@@ -177,7 +227,8 @@ class RespondHandlersTest(_HandlerTestBase):
         from lib.handlers import build_respond_handlers
 
         github_client = MagicMock()
-        github_client.get_repo.return_value = MagicMock(name="repo")
+        repo_handle = MagicMock(name="repo")
+        github_client.get_repo.return_value = repo_handle
         handlers = build_respond_handlers(_factory(github_client))
 
         state = _state(
@@ -190,6 +241,8 @@ class RespondHandlersTest(_HandlerTestBase):
                 "trigger_kind": "review",
                 "review_reply_target_id": 999,
                 "requester": "alice",
+                "progress_comment_id": 6543,
+                "progress_run_id": "run-pr-comment-hex",
             },
         )
         handlers.result_applier(state=state, result={})
@@ -201,6 +254,12 @@ class RespondHandlersTest(_HandlerTestBase):
         kwargs = apply_pr_comment_result.call_args.kwargs
         self.assertIs(kwargs["context"], state.payload_subset)
         self.assertIs(kwargs["client"], github_client)
+        self.assertIs(kwargs["progress"], self.progress_instances[-1])
+        self.assertEqual(self.progress_instances[-1].comment_id, 6543)
+        # The handler resolves the review-reply target so the
+        # progress comment edits the inline review thread instead of
+        # posting onto the PR conversation.
+        repo_handle.get_pull.assert_called_once_with(7)
 
 
 class VerifyHandlersTest(_HandlerTestBase):
@@ -236,6 +295,7 @@ class VerifyHandlersTest(_HandlerTestBase):
         apply_verification_result.assert_called_once()
         kwargs = apply_verification_result.call_args.kwargs
         self.assertEqual(kwargs["result"], {"overall_status": "passed"})
+        self.assertIs(kwargs["progress"], self.progress_instances[-1])
 
 
 class EnforceHandlersTest(_HandlerTestBase):
@@ -269,6 +329,7 @@ class EnforceHandlersTest(_HandlerTestBase):
         apply_issue_association_result.assert_called_once()
         kwargs = apply_issue_association_result.call_args.kwargs
         self.assertEqual(kwargs["result"], {"matched": True, "issue_number": 1})
+        self.assertIs(kwargs["progress"], self.progress_instances[-1])
 
 
 class HandlerRegistryTest(_HandlerTestBase):
