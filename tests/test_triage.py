@@ -4,23 +4,33 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import MagicMock
 
 # Ensure the repo root is on ``sys.path`` so the ``lib.scripts`` /
 # ``lib.oz_workflows`` packages resolve when this test runs under
 # ``python -m unittest discover -s tests``.
 from . import conftest  # noqa: F401
 from lib.scripts.triage_new_issues import (
+    COMMENT_TYPE_RESPONSE,
+    COMMENT_TYPE_TRIAGE,
+    RESPONSE_DETAILS_SUMMARY,
+    RESPONSE_FALLBACK_BODY,
     TRIAGE_DISCLAIMER,
     _lowercase_first,
     _record_triage_session_link,
     apply_triage_result,
+    apply_triage_result_for_dispatch,
+    build_response_comment_body,
     build_triage_prompt,
     build_duplicate_section,
     build_follow_up_section,
     build_question_reasoning_section,
     build_statements_section,
+    extract_comment_type,
     extract_duplicate_of,
     extract_follow_up_questions,
+    extract_response_body,
+    extract_response_details,
     extract_statements,
     _follow_up_comment_metadata,
     _duplicate_comment_metadata,
@@ -1275,6 +1285,275 @@ class TriageHeuristicsPromptTest(unittest.TestCase):
         self.assertNotIn("area:keyboard-layout", heuristics)
         self.assertNotIn("release branch", heuristics)
         self.assertNotIn("Warpify", heuristics)
+
+
+class ExtractCommentTypeTest(unittest.TestCase):
+    """``extract_comment_type`` discriminates between the two issue
+    comment shapes the workflow renders."""
+
+    def test_defaults_to_triage_for_missing_field(self) -> None:
+        # Backwards compatibility: payloads predating ``comment_type``
+        # must continue to render through the existing triage shape so
+        # the workflow stays drop-in compatible with older agents.
+        self.assertEqual(extract_comment_type({}), COMMENT_TYPE_TRIAGE)
+
+    def test_defaults_to_triage_for_non_string(self) -> None:
+        cases = [
+            ("none", {"comment_type": None}),
+            ("int", {"comment_type": 1}),
+            ("list", {"comment_type": ["response"]}),
+            ("dict", {"comment_type": {"value": "response"}}),
+        ]
+        for label, payload in cases:
+            with self.subTest(label=label):
+                self.assertEqual(
+                    extract_comment_type(payload), COMMENT_TYPE_TRIAGE
+                )
+
+    def test_accepts_response_value(self) -> None:
+        self.assertEqual(
+            extract_comment_type({"comment_type": "response"}),
+            COMMENT_TYPE_RESPONSE,
+        )
+
+    def test_accepts_response_value_case_insensitively(self) -> None:
+        for raw in ("RESPONSE", " Response ", "reSpOnSe"):
+            with self.subTest(raw=raw):
+                self.assertEqual(
+                    extract_comment_type({"comment_type": raw}),
+                    COMMENT_TYPE_RESPONSE,
+                )
+
+    def test_accepts_explicit_triage_value(self) -> None:
+        self.assertEqual(
+            extract_comment_type({"comment_type": "triage"}),
+            COMMENT_TYPE_TRIAGE,
+        )
+
+    def test_unknown_values_fall_back_to_triage(self) -> None:
+        # Typos should never produce a half-rendered response. Anything
+        # that isn't exactly the response value renders as a triage.
+        for raw in ("", "   ", "comment", "reply", "answer"):
+            with self.subTest(raw=raw):
+                self.assertEqual(
+                    extract_comment_type({"comment_type": raw}),
+                    COMMENT_TYPE_TRIAGE,
+                )
+
+
+class ExtractResponseFieldsTest(unittest.TestCase):
+    """``extract_response_body`` and ``extract_response_details`` clean
+    up the agent's reply fields without raising on malformed input."""
+
+    def test_response_body_extraction_table(self) -> None:
+        cases = [
+            ("trims_string", {"response_body": "  Hi.  "}, "Hi."),
+            ("missing_field", {}, ""),
+            ("none", {"response_body": None}, ""),
+            ("non_string", {"response_body": ["a"]}, ""),
+            ("whitespace_only", {"response_body": "  \n\t  "}, ""),
+            (
+                "preserves_inner_whitespace",
+                {"response_body": "line one\n\nline two"},
+                "line one\n\nline two",
+            ),
+        ]
+        for label, payload, expected in cases:
+            with self.subTest(label=label):
+                self.assertEqual(extract_response_body(payload), expected)
+
+    def test_response_details_extraction_table(self) -> None:
+        cases = [
+            ("trims_string", {"details": "  See `lib/foo.py`.  "}, "See `lib/foo.py`."),
+            ("missing_field", {}, ""),
+            ("none", {"details": None}, ""),
+            ("non_string", {"details": {"x": 1}}, ""),
+            ("whitespace_only", {"details": "\n\t "}, ""),
+        ]
+        for label, payload, expected in cases:
+            with self.subTest(label=label):
+                self.assertEqual(extract_response_details(payload), expected)
+
+
+class BuildResponseCommentBodyTest(unittest.TestCase):
+    """``build_response_comment_body`` renders the lighter response
+    shape used when the agent answers a follow-up question on an
+    already-triaged issue."""
+
+    def test_renders_user_facing_body_above_the_fold(self) -> None:
+        body = build_response_comment_body(
+            response_body="Yes, the import has supported keyword args since v2.0.",
+            details="",
+        )
+        self.assertIn(
+            "Yes, the import has supported keyword args since v2.0.",
+            body,
+        )
+        # The disclaimer is always appended.
+        self.assertIn(TRIAGE_DISCLAIMER, body)
+        # No reasoning expando when ``details`` is empty.
+        self.assertNotIn("<details>", body)
+        self.assertNotIn(RESPONSE_DETAILS_SUMMARY, body)
+
+    def test_renders_reasoning_expando_when_details_present(self) -> None:
+        body = build_response_comment_body(
+            response_body="Yes — supported since v2.0.",
+            details="See `lib/foo.py:42` and the v2.0 changelog entry.",
+        )
+        # The reasoning expando wraps the maintainer-only details.
+        self.assertIn("<details>", body)
+        self.assertIn(f"<summary>{RESPONSE_DETAILS_SUMMARY}</summary>", body)
+        self.assertIn("`lib/foo.py:42`", body)
+        # The user-facing reply still lands above the fold (before the
+        # reasoning expando).
+        self.assertLess(
+            body.index("Yes — supported since v2.0."),
+            body.index("<details>"),
+        )
+
+    def test_includes_session_link_when_provided(self) -> None:
+        body = build_response_comment_body(
+            response_body="Sure thing.",
+            details="",
+            session_link="https://app.warp.dev/session/abc",
+        )
+        # The session link is rendered as the same markdown the triage
+        # comment uses so both modes look consistent.
+        self.assertIn(
+            "[the triage session on Warp](https://app.warp.dev/session/abc)",
+            body,
+        )
+
+    def test_falls_back_to_placeholder_when_response_body_empty(self) -> None:
+        # When the agent returns an empty / whitespace-only
+        # ``response_body`` we still need a reader-facing reply so the
+        # comment doesn't render as just the disclaimer.
+        body = build_response_comment_body(
+            response_body="   ",
+            details="This is the reasoning.",
+        )
+        self.assertIn(RESPONSE_FALLBACK_BODY, body)
+        # Reasoning still renders in the expando.
+        self.assertIn("This is the reasoning.", body)
+
+    def test_does_not_render_triage_sections(self) -> None:
+        body = build_response_comment_body(
+            response_body="Short answer.",
+            details="Long answer.",
+        )
+        # The response shape must not pull in any of the triage shape's
+        # markers — no maintainer-details summary, no follow-up text,
+        # no duplicate-detection text.
+        self.assertNotIn("Maintainer details", body)
+        self.assertNotIn("follow-up questions", body)
+        self.assertNotIn("overlap with existing issues", body)
+        self.assertNotIn("Here's what I found while triaging", body)
+
+
+class ApplyTriageResultForDispatchResponseModeTest(unittest.TestCase):
+    """``apply_triage_result_for_dispatch`` dispatches on
+    ``comment_type`` so the workflow can return a triage comment or a
+    lighter issue-thread response."""
+
+    def _context(self, **overrides: object) -> dict[str, object]:
+        base: dict[str, object] = {
+            "owner": "acme",
+            "repo": "widgets",
+            "issue_number": 42,
+            "is_retriage": True,
+            "requester": "alice",
+            "configured_labels": {},
+            "repo_label_names": [],
+            "issue_labels": ["triaged", "ready-to-implement"],
+        }
+        base.update(overrides)
+        return base
+
+    def test_response_skips_label_changes_and_renders_response_body(self) -> None:
+        github = FakeTriageGitHubClient()
+        progress = MagicMock()
+        progress.session_link = ""
+        result = {
+            "comment_type": "response",
+            "response_body": "Yes — the helper has accepted keyword args since v2.0.",
+            "details": "See `lib/foo.py:42` and the v2.0 changelog entry.",
+        }
+        apply_triage_result_for_dispatch(
+            github,
+            context=self._context(),
+            run=None,
+            result=result,
+            progress=progress,
+        )
+        # Issue lifecycle labels must stay exactly as the maintainer
+        # left them — the response path is purely conversational.
+        self.assertEqual(github.added_labels, [])
+        self.assertEqual(github.removed_labels, [])
+        progress.replace_body.assert_called_once()
+        rendered = progress.replace_body.call_args.args[0]
+        self.assertIn(
+            "Yes — the helper has accepted keyword args since v2.0.",
+            rendered,
+        )
+        self.assertIn("`lib/foo.py:42`", rendered)
+        self.assertIn(f"<summary>{RESPONSE_DETAILS_SUMMARY}</summary>", rendered)
+        self.assertIn(TRIAGE_DISCLAIMER, rendered)
+        # Triage shape markers must not leak into the response comment.
+        self.assertNotIn("Maintainer details", rendered)
+        self.assertNotIn("follow-up questions", rendered)
+
+    def test_response_propagates_progress_session_link(self) -> None:
+        github = FakeTriageGitHubClient()
+        progress = MagicMock()
+        progress.session_link = "https://app.warp.dev/session/zzz"
+        result = {
+            "comment_type": "response",
+            "response_body": "Yes.",
+            "details": "",
+        }
+        apply_triage_result_for_dispatch(
+            github,
+            context=self._context(),
+            run=None,
+            result=result,
+            progress=progress,
+        )
+        rendered = progress.replace_body.call_args.args[0]
+        self.assertIn(
+            "[the triage session on Warp](https://app.warp.dev/session/zzz)",
+            rendered,
+        )
+
+    def test_unknown_comment_type_falls_back_to_triage(self) -> None:
+        # An unrecognized ``comment_type`` should not silently become a
+        # response; it must render as a triage comment so any required
+        # label changes still go through.
+        github = FakeTriageGitHubClient()
+        progress = MagicMock()
+        progress.session_link = ""
+        result = {
+            "comment_type": "unknown",
+            "summary": "the bot reproduced the failure",
+            "labels": ["bug"],
+            "issue_body": "## Triage summary\nDetails.",
+        }
+        apply_triage_result_for_dispatch(
+            github,
+            context=self._context(
+                configured_labels={
+                    "bug": {"color": "D73A4A", "description": "bug"},
+                    "triaged": {"color": "0E8A16", "description": "done"},
+                },
+                repo_label_names=["bug", "triaged"],
+                issue_labels=[],
+            ),
+            run=None,
+            result=result,
+            progress=progress,
+        )
+        # Labels were applied (proves it took the triage branch).
+        self.assertIn("bug", github.added_labels)
+        self.assertIn("triaged", github.added_labels)
 
 
 class FakeTriageComment:

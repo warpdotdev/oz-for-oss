@@ -35,9 +35,14 @@ Webhook coverage today:
   triage pass).
 - ``issue_comment`` events on a plain (non-PR) issue route to
   ``triage-new-issues`` when the comment carries an ``@oz-agent``
-  mention (regardless of triaged state) or when the issue carries
-  the ``needs-info`` label and the comment is the original reporter
-  replying without a mention.
+  mention (regardless of triaged / needs-info / ready-to-implement
+  state) or when the issue carries the ``needs-info`` label and the
+  comment is the original reporter replying without a mention. The
+  triage workflow then picks the comment shape it returns from the
+  ``comment_type`` discriminator on its result payload — a fresh
+  triage emits the standard structured comment plus label changes,
+  and a follow-up question on an already-triaged issue emits the
+  lighter response-style comment without touching labels.
 
 The ``respond-to-triaged-issue-comment`` GitHub Actions workflow may
 still fire on ``@oz-agent`` mentions for ``triaged`` issues that are
@@ -163,13 +168,20 @@ def _route_plain_issue_comment(
     """Route an ``issue_comment`` event on a plain (non-PR) issue.
 
     Triage runs are dispatched on every ``@oz-agent`` mention, regardless
-    of the issue's lifecycle stage. Issues that have already progressed
-    to ``ready-to-spec`` / ``ready-to-implement`` would otherwise fall
-    into a routing gap: the legacy ``respond-to-triaged-issue-comment``
-    workflow excludes them, and any new context the reporter or a
-    maintainer adds in a comment would never be incorporated into the
-    issue's triage state. Routing every mention to (re-)triage closes
-    that gap.
+    of the issue's lifecycle stage — ``triaged``,
+    ``ready-to-implement``, ``ready-to-spec``, or ``needs-info`` issues
+    all route to the triage workflow when a maintainer or reporter
+    pings the bot. The triage workflow itself decides whether to emit
+    a fresh triage comment (with labels, follow-ups, and duplicate
+    detection) or a lighter ``response``-type comment that just answers
+    the question without changing the issue's lifecycle labels; the
+    routing layer does not need to make that distinction. Issues that
+    have already progressed to ``ready-to-spec`` / ``ready-to-implement``
+    would otherwise fall into a gap: the legacy
+    ``respond-to-triaged-issue-comment`` workflow excludes them and any
+    new context a maintainer adds would never be acknowledged. Routing
+    every mention to the triage workflow closes that gap and lets the
+    workflow's ``comment_type`` discriminator pick the right reply.
 
     Replies from the original issue author on a ``needs-info`` issue
     (without an explicit mention) also trigger a re-triage so the bot
