@@ -57,6 +57,9 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+# Test-only dependencies. They are intentionally excluded from
+# `requirements.txt` so the Vercel function bundle stays lean.
+python -m pip install 'pytest>=8,<9' 'pytest-subtests>=0.13,<1'
 ```
 
 ### Run the test suites
