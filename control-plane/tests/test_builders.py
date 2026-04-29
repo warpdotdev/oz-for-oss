@@ -43,16 +43,43 @@ class _BuilderTestBase(unittest.TestCase):
 
     def setUp(self) -> None:
         super().setUp()
+        self._module_keys = [
+            "scripts",
+            "scripts.review_pr",
+            "scripts.respond_to_pr_comment",
+            "scripts.verify_pr_comment",
+            "scripts.enforce_pr_issue_state",
+            "oz_workflows",
+            "oz_workflows.helpers",
+        ]
         self._original_modules = {
-            key: sys.modules.get(key)
-            for key in [
-                "scripts",
-                "scripts.review_pr",
-                "scripts.respond_to_pr_comment",
-                "scripts.verify_pr_comment",
-                "scripts.enforce_pr_issue_state",
-            ]
+            key: sys.modules.get(key) for key in self._module_keys
         }
+        # The builders import :class:`WorkflowProgressComment` and the
+        # workflow-specific ``format_*_start_line`` helpers lazily to
+        # avoid pulling PyGithub into the test path. Stub the helper
+        # module so each test can drive the lifecycle without going
+        # through the production helper.
+        oz = _ensure_module("oz_workflows")
+        helpers = _ensure_module("oz_workflows.helpers")
+        oz.helpers = helpers  # type: ignore[attr-defined]
+        self.progress_instances: list[MagicMock] = []
+
+        def _progress_factory(*args: Any, **kwargs: Any) -> MagicMock:
+            instance = MagicMock(
+                comment_id=4242,
+                run_id="run-uuid-hex",
+                start=MagicMock(),
+            )
+            self.progress_instances.append(instance)
+            return instance
+
+        helpers.WorkflowProgressComment = MagicMock(  # type: ignore[attr-defined]
+            side_effect=_progress_factory
+        )
+        helpers.format_review_start_line = MagicMock(  # type: ignore[attr-defined]
+            return_value="I'm starting a first review of this pull request."
+        )
 
     def tearDown(self) -> None:
         for key, value in self._original_modules.items():
@@ -132,6 +159,12 @@ class BuildReviewRequestTest(_BuilderTestBase):
         self.assertEqual(request.payload_subset["pr_number"], 42)
         self.assertIn("pr_diff_text", request.payload_subset)
         github_client.get_repo.assert_called_once_with("acme/widgets")
+        # The builder must drive the WorkflowProgressComment lifecycle
+        # so the cron poller can reconstruct the same comment.
+        self.assertEqual(len(self.progress_instances), 1)
+        self.progress_instances[0].start.assert_called_once()
+        self.assertEqual(request.payload_subset["progress_comment_id"], 4242)
+        self.assertEqual(request.payload_subset["progress_run_id"], "run-uuid-hex")
 
     def test_raises_when_payload_missing_installation_id(self) -> None:
         from lib.builders import build_review_request
@@ -203,6 +236,11 @@ class BuildRespondRequestTest(_BuilderTestBase):
         self.assertEqual(request.payload_subset["trigger_comment_id"], 999)
         # The builder consumed the existing PR handle to gather context.
         repo.get_pull.assert_called_once_with(7)
+        # Progress lifecycle must be driven before dispatch.
+        self.assertEqual(len(self.progress_instances), 1)
+        self.progress_instances[0].start.assert_called_once_with("I'm starting")
+        self.assertEqual(request.payload_subset["progress_comment_id"], 4242)
+        self.assertEqual(request.payload_subset["progress_run_id"], "run-uuid-hex")
 
 
 class BuildVerifyRequestTest(_BuilderTestBase):
@@ -251,6 +289,10 @@ class BuildVerifyRequestTest(_BuilderTestBase):
         self.assertEqual(request.skill_name, "verify-pr")
         self.assertEqual(request.prompt, "VERIFY_PROMPT_BODY")
         self.assertEqual(request.payload_subset["pr_number"], 11)
+        self.assertEqual(len(self.progress_instances), 1)
+        self.progress_instances[0].start.assert_called_once()
+        self.assertEqual(request.payload_subset["progress_comment_id"], 4242)
+        self.assertEqual(request.payload_subset["progress_run_id"], "run-uuid-hex")
 
 
 class BuildEnforceRequestTest(_BuilderTestBase):
@@ -308,6 +350,11 @@ class BuildEnforceRequestTest(_BuilderTestBase):
         self.assertEqual(request.prompt, "ENFORCE_PROMPT_BODY")
         self.assertEqual(request.payload_subset["pr_number"], 21)
         self.assertEqual(request.payload_subset["change_kind"], "implementation")
+        # ``enforce_pr_state_synchronously`` already drove ``progress.start``
+        # for this workflow; the builder only needs to capture the
+        # resulting comment id (here returned by the MagicMock factory).
+        self.assertEqual(request.payload_subset["progress_comment_id"], 4242)
+        self.assertEqual(request.payload_subset["progress_run_id"], "run-uuid-hex")
 
     def test_raises_when_decision_is_not_need_cloud_match(self) -> None:
         from lib.builders import build_enforce_request

@@ -12,6 +12,16 @@ The builders are intentionally thin wrappers around the
 GitHub Actions entrypoints. Reusing those helpers keeps the cloud-mode
 prompt and the GitHub-state mutations (in :mod:`lib.handlers`)
 byte-for-byte identical with the legacy GitHub Actions paths.
+
+Each builder also drives the :class:`WorkflowProgressComment` lifecycle:
+it posts the workflow-specific "starting..." comment on the originating
+issue/PR before the run is dispatched and stashes the resulting
+``progress_comment_id`` (plus ``progress_run_id`` so the metadata
+marker stays stable) onto ``DispatchRequest.payload_subset``. The cron
+poller (see :mod:`lib.handlers`) reconstructs a
+:class:`WorkflowProgressComment` from those fields when it applies the
+result or reports a failure so each progress update edits the same
+comment that was posted at dispatch time.
 """
 
 from __future__ import annotations
@@ -33,6 +43,61 @@ from .routing import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _start_progress_comment(
+    *,
+    repo_handle: Any,
+    owner: str,
+    repo: str,
+    issue_number: int,
+    workflow: str,
+    start_line: str,
+    requester_login: str,
+    event_payload: Mapping[str, Any] | None = None,
+    review_reply_target: tuple[Any, int] | None = None,
+) -> tuple[int, str]:
+    """Post the workflow-specific "starting..." progress comment.
+
+    Returns a ``(progress_comment_id, progress_run_id)`` tuple the
+    builder stuffs into ``payload_subset`` so the cron poller can
+    reconstruct the same :class:`WorkflowProgressComment` instance when
+    the run terminates. ``progress_comment_id`` is ``0`` if the start
+    call could not produce an id (for example because the GitHub API
+    refused the post). The cron-side reconstruction tolerates a missing
+    id by falling back to the workflow-prefix comment lookup that
+    :class:`WorkflowProgressComment` already implements.
+    """
+    from oz_workflows.helpers import (  # type: ignore[import-not-found]
+        WorkflowProgressComment,
+    )
+
+    progress = WorkflowProgressComment(
+        repo_handle,
+        owner,
+        repo,
+        issue_number,
+        workflow=workflow,
+        event_payload=dict(event_payload or {}),
+        requester_login=requester_login,
+        review_reply_target=review_reply_target,
+    )
+    try:
+        progress.start(start_line)
+    except Exception:
+        # Failing to post the starting comment must not abort the
+        # dispatch — the cron poller's failure handler will surface
+        # the error to the user instead. Return whatever ids the
+        # constructor produced so the cron-side reconstruction can
+        # still rebuild the metadata marker.
+        logger.exception(
+            "Failed to post workflow-progress start comment for %s on issue #%s in %s/%s",
+            workflow,
+            issue_number,
+            owner,
+            repo,
+        )
+    return int(progress.comment_id or 0), str(progress.run_id or "")
 
 
 def _resolve_owner_repo(payload: Mapping[str, Any]) -> tuple[str, str, str]:
@@ -148,6 +213,9 @@ def build_review_request(
     workspace_path: Path | None = None,
 ) -> DispatchRequest:
     """Build the :class:`DispatchRequest` for a PR review run."""
+    from oz_workflows.helpers import (  # type: ignore[import-not-found]
+        format_review_start_line,
+    )
     from scripts.review_pr import (  # type: ignore[import-not-found]
         build_review_prompt_for_dispatch,
         gather_review_context,
@@ -168,7 +236,27 @@ def build_review_request(
         requester=requester,
         workspace_path=workspace_path or Path("/tmp"),
     )
+    is_rereview = trigger_source in {
+        "issue_comment",
+        "pull_request_review_comment",
+    }
+    progress_comment_id, progress_run_id = _start_progress_comment(
+        repo_handle=repo_handle,
+        owner=owner,
+        repo=repo,
+        issue_number=pr_number,
+        workflow=WORKFLOW_REVIEW_PR,
+        start_line=format_review_start_line(
+            spec_only=bool(context.get("spec_only")),
+            is_rereview=is_rereview,
+        ),
+        requester_login=requester,
+        event_payload=payload,
+    )
     prompt = build_review_prompt_for_dispatch(context)
+    payload_subset: dict[str, Any] = dict(context)
+    payload_subset["progress_comment_id"] = progress_comment_id
+    payload_subset["progress_run_id"] = progress_run_id
     return DispatchRequest(
         workflow=WORKFLOW_REVIEW_PR,
         repo=full_name,
@@ -177,7 +265,7 @@ def build_review_request(
         title=f"PR review #{pr_number}",
         skill_name=context["skill_name"],
         prompt=prompt,
-        payload_subset=dict(context),
+        payload_subset=payload_subset,
     )
 
 
@@ -216,7 +304,23 @@ def build_respond_request(
         client=github_client,
         pr=pr,
     )
+    progress_comment_id, progress_run_id = _start_progress_comment(
+        repo_handle=repo_handle,
+        owner=owner,
+        repo=repo,
+        issue_number=pr_number,
+        workflow=WORKFLOW_RESPOND_TO_PR_COMMENT,
+        start_line=str(
+            context.get("progress_start_line") or ""
+        ),
+        requester_login=requester,
+        event_payload=payload,
+        review_reply_target=review_reply_target,
+    )
     prompt = build_pr_comment_prompt(context)
+    payload_subset: dict[str, Any] = dict(context)
+    payload_subset["progress_comment_id"] = progress_comment_id
+    payload_subset["progress_run_id"] = progress_run_id
     return DispatchRequest(
         workflow=WORKFLOW_RESPOND_TO_PR_COMMENT,
         repo=full_name,
@@ -225,7 +329,7 @@ def build_respond_request(
         title=f"Respond to PR comment #{pr_number}",
         skill_name="implement-issue",
         prompt=prompt,
-        payload_subset=dict(context),
+        payload_subset=payload_subset,
     )
 
 
@@ -256,6 +360,19 @@ def build_verify_request(
         requester=requester,
         workspace_path=workspace_path or Path("/tmp"),
     )
+    progress_comment_id, progress_run_id = _start_progress_comment(
+        repo_handle=repo_handle,
+        owner=owner,
+        repo=repo,
+        issue_number=pr_number,
+        workflow=WORKFLOW_VERIFY_PR_COMMENT,
+        start_line=(
+            "I'm running `/oz-verify` for this pull request using the "
+            "repository's verification-enabled skills."
+        ),
+        requester_login=requester,
+        event_payload=payload,
+    )
     prompt = build_verification_prompt(
         owner=context["owner"],
         repo=context["repo"],
@@ -266,6 +383,9 @@ def build_verify_request(
         requester=context["requester"],
         verification_skills_text=context["verification_skills_text"],
     )
+    payload_subset: dict[str, Any] = dict(context)
+    payload_subset["progress_comment_id"] = progress_comment_id
+    payload_subset["progress_run_id"] = progress_run_id
     return DispatchRequest(
         workflow=WORKFLOW_VERIFY_PR_COMMENT,
         repo=full_name,
@@ -274,7 +394,7 @@ def build_verify_request(
         title=f"Verify PR #{pr_number}",
         skill_name="verify-pr",
         prompt=prompt,
-        payload_subset=dict(context),
+        payload_subset=payload_subset,
     )
 
 
@@ -290,8 +410,13 @@ def build_enforce_request(
     returns a ``need-cloud-match`` decision. The webhook handler runs
     the synchronous decision first (no agent run needed for the trivial
     cases) and only invokes this builder when the cloud agent is the
-    last resort.
+    last resort. The synchronous helper already posts the workflow's
+    "checking this PR for association" start line, so this builder only
+    needs to capture the resulting comment id for the cron poller.
     """
+    from oz_workflows.helpers import (  # type: ignore[import-not-found]
+        WorkflowProgressComment,
+    )
     from scripts.enforce_pr_issue_state import (  # type: ignore[import-not-found]
         EnforceContext,
         enforce_pr_state_synchronously,
@@ -303,13 +428,22 @@ def build_enforce_request(
     pr_number = _resolve_pr_number(payload)
     requester = _resolve_requester(payload)
     repo_handle = github_client.get_repo(full_name)
+    progress = WorkflowProgressComment(
+        repo_handle,
+        owner,
+        repo,
+        pr_number,
+        workflow=WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+        event_payload=dict(payload),
+        requester_login=requester,
+    )
     decision = enforce_pr_state_synchronously(
         repo_handle,
         owner=owner,
         repo=repo,
         pr_number=pr_number,
         requester=requester,
-        progress=None,
+        progress=progress,
     )
     if decision.action != "need-cloud-match":
         raise RuntimeError(
@@ -322,6 +456,9 @@ def build_enforce_request(
     prompt, _candidate_issues = gather_enforce_context(
         repo_handle, context=enforce_context
     )
+    payload_subset: dict[str, Any] = dict(enforce_context)
+    payload_subset["progress_comment_id"] = int(progress.comment_id or 0)
+    payload_subset["progress_run_id"] = str(progress.run_id or "")
     return DispatchRequest(
         workflow=WORKFLOW_ENFORCE_PR_ISSUE_STATE,
         repo=full_name,
@@ -330,7 +467,7 @@ def build_enforce_request(
         title=f"Associate PR #{pr_number} with ready issue",
         skill_name=None,
         prompt=prompt,
-        payload_subset=dict(enforce_context),
+        payload_subset=payload_subset,
     )
 
 
