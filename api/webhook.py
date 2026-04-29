@@ -40,6 +40,7 @@ from lib.dispatch import (
 from lib.routing import (
     RouteDecision,
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+    WORKFLOW_PLAN_APPROVED,
     route_event,
 )
 from lib.signatures import (
@@ -93,6 +94,28 @@ def _run_synchronous_enforce(
     return sync_enforcer(payload)
 
 
+def _run_synchronous_plan_approved(
+    payload: Mapping[str, Any],
+    *,
+    sync_plan_approved: Callable[[Mapping[str, Any]], dict[str, Any] | None] | None,
+) -> dict[str, Any] | None:
+    """Run the synchronous ``plan-approved`` path inside the webhook.
+
+    The handler posts the spec-approved comment, removes the
+    ``ready-to-spec`` label from the linked issue, and decides whether
+    a cloud-agent implementation run is needed.
+
+    Returns the synchronous outcome (``{"action": "synced" | "skipped", ...}``)
+    when no cloud agent is needed, or ``None`` to let the webhook fall
+    through to the dispatch path. Mirrors
+    :func:`_run_synchronous_enforce` so the handler treats the two
+    sync paths uniformly.
+    """
+    if sync_plan_approved is None:
+        return None
+    return sync_plan_approved(payload)
+
+
 def process_webhook_request(
     *,
     body: bytes,
@@ -105,6 +128,7 @@ def process_webhook_request(
     config_factory: Callable[[str, str], Mapping[str, Any]] | None = None,
     store: StateStore | None = None,
     sync_enforcer: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+    sync_plan_approved: Callable[[Mapping[str, Any]], dict[str, Any] | None] | None = None,
 ) -> WebhookResponse:
     """Validate a webhook delivery and dispatch the cloud agent run.
 
@@ -174,6 +198,29 @@ def process_webhook_request(
             return WebhookResponse(
                 status=202,
                 body={**base_body, "enforce": outcome},
+            )
+
+    # ``plan-approved`` follows the same hybrid pattern: the
+    # synchronous helper posts the spec-approved comment + removes
+    # the ``ready-to-spec`` label, and only the rare
+    # ``implementation-pending`` branch falls through to the dispatch
+    # path. The sync helper mutates *payload* to stash the resolved
+    # ``linked_issue_number`` so the dispatch builder reuses it.
+    if decision.workflow == WORKFLOW_PLAN_APPROVED:
+        try:
+            outcome = _run_synchronous_plan_approved(
+                payload, sync_plan_approved=sync_plan_approved
+            )
+        except Exception as exc:
+            logger.exception("Synchronous plan-approved run failed")
+            return WebhookResponse(
+                status=500,
+                body={**base_body, "error": f"plan-approved path failed: {exc}"},
+            )
+        if outcome is not None:
+            return WebhookResponse(
+                status=202,
+                body={**base_body, "plan_approved": outcome},
             )
 
     if builder_registry is None or runner is None or config_factory is None or store is None:
@@ -267,6 +314,7 @@ class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel requires this exac
             config_factory=wiring["config_factory"],
             store=wiring["store"],
             sync_enforcer=wiring["sync_enforcer"],
+            sync_plan_approved=wiring["sync_plan_approved"],
         )
         self._respond(response.status, response.body)
 
@@ -303,6 +351,9 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
     )
     from scripts.enforce_pr_issue_state import (  # type: ignore[import-not-found]
         enforce_pr_state_synchronously,
+    )
+    from scripts.plan_approved import (  # type: ignore[import-not-found]
+        apply_plan_approved_sync,
     )
 
     import httpx
@@ -427,12 +478,33 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
             "allow_review": decision.allow_review,
         }
 
+    def sync_plan_approved(
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        installation_id = int(
+            (payload.get("installation") or {}).get("id") or 0
+        )
+        full_name = str(
+            (payload.get("repository") or {}).get("full_name") or ""
+        )
+        if installation_id <= 0 or "/" not in full_name:
+            return {
+                "action": "skipped",
+                "reason": "missing installation_id or repository.full_name",
+            }
+        client = _mint_github_client(installation_id)
+        repo_handle = client.get_repo(full_name)
+        return apply_plan_approved_sync(
+            repo_handle, payload=payload, github_client=client
+        )
+
     return {
         "builder_registry": builder_registry,
         "runner": runner,
         "config_factory": config_factory,
         "store": build_state_store(),
         "sync_enforcer": sync_enforcer,
+        "sync_plan_approved": sync_plan_approved,
     }
 
 

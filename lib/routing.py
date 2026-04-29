@@ -10,17 +10,33 @@ comments, unsupported event types, or PRs that close without changes.
 The webhook is the sole delivery surface for the bot behavior that
 the control plane drives. The legacy GitHub Actions adapters that
 used to mirror these triggers (``create-spec-from-issue-local.yml``,
-``create-implementation-from-issue-local.yml``, etc.) are deleted as
-routing moves into this module so the webhook does not race the
+``create-implementation-from-issue-local.yml``,
+``trigger-implementation-on-plan-approved.yml``, etc.) are deleted
+as routing moves into this module so the webhook does not race the
 runner. The few remaining ``.github/workflows/`` entries cover
-repository-mutating helpers (plan-approval triggers,
-``comment-on-unready-assigned-issue``) that are not yet migrated.
+cron-driven feedback aggregators (``update-pr-review``,
+``update-triage``, ``update-dedupe``), the
+``comment-on-unready-assigned-issue`` complement of the
+webhook's ``issues.assigned`` route, and CI (``run-tests.yml``).
 
 Webhook coverage today:
 
-- ``pull_request`` events (``opened``, ``ready_for_review``,
-  ``review_requested``, ``synchronize``/``edited``, ``labeled``) route
-  to ``review-pull-request`` or ``enforce-pr-issue-state``.
+- ``pull_request`` events route as follows:
+
+  - ``opened`` (non-draft) and ``ready_for_review`` route to
+    ``review-pull-request``.
+  - ``review_requested`` routes to ``review-pull-request`` when
+    the requested reviewer is ``oz-agent``.
+  - ``synchronize`` and ``edited`` route to
+    ``enforce-pr-issue-state``.
+  - ``labeled`` routes to ``review-pull-request`` for the
+    ``oz-review`` label and to ``plan-approved`` for the
+    ``plan-approved`` label. The ``plan-approved`` workflow runs
+    its synchronous side effects (spec-approved comment,
+    ``ready-to-spec`` label removal) inline and falls through to
+    a ``create-implementation-from-issue`` cloud agent dispatch
+    when the linked issue carries ``ready-to-implement`` and
+    ``oz-agent`` is assigned.
 - ``pull_request_review_comment`` events route to
   ``review-pull-request`` (``/oz-review``), ``verify-pr-comment``
   (``/oz-verify``), or ``respond-to-pr-comment`` (``@oz-agent``).
@@ -77,9 +93,11 @@ WORKFLOW_ENFORCE_PR_ISSUE_STATE = "enforce-pr-issue-state"
 WORKFLOW_TRIAGE_NEW_ISSUES = "triage-new-issues"
 WORKFLOW_CREATE_SPEC_FROM_ISSUE = "create-spec-from-issue"
 WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE = "create-implementation-from-issue"
+WORKFLOW_PLAN_APPROVED = "plan-approved"
 
 OZ_AGENT_LOGIN = "oz-agent"
 OZ_REVIEW_LABEL = "oz-review"
+PLAN_APPROVED_LABEL = "plan-approved"
 TRIAGED_LABEL = "triaged"
 NEEDS_INFO_LABEL = "needs-info"
 READY_TO_SPEC_LABEL = "ready-to-spec"
@@ -358,6 +376,16 @@ def _route_pull_request(payload: dict[str, Any]) -> RouteDecision:
         label_name = ((payload.get("label") or {}).get("name") or "").strip()
         if label_name == OZ_REVIEW_LABEL:
             return RouteDecision(WORKFLOW_REVIEW_PR, "oz-review label applied")
+        if label_name == PLAN_APPROVED_LABEL:
+            # Only repository collaborators can label a PR, so the
+            # ``plan-approved`` route is inherently trust-safe. The
+            # webhook handler runs the synchronous comment +
+            # label-removal side effects inline and falls through
+            # to a ``create-implementation-from-issue`` cloud agent
+            # dispatch when the linked issue is ready for it.
+            return RouteDecision(
+                WORKFLOW_PLAN_APPROVED, "plan-approved label applied"
+            )
         return RouteDecision(None, f"unhandled label {label_name!r} on PR")
     if action in {"synchronize", "edited"}:
         return RouteDecision(WORKFLOW_ENFORCE_PR_ISSUE_STATE, f"pull_request {action}")
@@ -416,6 +444,7 @@ __all__ = [
     "OZ_REVIEW_COMMAND",
     "OZ_VERIFY_COMMAND",
     "OZ_REVIEW_LABEL",
+    "PLAN_APPROVED_LABEL",
     "READY_TO_IMPLEMENT_LABEL",
     "READY_TO_SPEC_LABEL",
     "RouteDecision",
@@ -423,6 +452,7 @@ __all__ = [
     "WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE",
     "WORKFLOW_CREATE_SPEC_FROM_ISSUE",
     "WORKFLOW_ENFORCE_PR_ISSUE_STATE",
+    "WORKFLOW_PLAN_APPROVED",
     "WORKFLOW_RESPOND_TO_PR_COMMENT",
     "WORKFLOW_REVIEW_PR",
     "WORKFLOW_TRIAGE_NEW_ISSUES",

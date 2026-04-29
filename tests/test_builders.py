@@ -472,6 +472,144 @@ class BuildTriageRequestTest(_BuilderTestBase):
             )
 
 
+class BuildPlanApprovedRequestTest(_BuilderTestBase):
+    def setUp(self) -> None:
+        super().setUp()
+        scripts = _ensure_module("scripts")
+        impl_module = _ensure_module("scripts.create_implementation_from_issue")
+        scripts.create_implementation_from_issue = impl_module  # type: ignore[attr-defined]
+        impl_module.IMPLEMENT_SPECS_SKILL = "implement-specs"  # type: ignore[attr-defined]
+        impl_module.gather_create_implementation_context = MagicMock(  # type: ignore[attr-defined]
+            return_value={
+                "owner": "acme",
+                "repo": "widgets",
+                "issue_number": 91,
+                "requester": "alice",
+                "issue_title": "Add retry",
+                "issue_labels": ["ready-to-implement"],
+                "issue_assignees": ["oz-agent"],
+                "target_branch": "oz-agent/spec-issue-91",
+                "default_branch": "main",
+                "spec_context_source": "approved-pr",
+                "selected_spec_pr_number": 121,
+                "selected_spec_pr_url": "https://github.com/acme/widgets/pull/121",
+                "has_existing_implementation_pr": False,
+                "spec_context_text": "Spec body",
+                "coauthor_line": "",
+                "coauthor_directives": "",
+                "implement_specs_skill_path": ".agents/skills/implement-specs/SKILL.md",
+                "spec_driven_implementation_skill_path": ".agents/skills/spec-driven-implementation/SKILL.md",
+                "implement_issue_skill_path": ".agents/skills/implement-issue/SKILL.md",
+                "progress_start_line": "I'm implementing this issue on top of the approved spec PR's branch.",
+                "should_noop": False,
+                "noop_reason": "",
+                "progress_comment_id": 0,
+            }
+        )
+        impl_module.build_create_implementation_prompt_for_dispatch = MagicMock(  # type: ignore[attr-defined]
+            return_value="PLAN_APPROVED_IMPL_PROMPT"
+        )
+        helpers = sys.modules["oz_workflows.helpers"]
+        helpers.resolve_issue_number_for_pr = MagicMock(  # type: ignore[attr-defined]
+            return_value=91
+        )
+
+    def _payload(self, *, with_linked_issue: bool = True) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "action": "labeled",
+            "repository": {"full_name": "acme/widgets"},
+            "installation": {"id": 1234},
+            "label": {"name": "plan-approved"},
+            "pull_request": {
+                "number": 121,
+                "state": "open",
+                "head": {"ref": "oz-agent/spec-issue-91"},
+                "base": {"ref": "main"},
+                "user": {"login": "alice", "type": "User"},
+            },
+            "sender": {"login": "alice"},
+        }
+        if with_linked_issue:
+            payload["linked_issue_number"] = 91
+        return payload
+
+    def test_returns_dispatch_request_using_stashed_issue_number(self) -> None:
+        from lib.builders import build_plan_approved_request
+        from lib.routing import WORKFLOW_PLAN_APPROVED
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+
+        request = build_plan_approved_request(
+            self._payload(),
+            github_client=github_client,
+            workspace_path=Path("/tmp/ws"),
+        )
+
+        self.assertEqual(request.workflow, WORKFLOW_PLAN_APPROVED)
+        self.assertEqual(request.repo, "acme/widgets")
+        self.assertEqual(request.installation_id, 1234)
+        # Dispatch reuses the create-implementation cloud config so the
+        # cloud agent's environment/model defaults are unchanged.
+        self.assertEqual(
+            request.config_name, "create-implementation-from-issue"
+        )
+        self.assertEqual(request.title, "Implement issue #91 (plan-approved)")
+        self.assertEqual(request.skill_name, "implement-specs")
+        self.assertEqual(request.prompt, "PLAN_APPROVED_IMPL_PROMPT")
+        self.assertEqual(request.payload_subset["issue_number"], 91)
+        self.assertEqual(
+            request.payload_subset["trigger_source"], "plan-approved"
+        )
+        self.assertEqual(
+            request.payload_subset["progress_comment_id"], 4242
+        )
+        # The builder reuses the stashed linked_issue_number rather
+        # than re-resolving the PR association.
+        helpers = sys.modules["oz_workflows.helpers"]
+        helpers.resolve_issue_number_for_pr.assert_not_called()  # type: ignore[attr-defined]
+
+    def test_falls_back_to_resolving_when_linked_issue_missing(self) -> None:
+        from lib.builders import build_plan_approved_request
+
+        github_client = MagicMock()
+        repo_handle = MagicMock(name="repo")
+        github_client.get_repo.return_value = repo_handle
+        pr_obj = MagicMock(name="pr")
+        pr_obj.get_files.return_value = [
+            type("F", (), {"filename": "specs/GH91/product.md"})()
+        ]
+        repo_handle.get_pull.return_value = pr_obj
+
+        request = build_plan_approved_request(
+            self._payload(with_linked_issue=False),
+            github_client=github_client,
+            workspace_path=Path("/tmp/ws"),
+        )
+        self.assertEqual(request.payload_subset["issue_number"], 91)
+        helpers = sys.modules["oz_workflows.helpers"]
+        helpers.resolve_issue_number_for_pr.assert_called_once()  # type: ignore[attr-defined]
+
+    def test_raises_when_linked_issue_cannot_be_resolved(self) -> None:
+        from lib.builders import build_plan_approved_request
+
+        github_client = MagicMock()
+        repo_handle = MagicMock(name="repo")
+        github_client.get_repo.return_value = repo_handle
+        pr_obj = MagicMock(name="pr")
+        pr_obj.get_files.return_value = []
+        repo_handle.get_pull.return_value = pr_obj
+        helpers = sys.modules["oz_workflows.helpers"]
+        helpers.resolve_issue_number_for_pr = MagicMock(return_value=None)  # type: ignore[attr-defined]
+
+        with self.assertRaises(ValueError):
+            build_plan_approved_request(
+                self._payload(with_linked_issue=False),
+                github_client=github_client,
+                workspace_path=Path("/tmp/ws"),
+            )
+
+
 class BuildBuilderRegistryTest(_BuilderTestBase):
     def test_registry_keys_match_workflow_constants(self) -> None:
         from lib.builders import build_builder_registry
@@ -479,6 +617,7 @@ class BuildBuilderRegistryTest(_BuilderTestBase):
             WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
             WORKFLOW_CREATE_SPEC_FROM_ISSUE,
             WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+            WORKFLOW_PLAN_APPROVED,
             WORKFLOW_RESPOND_TO_PR_COMMENT,
             WORKFLOW_REVIEW_PR,
             WORKFLOW_TRIAGE_NEW_ISSUES,
@@ -496,6 +635,7 @@ class BuildBuilderRegistryTest(_BuilderTestBase):
                 WORKFLOW_TRIAGE_NEW_ISSUES,
                 WORKFLOW_CREATE_SPEC_FROM_ISSUE,
                 WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+                WORKFLOW_PLAN_APPROVED,
             },
         )
 

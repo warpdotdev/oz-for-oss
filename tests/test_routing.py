@@ -19,6 +19,7 @@ from lib.routing import (
     WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
     WORKFLOW_CREATE_SPEC_FROM_ISSUE,
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+    WORKFLOW_PLAN_APPROVED,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
     WORKFLOW_TRIAGE_NEW_ISSUES,
@@ -503,6 +504,45 @@ class PullRequestEventTest(unittest.TestCase):
             },
         )
         self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
+
+    def test_plan_approved_label_routes_to_plan_approved(self) -> None:
+        # ``plan-approved`` is added by maintainers reviewing spec
+        # PRs; routing the event to the dedicated workflow lets the
+        # webhook handler fan out the spec-approved comment, the
+        # ``ready-to-spec`` label removal, and the implementation
+        # dispatch from a single ingress point.
+        decision = route_event(
+            "pull_request",
+            {
+                "action": "labeled",
+                "pull_request": {"state": "open"},
+                "label": {"name": "plan-approved"},
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_PLAN_APPROVED)
+
+    def test_unrelated_pr_label_is_dropped(self) -> None:
+        decision = route_event(
+            "pull_request",
+            {
+                "action": "labeled",
+                "pull_request": {"state": "open"},
+                "label": {"name": "good-first-issue"},
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("unhandled label", decision.reason)
+
+    def test_plan_approved_on_closed_pr_is_dropped(self) -> None:
+        decision = route_event(
+            "pull_request",
+            {
+                "action": "labeled",
+                "pull_request": {"state": "closed"},
+                "label": {"name": "plan-approved"},
+            },
+        )
+        self.assertIsNone(decision.workflow)
 
     def test_synchronize_routes_to_enforce(self) -> None:
         decision = route_event(

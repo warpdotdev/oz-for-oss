@@ -39,6 +39,7 @@ from .routing import (
     WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
     WORKFLOW_CREATE_SPEC_FROM_ISSUE,
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+    WORKFLOW_PLAN_APPROVED,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
     WORKFLOW_TRIAGE_NEW_ISSUES,
@@ -621,6 +622,104 @@ def build_create_implementation_request(
     )
 
 
+def build_plan_approved_request(
+    payload: Mapping[str, Any],
+    *,
+    github_client: Github,
+    workspace_path: Path | None = None,
+) -> DispatchRequest:
+    """Build the :class:`DispatchRequest` for a ``plan-approved`` cloud run.
+
+    Triggered when ``api.webhook`` falls through past the synchronous
+    plan-approved handler because the linked issue is ready for
+    implementation. The builder reuses
+    :func:`scripts.create_implementation_from_issue.gather_create_implementation_context`
+    so the cloud-mode prompt + payload are byte-for-byte identical to
+    the existing ``create-implementation-from-issue`` flow; only the
+    ``DispatchRequest.workflow`` field differs so the cron poller can
+    look up the plan-approved-specific handler entry.
+
+    The synchronous handler stashes the resolved issue number on the
+    payload as ``linked_issue_number``. When that key is missing
+    (e.g. unit tests calling the builder directly), the builder
+    re-resolves the association via ``resolve_issue_number_for_pr``
+    so the dispatch path stays usable in isolation.
+    """
+    from oz_workflows.helpers import (  # type: ignore[import-not-found]
+        resolve_issue_number_for_pr,
+    )
+    from scripts.create_implementation_from_issue import (  # type: ignore[import-not-found]
+        IMPLEMENT_SPECS_SKILL,
+        build_create_implementation_prompt_for_dispatch,
+        gather_create_implementation_context,
+    )
+
+    owner, repo, full_name = _resolve_owner_repo(payload)
+    installation_id = _resolve_installation_id(payload)
+    requester = _resolve_requester(payload)
+    repo_handle = github_client.get_repo(full_name)
+
+    issue_number = int(payload.get("linked_issue_number") or 0)
+    if issue_number <= 0:
+        pr_payload = payload.get("pull_request") or {}
+        pr_number = int(pr_payload.get("number") or 0) if isinstance(pr_payload, dict) else 0
+        if pr_number <= 0:
+            raise ValueError(
+                "plan-approved payload is missing linked_issue_number and pr_number"
+            )
+        pr_obj = repo_handle.get_pull(pr_number)
+        files = list(pr_obj.get_files())
+        changed_files = [str(f.filename) for f in files]
+        resolved = resolve_issue_number_for_pr(
+            repo_handle, owner, repo, pr_obj, changed_files
+        )
+        if not resolved:
+            raise ValueError(
+                f"plan-approved PR #{pr_number} has no resolvable linked issue"
+            )
+        issue_number = int(resolved)
+
+    context = gather_create_implementation_context(
+        repo_handle,
+        owner=owner,
+        repo=repo,
+        issue_number=issue_number,
+        requester=requester,
+        triggering_comment_text="",
+        event_payload=dict(payload),
+        workspace_path=workspace_path or Path("/tmp"),
+        github_client=github_client,
+    )
+    progress_comment_id, progress_run_id = _start_progress_comment(
+        repo_handle=repo_handle,
+        owner=owner,
+        repo=repo,
+        issue_number=issue_number,
+        workflow=WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+        start_line=str(context.get("progress_start_line") or ""),
+        requester_login=requester,
+        event_payload=payload,
+    )
+    prompt = build_create_implementation_prompt_for_dispatch(context)
+    payload_subset: dict[str, Any] = dict(context)
+    payload_subset["progress_comment_id"] = progress_comment_id
+    payload_subset["progress_run_id"] = progress_run_id
+    payload_subset["trigger_source"] = "plan-approved"
+    return DispatchRequest(
+        workflow=WORKFLOW_PLAN_APPROVED,
+        repo=full_name,
+        installation_id=installation_id,
+        # Reuse the create-implementation config so cloud-side defaults
+        # (model, environment, skills) match the existing implementation
+        # flow. Only the dispatcher routing key differs.
+        config_name=WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+        title=f"Implement issue #{issue_number} (plan-approved)",
+        skill_name=IMPLEMENT_SPECS_SKILL,
+        prompt=prompt,
+        payload_subset=payload_subset,
+    )
+
+
 def build_enforce_request(
     payload: Mapping[str, Any],
     *,
@@ -733,6 +832,11 @@ def build_builder_registry(
         WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE: _wrap(
             build_create_implementation_request
         ),
+        # ``plan-approved`` is special-cased in the webhook handler:
+        # the synchronous helper applies the comment + label-removal
+        # side effects inline, and only the ``implementation pending``
+        # branch falls through to this builder.
+        WORKFLOW_PLAN_APPROVED: _wrap(build_plan_approved_request),
     }
 
 
@@ -741,6 +845,7 @@ __all__ = [
     "build_create_implementation_request",
     "build_create_spec_request",
     "build_enforce_request",
+    "build_plan_approved_request",
     "build_respond_request",
     "build_review_request",
     "build_triage_request",

@@ -427,6 +427,7 @@ class HandlerRegistryTest(_HandlerTestBase):
             WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
             WORKFLOW_CREATE_SPEC_FROM_ISSUE,
             WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+            WORKFLOW_PLAN_APPROVED,
             WORKFLOW_RESPOND_TO_PR_COMMENT,
             WORKFLOW_REVIEW_PR,
             WORKFLOW_TRIAGE_NEW_ISSUES,
@@ -446,8 +447,45 @@ class HandlerRegistryTest(_HandlerTestBase):
                 WORKFLOW_TRIAGE_NEW_ISSUES,
                 WORKFLOW_CREATE_SPEC_FROM_ISSUE,
                 WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+                WORKFLOW_PLAN_APPROVED,
             },
         )
+
+    def test_plan_approved_handlers_aliases_create_implementation(self) -> None:
+        # ``plan-approved`` cloud runs land on the same
+        # ``apply_create_implementation_result`` so the alias keeps
+        # the cron poller's apply path uniform across both triggers.
+        from lib.handlers import build_plan_approved_handlers
+        from lib.state import RunState
+
+        github_client = MagicMock()
+        repo_handle = MagicMock(name="repo")
+        github_client.get_repo.return_value = repo_handle
+        handlers = build_plan_approved_handlers(_factory(github_client))
+
+        state = RunState(
+            run_id="run-pa-1",
+            workflow="plan-approved",
+            repo="acme/widgets",
+            installation_id=42,
+            payload_subset={
+                "owner": "acme",
+                "repo": "widgets",
+                "issue_number": 91,
+                "requester": "alice",
+                "progress_comment_id": 5555,
+                "progress_run_id": "run-pa-hex",
+            },
+        )
+        handlers.result_applier(state=state, result={"summary": "impl ok"})
+        from scripts.create_implementation_from_issue import (  # type: ignore[import-not-found]
+            apply_create_implementation_result,
+        )
+
+        apply_create_implementation_result.assert_called_once()
+        kwargs = apply_create_implementation_result.call_args.kwargs
+        self.assertIs(kwargs["context"], state.payload_subset)
+        self.assertIs(kwargs["progress"], self.progress_instances[-1])
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ from api.webhook import process_webhook_request
 from lib.dispatch import DispatchRequest
 from lib.routing import (
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+    WORKFLOW_PLAN_APPROVED,
     WORKFLOW_REVIEW_PR,
 )
 from lib.signatures import expected_signature
@@ -264,6 +265,127 @@ class SynchronousEnforcePathTest(unittest.TestCase):
         self.assertEqual(response.body["run_id"], "oz-run-2")
         builder.assert_called_once()
         runner.assert_called_once()
+
+
+class SynchronousPlanApprovedPathTest(unittest.TestCase):
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "action": "labeled",
+            "repository": {"full_name": "acme/widgets"},
+            "installation": {"id": 1234},
+            "label": {"name": "plan-approved"},
+            "pull_request": {
+                "number": 121,
+                "state": "open",
+                "draft": False,
+                "head": {"ref": "oz-agent/spec-issue-91"},
+                "base": {"ref": "main"},
+                "user": {"login": "alice", "type": "User"},
+            },
+            "sender": {"login": "alice"},
+        }
+
+    def test_synced_outcome_short_circuits_dispatch(self) -> None:
+        body, signature = _signed_envelope(self._payload())
+
+        sync_calls: list[Mapping[str, Any]] = []
+
+        def sync_plan_approved(payload: Mapping[str, Any]) -> dict[str, Any]:
+            sync_calls.append(payload)
+            return {
+                "action": "synced",
+                "pr_number": 121,
+                "linked_issue_number": 91,
+                "comment_posted": True,
+                "label_removed": True,
+                "implementation_triggered": False,
+            }
+
+        builder_called = MagicMock()
+        runner_called = MagicMock(side_effect=AssertionError("should not run"))
+
+        response = process_webhook_request(
+            body=body,
+            signature_header=signature,
+            event_header="pull_request",
+            delivery_id="delivery-pa-1",
+            secret=_SECRET,
+            builder_registry={WORKFLOW_PLAN_APPROVED: builder_called},
+            runner=runner_called,
+            config_factory=lambda name, role: {},
+            store=InMemoryStateStore(),
+            sync_plan_approved=sync_plan_approved,
+        )
+        self.assertEqual(response.status, 202)
+        self.assertEqual(response.body["workflow"], WORKFLOW_PLAN_APPROVED)
+        self.assertEqual(
+            response.body["plan_approved"]["action"], "synced"
+        )
+        self.assertEqual(
+            response.body["plan_approved"]["linked_issue_number"], 91
+        )
+        self.assertEqual(len(sync_calls), 1)
+        builder_called.assert_not_called()
+
+    def test_implementation_pending_falls_through_to_dispatch(self) -> None:
+        body, signature = _signed_envelope(self._payload())
+
+        builder = MagicMock()
+        builder.return_value = DispatchRequest(
+            workflow=WORKFLOW_PLAN_APPROVED,
+            repo="acme/widgets",
+            installation_id=1234,
+            config_name="create-implementation-from-issue",
+            title="Implement issue #91 (plan-approved)",
+            skill_name="implement-specs",
+            prompt="prompt body",
+            payload_subset={"issue_number": 91, "linked_issue_number": 91},
+        )
+        runner = MagicMock(return_value=SimpleNamespace(run_id="oz-run-pa"))
+
+        def sync_plan_approved(_payload: Mapping[str, Any]) -> dict[str, Any] | None:
+            return None
+
+        response = process_webhook_request(
+            body=body,
+            signature_header=signature,
+            event_header="pull_request",
+            delivery_id="delivery-pa-2",
+            secret=_SECRET,
+            builder_registry={WORKFLOW_PLAN_APPROVED: builder},
+            runner=runner,
+            config_factory=lambda name, role: {},
+            store=InMemoryStateStore(),
+            sync_plan_approved=sync_plan_approved,
+        )
+        self.assertEqual(response.status, 202)
+        self.assertTrue(response.body["dispatched"])
+        self.assertEqual(response.body["run_id"], "oz-run-pa")
+        builder.assert_called_once()
+        runner.assert_called_once()
+
+    def test_500_when_sync_plan_approved_raises(self) -> None:
+        body, signature = _signed_envelope(self._payload())
+
+        def exploding_sync(_payload: Mapping[str, Any]) -> dict[str, Any] | None:
+            raise RuntimeError("github outage")
+
+        builder_called = MagicMock()
+        response = process_webhook_request(
+            body=body,
+            signature_header=signature,
+            event_header="pull_request",
+            delivery_id="delivery-pa-3",
+            secret=_SECRET,
+            builder_registry={WORKFLOW_PLAN_APPROVED: builder_called},
+            runner=lambda **_: SimpleNamespace(run_id="x"),
+            config_factory=lambda name, role: {},
+            store=InMemoryStateStore(),
+            sync_plan_approved=exploding_sync,
+        )
+        self.assertEqual(response.status, 500)
+        self.assertIn("plan-approved path failed", response.body["error"])
+        builder_called.assert_not_called()
 
 
 if __name__ == "__main__":

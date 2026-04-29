@@ -38,6 +38,7 @@ from .routing import (
     WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
     WORKFLOW_CREATE_SPEC_FROM_ISSUE,
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+    WORKFLOW_PLAN_APPROVED,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
     WORKFLOW_TRIAGE_NEW_ISSUES,
@@ -665,6 +666,22 @@ def build_create_implementation_handlers(
     )
 
 
+def build_plan_approved_handlers(
+    github_client_factory: GithubClientFactory,
+) -> WorkflowHandlers:
+    """Return :class:`WorkflowHandlers` for ``plan-approved`` cloud runs.
+
+    The plan-approved workflow's dispatch path produces the same
+    ``pr-metadata.json`` artifact and applies it via the same helper
+    (``apply_create_implementation_result``) as
+    ``create-implementation-from-issue``. The only difference is the
+    workflow string the cron poller stores on the in-flight record;
+    register a thin alias so a plan-approved-triggered run lands on
+    the existing implementation completion path.
+    """
+    return build_create_implementation_handlers(github_client_factory)
+
+
 def build_handler_registry(
     *,
     github_client_factory: GithubClientFactory,
@@ -688,6 +705,9 @@ def build_handler_registry(
         WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE: build_create_implementation_handlers(
             github_client_factory
         ),
+        WORKFLOW_PLAN_APPROVED: build_plan_approved_handlers(
+            github_client_factory
+        ),
     }
 
 
@@ -697,6 +717,7 @@ __all__ = [
     "build_create_spec_handlers",
     "build_enforce_handlers",
     "build_handler_registry",
+    "build_plan_approved_handlers",
     "build_respond_handlers",
     "build_review_handlers",
     "build_triage_handlers",
