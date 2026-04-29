@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import urllib.parse
 import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -103,65 +102,6 @@ def is_automation_user(user: Any) -> bool:
         user_type == "bot"
         or (bool(login) and login.endswith("[bot]"))
     )
-
-
-def is_trusted_commenter(
-    github_client: Github,
-    event: dict[str, Any],
-    *,
-    org: str,
-) -> bool:
-    """Decide whether the commenter that triggered *event* is trusted.
-
-    Trust is evaluated deterministically in Python before the agent runs so
-    we can short-circuit untrusted mentions without relying on the agent to
-    infer trust from the presence or absence of the triggering comment in
-    ``fetch_github_context.py`` output (the fetch output can legitimately
-    miss the comment for reasons unrelated to trust: script path issues,
-    transient API errors, pagination edge cases, output truncation, etc.).
-
-    Trust rules mirror the ``check_trust`` job in
-    ``respond-to-pr-comment-local.yml`` and the org-membership fallback in
-    ``fetch_github_context.py``:
-
-    - If the comment's ``author_association`` is ``OWNER``, ``MEMBER``, or
-      ``COLLABORATOR`` the author is trusted immediately.
-    - Otherwise probe ``GET /orgs/{org}/members/{login}``. A 204 response
-      promotes the author to trusted so legitimate org members whose
-      membership is private (or whose association the event payload
-      reports as ``CONTRIBUTOR`` for any other reason) are not dropped.
-    - Any other status (404 "not a member", 302 redirect to the public
-      endpoint, request error, ...) leaves the author untrusted. We fail
-      closed on errors to avoid accidentally granting trust.
-    """
-    # Support both comment events (event["comment"]) and review events (event["review"]).
-    actor = event.get("comment") if isinstance(event, dict) else None
-    if not isinstance(actor, dict):
-        actor = event.get("review") if isinstance(event, dict) else None
-    if not isinstance(actor, dict):
-        return False
-    association = str(actor.get("author_association") or "").upper()
-    if association in ORG_MEMBER_ASSOCIATIONS:
-        return True
-    login = (actor.get("user") or {}).get("login") or ""
-    if not login or not org:
-        return False
-    path = (
-        f"/orgs/{urllib.parse.quote(org, safe='')}"
-        f"/members/{urllib.parse.quote(login, safe='')}"
-    )
-    try:
-        status, _headers, _body = github_client.requester.requestJson(
-            "GET", path
-        )
-    except Exception:
-        logger.exception(
-            "Org membership probe for @%s in %s failed; treating author as untrusted.",
-            login,
-            org,
-        )
-        return False
-    return status == 204
 
 
 def get_timestamp_text(value: Any) -> str:

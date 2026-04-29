@@ -8,13 +8,11 @@ from typing import Any, Mapping, TypedDict
 from github import Auth, Github
 from github.Repository import Repository
 
-from oz_workflows.actions import notice
 from oz_workflows.artifacts import load_run_artifact, poll_for_artifact
 from oz_workflows.env import load_event, repo_parts, repo_slug, require_env, workspace
 from oz_workflows.helpers import (
     WorkflowProgressComment,
     is_automation_user,
-    is_trusted_commenter,
     record_run_session_link,
 )
 from oz_workflows.oz_client import build_agent_config, run_agent
@@ -198,15 +196,10 @@ def main() -> None:
     pr_number = int(issue["number"])
 
     with closing(Github(auth=Auth.Token(require_env("GH_TOKEN")))) as client:
-        if not is_trusted_commenter(client, event, org=owner):
-            login = (comment.get("user") or {}).get("login") or "unknown"
-            association = comment.get("author_association") or "NONE"
-            notice(
-                f"Ignoring /oz-verify from @{login}; "
-                f"not an org member (association={association})."
-            )
-            return
-
+        # The organization-membership gate was removed: the bot now
+        # runs ``/oz-verify`` for every human-authored mention. The
+        # ``is_automation_user`` check above already skips bot-authored
+        # commands, which is the only filter we still apply.
         github = client.get_repo(repo_slug())
         pr = github.get_pull(pr_number)
         pr.get_issue_comment(trigger_comment_id).create_reaction("eyes")
