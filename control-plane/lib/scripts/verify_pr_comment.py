@@ -90,6 +90,7 @@ def apply_verification_result(
     run: Any,
     result: Mapping[str, Any],
     artifacts: list[Mapping[str, Any]] | None = None,
+    progress: WorkflowProgressComment | None = None,
 ) -> None:
     """Apply a completed verification report back to GitHub.
 
@@ -99,15 +100,22 @@ def apply_verification_result(
     poller passes through the same ``WorkflowProgressComment`` shape
     that ``main`` constructs so the rendered comment metadata is
     identical between the GitHub Actions and Vercel paths.
+
+    *progress* is the reconstructed :class:`WorkflowProgressComment` the
+    Vercel cron handler hands in so the final ``replace_body`` call
+    lands on the comment posted at dispatch time. Callers that omit it
+    fall back to constructing a fresh instance, which keeps the legacy
+    GHA runtime contract.
     """
-    progress = WorkflowProgressComment(
-        github,
-        str(context["owner"]),
-        str(context["repo"]),
-        int(context["pr_number"]),
-        workflow=WORKFLOW_NAME,
-        requester_login=str(context.get("requester") or ""),
-    )
+    if progress is None:
+        progress = WorkflowProgressComment(
+            github,
+            str(context["owner"]),
+            str(context["repo"]),
+            int(context["pr_number"]),
+            workflow=WORKFLOW_NAME,
+            requester_login=str(context.get("requester") or ""),
+        )
     progress.replace_body(
         render_verification_comment(
             result,

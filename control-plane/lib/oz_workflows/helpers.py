@@ -667,6 +667,10 @@ class WorkflowProgressComment:
         event_payload: dict[str, Any] | None = None,
         requester_login: str = "",
         review_reply_target: tuple[PullRequest, int] | None = None,
+        comment_id: int | None = None,
+        run_id: str | None = None,
+        oz_run_id: str = "",
+        session_link: str = "",
     ) -> None:
         self.github = github
         self.owner = owner
@@ -675,20 +679,29 @@ class WorkflowProgressComment:
         self.workflow = workflow
         self.event_payload = event_payload or {}
         self.requester_login = requester_login
-        self.run_id = uuid.uuid4().hex
+        # The Vercel control plane persists ``run_id`` (and any Oz run
+        # id captured mid-run) alongside the GitHub comment id so the
+        # cron poller can reconstruct an instance that targets the
+        # exact comment posted at dispatch time. When the caller does
+        # not provide a ``run_id`` we fall back to a fresh uuid so the
+        # legacy GHA path keeps generating run-scoped metadata.
+        self.run_id = (run_id or "").strip() or uuid.uuid4().hex
         self.github_run_id = optional_env("GITHUB_RUN_ID")
-        self.oz_run_id: str = ""
+        self.oz_run_id: str = (oz_run_id or "").strip()
         self.metadata = comment_metadata(
             workflow,
             issue_number,
             run_id=self.run_id,
+            oz_run_id=self.oz_run_id,
             github_run_id=self.github_run_id,
         )
         self._workflow_prefix = _workflow_metadata_prefix(workflow, issue_number)
         app_slug = optional_env("GH_APP_SLUG")
         self._bot_login = f"{app_slug}[bot]" if app_slug else ""
-        self.comment_id: int | None = None
-        self.session_link: str = ""
+        self.comment_id: int | None = (
+            int(comment_id) if comment_id is not None and int(comment_id) > 0 else None
+        )
+        self.session_link: str = (session_link or "").strip()
         # When set, progress updates are posted/edited as review-comment replies
         # within the triggering review thread instead of as PR-level issue
         # comments. The tuple is (pull_request, trigger_review_comment_id).
