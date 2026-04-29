@@ -1,7 +1,0 @@
-# Pin the uv version used by this repository.
-#
-# This file exists so tooling (notably the astral-sh/setup-uv GitHub Action
-# used by `.github/actions/setup-oz-python`) can read a `required-version`
-# from the repository root and install a consistent uv version across runs,
-# instead of silently falling back to "latest".
-required-version = "0.11.7"

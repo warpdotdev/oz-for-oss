@@ -15,3 +15,6 @@ implementation_summary.md
 pr_description.md
 pr-metadata.json
 issue_comments.txt
+.vercel
+.env*.local
+.DS_Store
