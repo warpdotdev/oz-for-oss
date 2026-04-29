@@ -4,7 +4,12 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from triage_new_issues import (
+
+# Ensure the repo root is on ``sys.path`` so the ``lib.scripts`` /
+# ``lib.oz_workflows`` packages resolve when this test runs under
+# ``python -m unittest discover -s tests``.
+from . import conftest  # noqa: F401
+from lib.scripts.triage_new_issues import (
     TRIAGE_DISCLAIMER,
     _lowercase_first,
     _record_triage_session_link,
@@ -980,7 +985,7 @@ class MutualExclusivityTest(unittest.TestCase):
 
     def _build_comment_parts(self, result: dict, issue: dict) -> str:
         """Simulate the comment assembly logic from process_issue."""
-        from triage_new_issues import _lowercase_first
+        from lib.scripts.triage_new_issues import _lowercase_first
         summary = _lowercase_first(str(result.get("summary") or "triage completed").strip())
         issue_body = str(result.get("issue_body") or "").strip()
         statements = extract_statements(result)

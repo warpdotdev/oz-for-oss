@@ -3,11 +3,14 @@ from contextlib import closing
 from itertools import islice
 from pathlib import Path
 
+import base64
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from textwrap import dedent
-from typing import Any
+from typing import Any, Mapping, TypedDict
 from github import Auth, Github
+from github.GithubException import GithubException, UnknownObjectException
 from github.Repository import Repository
 
 from oz_workflows.actions import append_summary, warning
@@ -43,6 +46,8 @@ from oz_workflows.triage import (
     load_triage_config,
     select_recent_untriaged_issues,
 )
+
+logger = logging.getLogger(__name__)
 
 
 WORKFLOW_NAME = "triage-new-issues"
@@ -826,6 +831,454 @@ def format_issue_comments(
         metadata_prefix=OZ_AGENT_METADATA_PREFIX,
         exclude_comment_id=exclude_comment_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Cloud-mode helpers (Vercel webhook + cron poller).
+#
+# The legacy GitHub Actions ``main()`` path above stays in place for backwards
+# compatibility (and so the module's public surface continues to satisfy the
+# pre-existing unit tests). The helpers below are the ones the Vercel control
+# plane uses: ``gather_triage_context`` is invoked at dispatch time inside
+# ``api/webhook.py``, ``build_triage_prompt_for_dispatch`` produces the prompt
+# body the cloud agent consumes, and ``apply_triage_result_for_dispatch``
+# applies the resulting ``triage_result.json`` back onto the originating
+# issue when the cron poller observes a terminal SUCCEEDED run.
+# ---------------------------------------------------------------------------
+
+
+class TriageContext(TypedDict, total=False):
+    """Serializable triage context produced at dispatch time.
+
+    The webhook handler stuffs an instance of this dict onto the
+    in-flight ``RunState.payload_subset`` so the cron poller can apply
+    ``triage_result.json`` without re-fetching the issue, comments, or
+    repository configuration.
+    """
+
+    owner: str
+    repo: str
+    issue_number: int
+    requester: str
+    is_retriage: bool
+    issue_title: str
+    issue_body: str
+    issue_labels: list[str]
+    issue_assignees: list[str]
+    issue_created_at: str
+    triggering_comment_id: int
+    triggering_comment_text: str
+    comments_text: str
+    original_report: str
+    recent_issues_text: str
+    triage_config: dict[str, Any]
+    stakeholders_text: str
+    template_context: dict[str, Any]
+    configured_labels: dict[str, Any]
+    repo_label_names: list[str]
+    triage_companion_path: str
+    dedupe_companion_path: str
+
+
+_TRIAGE_CONFIG_PATH = ".github/issue-triage/config.json"
+_STAKEHOLDERS_PATH = ".github/STAKEHOLDERS"
+_ISSUE_TEMPLATE_DIR = ".github/ISSUE_TEMPLATE"
+
+
+def _decode_repo_text_file(repo_handle: Any, path: str) -> str | None:
+    """Return the UTF-8 text contents of *path* in the repo, or ``None``.
+
+    Wraps :meth:`Repository.get_contents` so missing files / API errors
+    do not abort the dispatch path. Returns ``None`` when the file is
+    absent or cannot be decoded so callers can fall back to empty
+    defaults.
+    """
+    try:
+        contents = repo_handle.get_contents(path)
+    except UnknownObjectException:
+        return None
+    except GithubException:
+        logger.exception(
+            "Failed to fetch %s from %s",
+            path,
+            getattr(repo_handle, "full_name", ""),
+        )
+        return None
+    if isinstance(contents, list):
+        return None
+    raw = getattr(contents, "decoded_content", None)
+    if raw is None:
+        encoded = getattr(contents, "content", "") or ""
+        try:
+            raw = base64.b64decode(encoded)
+        except (ValueError, TypeError):
+            return None
+    try:
+        return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+    except UnicodeDecodeError:
+        return None
+
+
+def _load_triage_config_from_repo(repo_handle: Any) -> dict[str, Any]:
+    """Load the consuming repo's triage config via the GitHub API.
+
+    Returns an empty config (``{"labels": {}}``) when the file is
+    missing or malformed so the prompt and apply step can degrade
+    gracefully.
+    """
+    text = _decode_repo_text_file(repo_handle, _TRIAGE_CONFIG_PATH)
+    if not text:
+        return {"labels": {}}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        logger.exception(
+            "Failed to parse %s as JSON for %s",
+            _TRIAGE_CONFIG_PATH,
+            getattr(repo_handle, "full_name", ""),
+        )
+        return {"labels": {}}
+    if not isinstance(parsed, dict):
+        return {"labels": {}}
+    if not isinstance(parsed.get("labels"), dict):
+        parsed["labels"] = {}
+    return parsed
+
+
+def _load_stakeholders_from_repo(repo_handle: Any) -> list[dict[str, Any]]:
+    text = _decode_repo_text_file(repo_handle, _STAKEHOLDERS_PATH)
+    if not text:
+        return []
+    entries: list[dict[str, Any]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        owners = [p.lstrip("@") for p in parts[1:] if p.startswith("@")]
+        if owners:
+            entries.append({"pattern": parts[0], "owners": owners})
+    return entries
+
+
+def _discover_issue_templates_from_repo(repo_handle: Any) -> dict[str, Any]:
+    """Return the issue template context for the consuming repo.
+
+    Mirrors :func:`oz_workflows.triage.discover_issue_templates`,
+    sourcing the templates from the GitHub API instead of a workspace
+    checkout. Returns ``{"config": None, "templates": []}`` on any
+    failure so the prompt's JSON serialization stays well-formed.
+    """
+    config: dict[str, str] | None = None
+    templates: list[dict[str, str]] = []
+    try:
+        listing = repo_handle.get_contents(_ISSUE_TEMPLATE_DIR)
+    except UnknownObjectException:
+        listing = []
+    except GithubException:
+        logger.exception(
+            "Failed to list %s for %s",
+            _ISSUE_TEMPLATE_DIR,
+            getattr(repo_handle, "full_name", ""),
+        )
+        return {"config": None, "templates": []}
+    if not isinstance(listing, list):
+        listing = [listing]
+    for entry in listing:
+        name = str(getattr(entry, "name", "") or "")
+        path = str(getattr(entry, "path", "") or "")
+        if not name or not path:
+            continue
+        lower_name = name.lower()
+        is_config = lower_name in {"config.yml", "config.yaml"}
+        suffix = "." + lower_name.rsplit(".", 1)[-1] if "." in lower_name else ""
+        if not is_config and suffix not in {".md", ".yml", ".yaml"}:
+            continue
+        text = _decode_repo_text_file(repo_handle, path)
+        if text is None:
+            continue
+        if is_config:
+            config = {"path": path, "content": text.strip()}
+            continue
+        templates.append({"path": path, "content": text.strip()})
+    for legacy_path in (".github/issue_template.md", ".github/ISSUE_TEMPLATE.md"):
+        text = _decode_repo_text_file(repo_handle, legacy_path)
+        if text is not None:
+            templates.append({"path": legacy_path, "content": text.strip()})
+    return {"config": config, "templates": templates}
+
+
+def _format_issue_labels(labels: Any) -> list[str]:
+    out: list[str] = []
+    for raw in labels or []:
+        name = get_label_name(raw)
+        if isinstance(name, str) and name.strip():
+            out.append(name.strip())
+    return out
+
+
+def _format_issue_assignees(assignees: Any) -> list[str]:
+    out: list[str] = []
+    for raw in assignees or []:
+        if isinstance(raw, dict):
+            login = raw.get("login")
+        else:
+            login = getattr(raw, "login", None)
+        if isinstance(login, str) and login.strip():
+            out.append(login.strip())
+    return out
+
+
+def gather_triage_context(
+    github: Any,
+    *,
+    owner: str,
+    repo: str,
+    issue_number: int,
+    requester: str,
+    triggering_comment_id: int,
+    triggering_comment_text: str,
+) -> TriageContext:
+    """Gather the triage context required to dispatch a cloud-mode run.
+
+    *github* is a PyGithub :class:`Repository` handle minted from the
+    payload's installation id. The function fetches the issue, the
+    issue comments, recent open issues for dedupe, the consuming
+    repo's triage config / stakeholders / issue templates, and the
+    repo's full label set. Everything is serialized into JSON-friendly
+    primitives so the cron poller can apply the result without
+    re-fetching the issue.
+    """
+    issue = github.get_issue(int(issue_number))
+    issue_labels = _format_issue_labels(get_field(issue, "labels", []))
+    is_retriage = issue_has_prior_triage(
+        list(get_field(issue, "labels", []) or [])
+    )
+    comments = list(issue.get_comments())
+    _cleanup_legacy_triage_comments(
+        github, owner, repo, issue, comments=comments
+    )
+    comments_text = format_issue_comments(
+        comments, exclude_comment_id=triggering_comment_id or None
+    )
+    current_body = str(get_field(issue, "body") or "").strip()
+    original_report = extract_original_issue_report(current_body)
+    recent_open_issues = load_recent_issues_for_dedupe(github)
+    recent_issues_text = format_recent_issues_for_dedupe(
+        recent_open_issues, issue_number
+    )
+    triage_config = _load_triage_config_from_repo(github)
+    stakeholder_entries = _load_stakeholders_from_repo(github)
+    stakeholders_text = format_stakeholders_for_prompt(stakeholder_entries)
+    template_context = _discover_issue_templates_from_repo(github)
+    repo_label_names = sorted(
+        {
+            str(label.name).strip()
+            for label in github.get_labels()
+            if getattr(label, "name", None)
+        }
+    )
+    return TriageContext(
+        owner=owner,
+        repo=repo,
+        issue_number=int(issue_number),
+        requester=str(requester or ""),
+        is_retriage=bool(is_retriage),
+        issue_title=str(get_field(issue, "title") or ""),
+        issue_body=current_body,
+        issue_labels=issue_labels,
+        issue_assignees=_format_issue_assignees(get_field(issue, "assignees", [])),
+        issue_created_at=str(get_field(issue, "created_at") or "Unknown"),
+        triggering_comment_id=int(triggering_comment_id or 0),
+        triggering_comment_text=str(triggering_comment_text or ""),
+        comments_text=comments_text,
+        original_report=original_report,
+        recent_issues_text=recent_issues_text,
+        triage_config=dict(triage_config),
+        stakeholders_text=stakeholders_text,
+        template_context=dict(template_context),
+        configured_labels=dict(triage_config.get("labels") or {}),
+        repo_label_names=list(repo_label_names),
+        triage_companion_path="",
+        dedupe_companion_path="",
+    )
+
+
+def build_triage_prompt_for_dispatch(context: Mapping[str, Any]) -> str:
+    """Build the cloud-mode triage prompt from a serialized :class:`TriageContext`.
+
+    The prompt body is identical to the one produced by
+    :func:`build_triage_prompt` for the legacy GitHub Actions runner so
+    the security-rules block, output schema, and dedupe instructions
+    stay byte-for-byte aligned across delivery surfaces.
+    """
+    return build_triage_prompt(
+        owner=str(context["owner"]),
+        repo=str(context["repo"]),
+        issue_number=int(context["issue_number"]),
+        issue_title=str(context.get("issue_title") or ""),
+        issue_labels=list(context.get("issue_labels") or []),
+        issue_assignees=list(context.get("issue_assignees") or []),
+        issue_created_at=str(context.get("issue_created_at") or "Unknown"),
+        current_body=str(context.get("issue_body") or ""),
+        original_report=str(context.get("original_report") or ""),
+        comments_text=str(context.get("comments_text") or ""),
+        triggering_comment_text=str(context.get("triggering_comment_text") or ""),
+        triage_config=dict(context.get("triage_config") or {}),
+        stakeholders_text=str(context.get("stakeholders_text") or ""),
+        template_context=dict(context.get("template_context") or {}),
+        recent_issues_text=str(context.get("recent_issues_text") or ""),
+        # The cloud agent inherits the consuming repo's checkout, so
+        # ``resolve_repo_local_skill_path`` looks up companion-skill
+        # locations there. Pass through the workspace path the legacy
+        # entrypoint uses so the prompt-builder behaves identically;
+        # repo-local skills missing from the workspace silently degrade
+        # to no companion section.
+        host_workspace=workspace(),
+    )
+
+
+class _CloudIssueLike:
+    """Adapter used by the cron poller's apply step.
+
+    ``apply_triage_result`` (the legacy applier) takes an *issue*
+    object whose attributes match :class:`github.Issue.Issue`. The
+    cron poller does not have a fresh issue handle and instead carries
+    a :class:`TriageContext` payload. This adapter exposes the subset
+    of attributes the legacy applier reads and forwards label
+    mutations through to a freshly fetched :class:`github.Issue`
+    instance.
+    """
+
+    def __init__(self, issue: Any, *, labels: list[str]) -> None:
+        self._issue = issue
+        self.number = int(getattr(issue, "number", 0) or 0)
+        self.labels = [type("_Label", (), {"name": name})() for name in labels]
+
+    def add_to_labels(self, *names: str) -> None:
+        if names:
+            self._issue.add_to_labels(*names)
+
+    def remove_from_labels(self, name: str) -> None:
+        try:
+            self._issue.remove_from_labels(name)
+        except GithubException:
+            logger.exception(
+                "Failed to remove label %s from issue #%s",
+                name,
+                self.number,
+            )
+
+
+def apply_triage_result_for_dispatch(
+    github: Any,
+    *,
+    context: Mapping[str, Any],
+    run: Any,
+    result: Mapping[str, Any],
+    progress: WorkflowProgressComment | None = None,
+) -> None:
+    """Apply ``triage_result.json`` back onto the originating issue.
+
+    Mirrors the trailing branch of :func:`process_issue` for the
+    cloud-mode delivery path. *github* is a PyGithub
+    :class:`Repository` handle, *context* is a serialized
+    :class:`TriageContext`, and *progress* is the reconstructed
+    :class:`WorkflowProgressComment` posted at dispatch time so the
+    final ``replace_body`` call edits the same comment.
+    """
+    owner = str(context["owner"])
+    repo = str(context["repo"])
+    issue_number = int(context["issue_number"])
+    configured_labels = dict(context.get("configured_labels") or {})
+    repo_label_names = list(context.get("repo_label_names") or [])
+    repo_labels: dict[str, Any] = {
+        name: type("_RepoLabel", (), {"name": name})() for name in repo_label_names
+    }
+    issue = github.get_issue(issue_number)
+    issue_labels = _format_issue_labels(
+        getattr(issue, "labels", None) or context.get("issue_labels") or []
+    )
+    issue_adapter = _CloudIssueLike(issue, labels=issue_labels)
+    apply_triage_result(
+        github,
+        owner,
+        repo,
+        issue_adapter,
+        result=dict(result),
+        configured_labels=configured_labels,
+        repo_labels=repo_labels,
+    )
+    if progress is None:
+        progress = WorkflowProgressComment(
+            github,
+            owner,
+            repo,
+            issue_number,
+            workflow=WORKFLOW_NAME,
+            requester_login=str(context.get("requester") or ""),
+        )
+    summary = _lowercase_first(
+        str(result.get("summary") or "triage completed").strip()
+    )
+    issue_body = str(result.get("issue_body") or "").strip()
+    session_link = getattr(progress, "session_link", "") or ""
+    follow_up_questions = extract_follow_up_questions(result)
+    duplicates = extract_duplicate_of(
+        result, current_issue_number=issue_number
+    )
+    statements = extract_statements(result)
+    show_statements = bool(statements and not duplicates)
+    parts: list[str] = []
+    if not show_statements and not follow_up_questions and not duplicates:
+        if session_link:
+            link_text = _format_triage_session_link(session_link)
+            parts.append(
+                "I've finished triaging this issue. "
+                "A maintainer will verify the details shortly. "
+                f"You can view {link_text}."
+            )
+        else:
+            parts.append("I've completed the triage of this issue.")
+    elif session_link:
+        link_text = _format_triage_session_link(session_link)
+        parts.append(f"You can view {link_text}.")
+    if show_statements:
+        parts.append(build_statements_section(issue, statements))
+    if duplicates:
+        parts.append(build_duplicate_section(issue, duplicates))
+    elif follow_up_questions:
+        parts.append(build_follow_up_section(issue, follow_up_questions))
+    maintainer_parts: list[str] = [f"I concluded that {summary}."]
+    if not duplicates and issue_body:
+        maintainer_parts.append(issue_body)
+    if duplicates:
+        dup_reasoning_lines: list[str] = []
+        for dup in duplicates:
+            reason = dup.get("similarity_reason") or ""
+            if reason:
+                dup_reasoning_lines.append(
+                    f"- #{dup['issue_number']}: {reason}"
+                )
+        if dup_reasoning_lines:
+            maintainer_parts.append(
+                "**Duplicate reasoning**\n" + "\n".join(dup_reasoning_lines)
+            )
+    if follow_up_questions:
+        reasoning_lines = build_question_reasoning_section(follow_up_questions)
+        if reasoning_lines:
+            maintainer_parts.append(reasoning_lines)
+    details_body = "\n\n".join(maintainer_parts)
+    parts.append(
+        "<details>\n"
+        "<summary>Maintainer details</summary>\n\n"
+        f"{details_body}\n\n"
+        "</details>"
+    )
+    parts.append(TRIAGE_DISCLAIMER)
+    progress.replace_body("\n\n".join(parts))
 
 
 if __name__ == "__main__":

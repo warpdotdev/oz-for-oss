@@ -4,8 +4,8 @@ Oz for OSS is a reusable open-source automation platform that lets a Warp-hosted
 
 This branch ships two complementary delivery surfaces:
 
-- **A Vercel-hosted webhook control plane at the repo root** — `api/`, `lib/`, `tests/`, and `vercel.json` together implement a GitHub webhook receiver plus a 1-minute cron poller. The webhook is the sole delivery surface for **PR-triggered** bot behavior (`review-pull-request`, `enforce-pr-issue-state`, `respond-to-pr-comment`, `verify-pr-comment`).
-- **GitHub Actions workflows under [`.github/workflows/`](.github/workflows/)** — these continue to handle **issue-triggered** workflows (triage, spec creation, implementation, ready-label comments, unready-assignment guard) and the **plan-approval** workflows (`comment-on-plan-approved`, `trigger-implementation-on-plan-approved`, `remove-stale-issue-labels-on-plan-approved`). Those workflows clone the repository, push branches, and open PRs, which lines up better with a long-running Actions runner than with a fire-and-forget cloud agent dispatch. Finally, the scheduled self-improvement loops (`update-pr-review`, `update-triage`, `update-dedupe`) run as Actions on a weekly cron and the [`run-tests.yml`](.github/workflows/run-tests.yml) workflow runs the repo's own CI on every PR.
+- **A Vercel-hosted webhook control plane at the repo root** — `api/`, `lib/`, `tests/`, and `vercel.json` together implement a GitHub webhook receiver plus a 1-minute cron poller. The webhook is the sole delivery surface for **PR-triggered** bot behavior (`review-pull-request`, `enforce-pr-issue-state`, `respond-to-pr-comment`, `verify-pr-comment`) and for the **issue-triage** flow (`triage-new-issues`, including `@oz-agent` mentions on non-triaged issues and `needs-info` reporter replies).
+- **GitHub Actions workflows under [`.github/workflows/`](.github/workflows/)** — these continue to handle the remaining **issue-triggered** flows (`respond-to-triaged-issue-comment`, spec creation, implementation, ready-label comments, unready-assignment guard) and the **plan-approval** workflows (`comment-on-plan-approved`, `trigger-implementation-on-plan-approved`, `remove-stale-issue-labels-on-plan-approved`). Those workflows clone the repository, push branches, and open PRs, which lines up better with a long-running Actions runner than with a fire-and-forget cloud agent dispatch. Finally, the scheduled self-improvement loops (`update-pr-review`, `update-triage`, `update-dedupe`) run as Actions on a weekly cron and the [`run-tests.yml`](.github/workflows/run-tests.yml) workflow runs the repo's own CI on every PR.
 
 Triage label definitions live in [`.github/issue-triage/config.json`](.github/issue-triage/config.json). The CODEOWNERS-style stakeholder map lives in [`.github/STAKEHOLDERS`](.github/STAKEHOLDERS). Committed spec artifacts live under [`specs/GH{number}/product.md`](specs/) and [`specs/GH{number}/tech.md`](specs/).
 
@@ -42,8 +42,7 @@ Triage label definitions live in [`.github/issue-triage/config.json`](.github/is
 │   │   ├── create-implementation-from-issue{,-local}.yml   # issues + comments
 │   │   ├── create-spec-from-issue{,-local}.yml             # issues + comments
 │   │   ├── remove-stale-issue-labels-on-plan-approved{,-local}.yml
-│   │   ├── respond-to-triaged-issue-comment{,-local}.yml   # issue_comment on issues
-│   │   ├── triage-new-issues{,-local}.yml                  # issues
+│   │   ├── respond-to-triaged-issue-comment{,-local}.yml   # issue_comment on triaged issues
 │   │   ├── trigger-implementation-on-plan-approved{,-local}.yml
 │   │   ├── update-{dedupe,pr-review,triage}{,-local}.yml   # weekly cron
 │   ├── actions/
@@ -55,7 +54,6 @@ Triage label definitions live in [`.github/issue-triage/config.json`](.github/is
 │   │   ├── create_spec_from_issue.py
 │   │   ├── remove_stale_issue_labels_on_plan_approved.py
 │   │   ├── respond_to_triaged_issue_comment.py
-│   │   ├── triage_new_issues.py
 │   │   ├── trigger_implementation_on_plan_approved.py
 │   │   ├── update_dedupe.py
 │   │   ├── update_pr_review.py
@@ -74,11 +72,11 @@ The webhook ships every file under `lib/` to Vercel as part of the function bund
 
 ## How a webhook-driven workflow runs
 
-Every PR-triggered flow follows the same sequence:
+Every webhook-driven flow follows the same sequence:
 
-1. **GitHub delivers a webhook** for `pull_request`, `pull_request_review_comment`, or PR-conversation `issue_comment` events to `https://<vercel-project>.vercel.app/api/webhook`.
+1. **GitHub delivers a webhook** for `pull_request`, `pull_request_review_comment`, `issues`, or `issue_comment` events to `https://<vercel-project>.vercel.app/api/webhook`.
 2. **Signature verification.** [`lib/signatures.py`](lib/signatures.py) verifies the `X-Hub-Signature-256` header against the shared `OZ_GITHUB_WEBHOOK_SECRET`.
-3. **Routing.** [`lib/routing.py`](lib/routing.py) maps the event onto one of `review-pull-request`, `enforce-pr-issue-state`, `respond-to-pr-comment`, or `verify-pr-comment`. Plain `issues` events and plain `issue_comment` events on issues (without `pull_request`) are deliberately dropped — those are the GitHub Actions workflows' responsibility.
+3. **Routing.** [`lib/routing.py`](lib/routing.py) maps the event onto one of `review-pull-request`, `enforce-pr-issue-state`, `respond-to-pr-comment`, `verify-pr-comment`, or `triage-new-issues`. `@oz-agent` mentions on already-triaged issues stay on the GitHub Actions delivery path (`respond-to-triaged-issue-comment`); other plain-issue traffic that does not match a triage trigger is dropped with a structured reason.
 4. **Synchronous decisions.** `enforce-pr-issue-state` runs the deterministic allow/close decision inline so the legacy latency profile is preserved. Only the `need-cloud-match` branch falls through to the cloud agent.
 5. **Prompt construction + dispatch.** [`lib/builders.py`](lib/builders.py) gathers PR context from PyGithub, posts the workflow's `progress.start(...)` comment, and stashes the resulting `progress_comment_id` on the `DispatchRequest.payload_subset`. [`lib/dispatch.py`](lib/dispatch.py) then calls the Oz Python SDK to start the cloud agent run and persists an in-flight record in Vercel KV.
 6. **202 response.** The webhook returns `202 Accepted` within ~100 ms, well inside Vercel's per-request budget. The GitHub Recent Deliveries UI stays green.
@@ -96,7 +94,6 @@ Issue-triggered and plan-approval workflows are still expressed as ordinary GitH
 
 | Trigger | Workflow YAML | Python entrypoint |
 |---|---|---|
-| `issues: [opened, reopened, edited, labeled]`, `issue_comment: [created]` | [`triage-new-issues-local.yml`](.github/workflows/triage-new-issues-local.yml) → [`triage-new-issues.yml`](.github/workflows/triage-new-issues.yml) | [`triage_new_issues.py`](.github/scripts/triage_new_issues.py) |
 | `issue_comment: [created]` on triaged issues | [`respond-to-triaged-issue-comment-local.yml`](.github/workflows/respond-to-triaged-issue-comment-local.yml) → [`respond-to-triaged-issue-comment.yml`](.github/workflows/respond-to-triaged-issue-comment.yml) | [`respond_to_triaged_issue_comment.py`](.github/scripts/respond_to_triaged_issue_comment.py) |
 | `issues: [assigned, labeled]`, `issue_comment: [created]` (with `ready-to-spec`) | [`create-spec-from-issue-local.yml`](.github/workflows/create-spec-from-issue-local.yml) → [`create-spec-from-issue.yml`](.github/workflows/create-spec-from-issue.yml) | [`create_spec_from_issue.py`](.github/scripts/create_spec_from_issue.py) |
 | `issues: [assigned, labeled]`, `issue_comment: [created]` (with `ready-to-implement`) | [`create-implementation-from-issue-local.yml`](.github/workflows/create-implementation-from-issue-local.yml) → [`create-implementation-from-issue.yml`](.github/workflows/create-implementation-from-issue.yml) | [`create_implementation_from_issue.py`](.github/scripts/create_implementation_from_issue.py) |
@@ -266,5 +263,5 @@ PYTHONPATH=lib:.github/scripts \
   GITHUB_REPOSITORY=acme/widgets \
   GITHUB_EVENT_PATH=$(pwd)/event.json \
   GITHUB_RUN_ID=local-run \
-  python .github/scripts/triage_new_issues.py
+  python .github/scripts/respond_to_triaged_issue_comment.py
 ```

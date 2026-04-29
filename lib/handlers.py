@@ -38,6 +38,7 @@ from .routing import (
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
+    WORKFLOW_TRIAGE_NEW_ISSUES,
     WORKFLOW_VERIFY_PR_COMMENT,
 )
 from .state import RunState
@@ -88,10 +89,14 @@ def _reconstruct_progress(
     )
 
     payload = state.payload_subset or {}
-    pr_number = int(payload.get("pr_number") or 0)
-    if pr_number <= 0:
+    issue_number_raw = payload.get("pr_number")
+    if issue_number_raw in (None, 0, "0", ""):
+        # Triage payloads carry ``issue_number`` instead of ``pr_number``.
+        issue_number_raw = payload.get("issue_number")
+    issue_number = int(issue_number_raw or 0)
+    if issue_number <= 0:
         raise RuntimeError(
-            f"RunState.payload_subset for run {state.run_id!r} is missing pr_number"
+            f"RunState.payload_subset for run {state.run_id!r} is missing pr_number/issue_number"
         )
     owner, repo = _resolve_owner_repo(state)
     progress_comment_id = int(payload.get("progress_comment_id") or 0)
@@ -100,7 +105,7 @@ def _reconstruct_progress(
         repo_handle,
         owner,
         repo,
-        pr_number,
+        issue_number,
         workflow=workflow,
         requester_login=str(payload.get("requester") or ""),
         review_reply_target=review_reply_target,
@@ -449,6 +454,66 @@ def build_enforce_handlers(
     )
 
 
+def build_triage_handlers(
+    github_client_factory: GithubClientFactory,
+) -> WorkflowHandlers:
+    """Return :class:`WorkflowHandlers` for ``triage-new-issues``."""
+    from oz_workflows.artifacts import load_triage_artifact  # type: ignore[import-not-found]
+    from scripts.triage_new_issues import (  # type: ignore[import-not-found]
+        apply_triage_result_for_dispatch,
+    )
+
+    def loader(run_id: str) -> dict[str, Any]:
+        return load_triage_artifact(run_id)
+
+    def applier(*, state: RunState, result: Mapping[str, Any]) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_TRIAGE_NEW_ISSUES
+        )
+        run_adapter = type(
+            "CronRunAdapter",
+            (),
+            {"run_id": state.run_id, "session_link": progress.session_link},
+        )()
+        try:
+            apply_triage_result_for_dispatch(
+                repo_handle,
+                context=state.payload_subset,
+                run=run_adapter,
+                result=dict(result),
+                progress=progress,
+            )
+        except Exception:
+            _report_workflow_error_with_progress(progress)
+            raise
+
+    def failure(*, state: RunState, run: Any) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_TRIAGE_NEW_ISSUES
+        )
+        _record_session_link_safely(progress, run)
+        _report_workflow_error_with_progress(progress)
+
+    def non_terminal(*, state: RunState, run: Any) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_TRIAGE_NEW_ISSUES
+        )
+        _record_session_link_safely(progress, run)
+
+    return WorkflowHandlers(
+        artifact_loader=loader,
+        result_applier=applier,
+        failure_handler=failure,
+        non_terminal_handler=non_terminal,
+    )
+
+
 def build_handler_registry(
     *,
     github_client_factory: GithubClientFactory,
@@ -465,6 +530,7 @@ def build_handler_registry(
         WORKFLOW_ENFORCE_PR_ISSUE_STATE: build_enforce_handlers(
             github_client_factory
         ),
+        WORKFLOW_TRIAGE_NEW_ISSUES: build_triage_handlers(github_client_factory),
     }
 
 
@@ -474,5 +540,6 @@ __all__ = [
     "build_handler_registry",
     "build_respond_handlers",
     "build_review_handlers",
+    "build_triage_handlers",
     "build_verify_handlers",
 ]

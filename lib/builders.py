@@ -39,6 +39,7 @@ from .routing import (
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
+    WORKFLOW_TRIAGE_NEW_ISSUES,
     WORKFLOW_VERIFY_PR_COMMENT,
 )
 
@@ -138,6 +139,21 @@ def _resolve_pr_number(payload: Mapping[str, Any]) -> int:
     if isinstance(issue, dict) and issue.get("number") is not None:
         return int(issue["number"])
     raise ValueError("payload does not include a PR or issue number")
+
+
+def _resolve_issue_number(payload: Mapping[str, Any]) -> int:
+    """Pick the issue number from a webhook payload.
+
+    Accepts payloads with ``issue.number`` (the ``issues`` and
+    ``issue_comment`` event shapes the webhook routes to triage). Raises
+    ``ValueError`` when neither field is present so the caller can
+    surface a structured error rather than silently dispatching against
+    issue ``0``.
+    """
+    issue = payload.get("issue")
+    if isinstance(issue, dict) and issue.get("number") is not None:
+        return int(issue["number"])
+    raise ValueError("payload does not include an issue number")
 
 
 def _resolve_requester(payload: Mapping[str, Any]) -> str:
@@ -398,6 +414,74 @@ def build_verify_request(
     )
 
 
+def build_triage_request(
+    payload: Mapping[str, Any],
+    *,
+    github_client: Github,
+    workspace_path: Path | None = None,
+) -> DispatchRequest:
+    """Build the :class:`DispatchRequest` for a ``triage-new-issues`` run.
+
+    Drives the same start-comment lifecycle the legacy GitHub Actions
+    ``triage_new_issues.process_issue`` path does so the cron poller
+    can resume editing the same comment when the run terminates.
+    """
+    from oz_workflows.helpers import (  # type: ignore[import-not-found]
+        format_triage_start_line,
+    )
+    from scripts.triage_new_issues import (  # type: ignore[import-not-found]
+        build_triage_prompt_for_dispatch,
+        gather_triage_context,
+    )
+
+    owner, repo, full_name = _resolve_owner_repo(payload)
+    installation_id = _resolve_installation_id(payload)
+    issue_number = _resolve_issue_number(payload)
+    requester = _resolve_requester(payload)
+    repo_handle = github_client.get_repo(full_name)
+    triggering_comment_id = _resolve_trigger_comment_id(payload)
+    from oz_workflows.helpers import (  # type: ignore[import-not-found]
+        triggering_comment_prompt_text,
+    )
+
+    triggering_comment_text = triggering_comment_prompt_text(dict(payload))
+    context = gather_triage_context(
+        repo_handle,
+        owner=owner,
+        repo=repo,
+        issue_number=issue_number,
+        requester=requester,
+        triggering_comment_id=triggering_comment_id,
+        triggering_comment_text=triggering_comment_text,
+    )
+    progress_comment_id, progress_run_id = _start_progress_comment(
+        repo_handle=repo_handle,
+        owner=owner,
+        repo=repo,
+        issue_number=issue_number,
+        workflow=WORKFLOW_TRIAGE_NEW_ISSUES,
+        start_line=format_triage_start_line(
+            is_retriage=bool(context.get("is_retriage")),
+        ),
+        requester_login=requester,
+        event_payload=payload,
+    )
+    prompt = build_triage_prompt_for_dispatch(context)
+    payload_subset: dict[str, Any] = dict(context)
+    payload_subset["progress_comment_id"] = progress_comment_id
+    payload_subset["progress_run_id"] = progress_run_id
+    return DispatchRequest(
+        workflow=WORKFLOW_TRIAGE_NEW_ISSUES,
+        repo=full_name,
+        installation_id=installation_id,
+        config_name=WORKFLOW_TRIAGE_NEW_ISSUES,
+        title=f"Triage issue #{issue_number}",
+        skill_name="triage-issue",
+        prompt=prompt,
+        payload_subset=payload_subset,
+    )
+
+
 def build_enforce_request(
     payload: Mapping[str, Any],
     *,
@@ -505,6 +589,7 @@ def build_builder_registry(
         # this builder. Registering it here keeps the dispatch path
         # uniform.
         WORKFLOW_ENFORCE_PR_ISSUE_STATE: _wrap(build_enforce_request),
+        WORKFLOW_TRIAGE_NEW_ISSUES: _wrap(build_triage_request),
     }
 
 
@@ -513,5 +598,6 @@ __all__ = [
     "build_enforce_request",
     "build_respond_request",
     "build_review_request",
+    "build_triage_request",
     "build_verify_request",
 ]

@@ -49,6 +49,7 @@ class _BuilderTestBase(unittest.TestCase):
             "scripts.respond_to_pr_comment",
             "scripts.verify_pr_comment",
             "scripts.enforce_pr_issue_state",
+            "scripts.triage_new_issues",
             "oz_workflows",
             "oz_workflows.helpers",
         ]
@@ -79,6 +80,12 @@ class _BuilderTestBase(unittest.TestCase):
         )
         helpers.format_review_start_line = MagicMock(  # type: ignore[attr-defined]
             return_value="I'm starting a first review of this pull request."
+        )
+        helpers.format_triage_start_line = MagicMock(  # type: ignore[attr-defined]
+            return_value="I'm starting to work on triaging this issue."
+        )
+        helpers.triggering_comment_prompt_text = MagicMock(  # type: ignore[attr-defined]
+            return_value=""
         )
 
     def tearDown(self) -> None:
@@ -384,6 +391,85 @@ class BuildEnforceRequestTest(_BuilderTestBase):
             )
 
 
+class BuildTriageRequestTest(_BuilderTestBase):
+    def setUp(self) -> None:
+        super().setUp()
+        scripts = _ensure_module("scripts")
+        triage_module = _ensure_module("scripts.triage_new_issues")
+        scripts.triage_new_issues = triage_module  # type: ignore[attr-defined]
+        triage_module.gather_triage_context = MagicMock(  # type: ignore[attr-defined]
+            return_value={
+                "owner": "acme",
+                "repo": "widgets",
+                "issue_number": 91,
+                "requester": "alice",
+                "is_retriage": False,
+                "issue_title": "Login broken",
+                "issue_body": "It does not work.",
+                "issue_labels": ["bug"],
+                "issue_assignees": [],
+                "issue_created_at": "2026-04-29T00:00:00Z",
+                "triggering_comment_id": 0,
+                "triggering_comment_text": "",
+                "comments_text": "- none",
+                "original_report": "",
+                "recent_issues_text": "No recent issues.",
+                "triage_config": {"labels": {}},
+                "stakeholders_text": "No stakeholders configured.",
+                "template_context": {},
+                "configured_labels": {},
+                "repo_label_names": [],
+            }
+        )
+        triage_module.build_triage_prompt_for_dispatch = MagicMock(  # type: ignore[attr-defined]
+            return_value="TRIAGE_PROMPT_BODY"
+        )
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "repository": {"full_name": "acme/widgets"},
+            "installation": {"id": 4242},
+            "issue": {"number": 91},
+            "sender": {"login": "alice"},
+        }
+
+    def test_returns_dispatch_request_with_triage_prompt(self) -> None:
+        from lib.builders import build_triage_request
+        from lib.routing import WORKFLOW_TRIAGE_NEW_ISSUES
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+
+        request = build_triage_request(
+            self._payload(),
+            github_client=github_client,
+            workspace_path=Path("/tmp/ws"),
+        )
+        self.assertEqual(request.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
+        self.assertEqual(request.repo, "acme/widgets")
+        self.assertEqual(request.installation_id, 4242)
+        self.assertEqual(request.title, "Triage issue #91")
+        self.assertEqual(request.skill_name, "triage-issue")
+        self.assertEqual(request.prompt, "TRIAGE_PROMPT_BODY")
+        self.assertEqual(request.payload_subset["issue_number"], 91)
+        self.assertEqual(len(self.progress_instances), 1)
+        self.progress_instances[0].start.assert_called_once()
+        self.assertEqual(request.payload_subset["progress_comment_id"], 4242)
+        self.assertEqual(request.payload_subset["progress_run_id"], "run-uuid-hex")
+
+    def test_raises_when_payload_is_missing_issue_number(self) -> None:
+        from lib.builders import build_triage_request
+
+        payload = self._payload()
+        payload.pop("issue")
+        with self.assertRaises(ValueError):
+            build_triage_request(
+                payload,
+                github_client=MagicMock(),
+                workspace_path=Path("/tmp/ws"),
+            )
+
+
 class BuildBuilderRegistryTest(_BuilderTestBase):
     def test_registry_keys_match_workflow_constants(self) -> None:
         from lib.builders import build_builder_registry
@@ -391,6 +477,7 @@ class BuildBuilderRegistryTest(_BuilderTestBase):
             WORKFLOW_ENFORCE_PR_ISSUE_STATE,
             WORKFLOW_RESPOND_TO_PR_COMMENT,
             WORKFLOW_REVIEW_PR,
+            WORKFLOW_TRIAGE_NEW_ISSUES,
             WORKFLOW_VERIFY_PR_COMMENT,
         )
 
@@ -402,6 +489,7 @@ class BuildBuilderRegistryTest(_BuilderTestBase):
                 WORKFLOW_RESPOND_TO_PR_COMMENT,
                 WORKFLOW_VERIFY_PR_COMMENT,
                 WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+                WORKFLOW_TRIAGE_NEW_ISSUES,
             },
         )
 

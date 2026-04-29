@@ -19,16 +19,18 @@ from lib.routing import (
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
+    WORKFLOW_TRIAGE_NEW_ISSUES,
     WORKFLOW_VERIFY_PR_COMMENT,
     route_event,
 )
 
 
-def _issue(*, labels=None, assignees=None, pull_request=None):
+def _issue(*, labels=None, assignees=None, pull_request=None, user=None):
     return {
         "number": 42,
         "labels": [{"name": label} for label in labels or []],
         "assignees": [{"login": login} for login in assignees or []],
+        "user": user or {"login": "alice", "type": "User"},
         **({"pull_request": pull_request} if pull_request else {}),
     }
 
@@ -42,13 +44,26 @@ def _comment(*, body, login="alice", user_type="User"):
     }
 
 
-class IssuesEventNotRoutedTest(unittest.TestCase):
-    """``issues`` events are owned by GitHub Actions and never routed."""
+class IssuesEventTest(unittest.TestCase):
+    """``issues`` events route to the triage workflow."""
 
-    def test_issues_event_is_dropped(self) -> None:
+    def test_issues_opened_routes_to_triage(self) -> None:
         decision = route_event("issues", {"action": "opened", "issue": _issue()})
+        self.assertEqual(decision.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
+
+    def test_issues_opened_on_triaged_issue_is_dropped(self) -> None:
+        decision = route_event(
+            "issues",
+            {"action": "opened", "issue": _issue(labels=["triaged"])},
+        )
         self.assertIsNone(decision.workflow)
-        self.assertIn("not handled", decision.reason)
+
+    def test_issues_opened_for_pull_request_is_dropped(self) -> None:
+        decision = route_event(
+            "issues",
+            {"action": "opened", "issue": _issue(pull_request={"url": ""})},
+        )
+        self.assertIsNone(decision.workflow)
 
     def test_issues_assigned_event_is_dropped(self) -> None:
         decision = route_event(
@@ -57,6 +72,17 @@ class IssuesEventNotRoutedTest(unittest.TestCase):
                 "action": "assigned",
                 "assignee": {"login": OZ_AGENT_LOGIN},
                 "issue": _issue(labels=["ready-to-implement"], assignees=[OZ_AGENT_LOGIN]),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("not handled", decision.reason)
+
+    def test_issues_opened_for_bot_author_is_dropped(self) -> None:
+        decision = route_event(
+            "issues",
+            {
+                "action": "opened",
+                "issue": _issue(user={"login": "dependabot[bot]", "type": "Bot"}),
             },
         )
         self.assertIsNone(decision.workflow)
@@ -119,7 +145,7 @@ class IssueCommentEventTest(unittest.TestCase):
         )
         self.assertIsNone(decision.workflow)
 
-    def test_plain_issue_comment_is_dropped_for_github_actions(self) -> None:
+    def test_oz_agent_mention_on_triaged_plain_issue_stays_on_github_actions(self) -> None:
         decision = route_event(
             "issue_comment",
             {
@@ -130,6 +156,56 @@ class IssueCommentEventTest(unittest.TestCase):
         )
         self.assertIsNone(decision.workflow)
         self.assertIn("GitHub Actions", decision.reason)
+
+    def test_oz_agent_mention_on_non_triaged_plain_issue_routes_to_triage(self) -> None:
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(labels=[]),
+                "comment": _comment(body="@oz-agent please look"),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
+
+    def test_needs_info_reply_from_issue_author_routes_to_triage(self) -> None:
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(
+                    labels=["needs-info"],
+                    user={"login": "alice", "type": "User"},
+                ),
+                "comment": _comment(body="Here's the version info", login="alice"),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
+
+    def test_needs_info_reply_from_other_user_is_dropped(self) -> None:
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(
+                    labels=["needs-info"],
+                    user={"login": "alice", "type": "User"},
+                ),
+                "comment": _comment(body="Drive-by suggestion", login="bob"),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+
+    def test_plain_issue_without_mention_or_needs_info_is_dropped(self) -> None:
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(),
+                "comment": _comment(body="thanks for filing this"),
+            },
+        )
+        self.assertIsNone(decision.workflow)
 
     def test_unhandled_action_skipped(self) -> None:
         decision = route_event(

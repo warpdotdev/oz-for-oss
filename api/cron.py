@@ -5,11 +5,12 @@ Vercel cron triggers hit ``/api/cron`` on the schedule defined in
 the Oz API for terminal status, and applies the result back to GitHub
 via the registered :class:`~control_plane.lib.poll_runs.WorkflowHandlers`.
 
-The handler registers concrete result appliers for the live PR
-workflows (review, PR-comment response, verification, and PR/issue
-state enforcement). Issue and plan-approval workflows remain on the
-legacy GitHub Actions path until their builders and handlers are added
-in a follow-up.
+The handler registers concrete result appliers for the live
+webhook-served workflows: PR review, respond-to-PR-comment,
+verification, PR/issue state enforcement, and issue triage. The
+respond-to-triaged-issue-comment, plan-approval, and self-improvement
+workflows remain on the legacy GitHub Actions path until their
+builders and handlers are added in a follow-up.
 """
 
 from __future__ import annotations

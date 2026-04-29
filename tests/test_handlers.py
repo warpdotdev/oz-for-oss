@@ -46,6 +46,7 @@ class _HandlerTestBase(unittest.TestCase):
             "scripts.respond_to_pr_comment",
             "scripts.verify_pr_comment",
             "scripts.enforce_pr_issue_state",
+            "scripts.triage_new_issues",
             "oz_workflows",
             "oz_workflows.artifacts",
             "oz_workflows.helpers",
@@ -60,15 +61,18 @@ class _HandlerTestBase(unittest.TestCase):
         respond = _ensure_module("scripts.respond_to_pr_comment")
         verify = _ensure_module("scripts.verify_pr_comment")
         enforce = _ensure_module("scripts.enforce_pr_issue_state")
+        triage = _ensure_module("scripts.triage_new_issues")
         scripts.review_pr = review  # type: ignore[attr-defined]
         scripts.respond_to_pr_comment = respond  # type: ignore[attr-defined]
         scripts.verify_pr_comment = verify  # type: ignore[attr-defined]
         scripts.enforce_pr_issue_state = enforce  # type: ignore[attr-defined]
+        scripts.triage_new_issues = triage  # type: ignore[attr-defined]
         review.apply_review_result = MagicMock()  # type: ignore[attr-defined]
         respond.apply_pr_comment_result = MagicMock()  # type: ignore[attr-defined]
         verify.apply_verification_result = MagicMock()  # type: ignore[attr-defined]
         verify.VERIFICATION_REPORT_FILENAME = "verification_report.json"  # type: ignore[attr-defined]
         enforce.apply_issue_association_result = MagicMock()  # type: ignore[attr-defined]
+        triage.apply_triage_result_for_dispatch = MagicMock()  # type: ignore[attr-defined]
         oz = _ensure_module("oz_workflows")
         artifacts = _ensure_module("oz_workflows.artifacts")
         helpers = _ensure_module("oz_workflows.helpers")
@@ -78,6 +82,7 @@ class _HandlerTestBase(unittest.TestCase):
         oz.verification = verification  # type: ignore[attr-defined]
         artifacts.load_review_artifact = MagicMock(return_value={"summary": "ok"})  # type: ignore[attr-defined]
         artifacts.load_run_artifact = MagicMock(return_value={"overall_status": "passed"})  # type: ignore[attr-defined]
+        artifacts.load_triage_artifact = MagicMock(return_value={"summary": "triage ok", "labels": []})  # type: ignore[attr-defined]
         artifacts.poll_for_artifact = MagicMock(return_value={"matched": True, "issue_number": 1})  # type: ignore[attr-defined]
         # Track every reconstructed progress comment so individual
         # tests can assert ``complete`` / ``replace_body`` /
@@ -332,6 +337,79 @@ class EnforceHandlersTest(_HandlerTestBase):
         self.assertIs(kwargs["progress"], self.progress_instances[-1])
 
 
+class TriageHandlersTest(_HandlerTestBase):
+    def _state(self) -> RunState:
+        return _state(
+            "triage-new-issues",
+            payload_subset={
+                "owner": "acme",
+                "repo": "widgets",
+                "issue_number": 91,
+                "requester": "alice",
+                "progress_comment_id": 7777,
+                "progress_run_id": "run-triage-hex",
+                "configured_labels": {},
+                "repo_label_names": [],
+            },
+        )
+
+    def test_artifact_loader_calls_load_triage_artifact(self) -> None:
+        from lib.handlers import build_triage_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_triage_handlers(_factory(github_client))
+        result = handlers.artifact_loader("run-1")
+        self.assertEqual(result, {"summary": "triage ok", "labels": []})
+
+    def test_result_applier_invokes_apply_triage_result_for_dispatch(self) -> None:
+        from lib.handlers import build_triage_handlers
+
+        github_client = MagicMock()
+        repo_handle = MagicMock(name="repo")
+        github_client.get_repo.return_value = repo_handle
+        handlers = build_triage_handlers(_factory(github_client))
+        state = self._state()
+        handlers.result_applier(state=state, result={"summary": "ok", "labels": []})
+        from scripts.triage_new_issues import (  # type: ignore[import-not-found]
+            apply_triage_result_for_dispatch,
+        )
+
+        apply_triage_result_for_dispatch.assert_called_once()
+        kwargs = apply_triage_result_for_dispatch.call_args.kwargs
+        self.assertIs(kwargs["context"], state.payload_subset)
+        self.assertIs(kwargs["progress"], self.progress_instances[-1])
+        self.assertEqual(self.progress_instances[-1].comment_id, 7777)
+        self.assertEqual(self.progress_instances[-1].run_id, "run-triage-hex")
+
+    def test_failure_handler_posts_workflow_error(self) -> None:
+        from lib.handlers import build_triage_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_triage_handlers(_factory(github_client))
+        handlers.failure_handler(state=self._state(), run=MagicMock(state="FAILED"))
+        self.assertEqual(len(self.progress_instances), 1)
+        self.progress_instances[0].report_error.assert_called_once()
+
+    def test_non_terminal_handler_records_session_link(self) -> None:
+        from lib.handlers import build_triage_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_triage_handlers(_factory(github_client))
+        run = MagicMock(
+            state="RUNNING",
+            session_link="https://app.warp.dev/run/abc",
+            run_id="oz-run-321",
+        )
+        handlers.non_terminal_handler(state=self._state(), run=run)
+        helpers = sys.modules["oz_workflows.helpers"]
+        helpers.record_run_session_link.assert_called_once_with(  # type: ignore[attr-defined]
+            self.progress_instances[-1], run
+        )
+
+
 class HandlerRegistryTest(_HandlerTestBase):
     def test_registry_includes_all_pr_workflows(self) -> None:
         from lib.handlers import build_handler_registry
@@ -339,6 +417,7 @@ class HandlerRegistryTest(_HandlerTestBase):
             WORKFLOW_ENFORCE_PR_ISSUE_STATE,
             WORKFLOW_RESPOND_TO_PR_COMMENT,
             WORKFLOW_REVIEW_PR,
+            WORKFLOW_TRIAGE_NEW_ISSUES,
             WORKFLOW_VERIFY_PR_COMMENT,
         )
 
@@ -352,6 +431,7 @@ class HandlerRegistryTest(_HandlerTestBase):
                 WORKFLOW_RESPOND_TO_PR_COMMENT,
                 WORKFLOW_VERIFY_PR_COMMENT,
                 WORKFLOW_ENFORCE_PR_ISSUE_STATE,
+                WORKFLOW_TRIAGE_NEW_ISSUES,
             },
         )
 
