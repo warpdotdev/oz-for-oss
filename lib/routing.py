@@ -7,16 +7,14 @@ should run and why. A return value of ``None`` for ``workflow`` means
 the event is deliberately ignored — for example, automation-authored
 comments, unsupported event types, or PRs that close without changes.
 
-The webhook is the sole delivery surface for the bot behavior that the
-control plane drives. Plan-approval workflows and a handful of related
-issue helpers (``comment-on-unready-assigned-issue``, ``create-spec``,
-``create-implementation``, …) still flow through the legacy GitHub
-Actions wrappers under ``.github/workflows/`` because they perform
-repository-mutating work (cloning repos, pushing branches, opening
-PRs) that is easier to express as a job in the GitHub Actions runtime
-than as a fire-and-forget cloud agent dispatch. The router
-intentionally drops those events so the webhook does not double-fire
-alongside the GitHub Actions workflow.
+The webhook is the sole delivery surface for the bot behavior that
+the control plane drives. The legacy GitHub Actions adapters that
+used to mirror these triggers (``create-spec-from-issue-local.yml``,
+``create-implementation-from-issue-local.yml``, etc.) are deleted as
+routing moves into this module so the webhook does not race the
+runner. The few remaining ``.github/workflows/`` entries cover
+repository-mutating helpers (plan-approval triggers,
+``comment-on-unready-assigned-issue``) that are not yet migrated.
 
 Webhook coverage today:
 
@@ -29,10 +27,20 @@ Webhook coverage today:
 - ``issue_comment`` events on a pull request route to the same set as
   ``pull_request_review_comment`` (GitHub delivers PR conversation
   comments under the ``issue_comment`` event).
-- ``issues`` events on a freshly opened issue route to
-  ``triage-new-issues`` regardless of the issue's existing labels
-  (``ready-to-spec`` / ``ready-to-implement`` issues still get a
-  triage pass).
+- ``issues`` events:
+
+  - ``opened`` routes to ``triage-new-issues`` regardless of the
+    issue's existing labels (``ready-to-spec`` /
+    ``ready-to-implement`` issues still get a triage pass).
+  - ``assigned`` routes to ``create-spec-from-issue`` or
+    ``create-implementation-from-issue`` when the assignee being
+    added is ``oz-agent`` and the issue carries the matching
+    lifecycle label (``ready-to-spec`` /
+    ``ready-to-implement``).
+  - ``labeled`` routes to the same workflows when the label being
+    added is one of ``ready-to-spec`` / ``ready-to-implement`` and
+    ``oz-agent`` is already among the assignees.
+
 - ``issue_comment`` events on a plain (non-PR) issue route to
   ``triage-new-issues`` when the comment carries an ``@oz-agent``
   mention (regardless of triaged / needs-info / ready-to-implement
@@ -67,11 +75,15 @@ WORKFLOW_RESPOND_TO_PR_COMMENT = "respond-to-pr-comment"
 WORKFLOW_VERIFY_PR_COMMENT = "verify-pr-comment"
 WORKFLOW_ENFORCE_PR_ISSUE_STATE = "enforce-pr-issue-state"
 WORKFLOW_TRIAGE_NEW_ISSUES = "triage-new-issues"
+WORKFLOW_CREATE_SPEC_FROM_ISSUE = "create-spec-from-issue"
+WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE = "create-implementation-from-issue"
 
 OZ_AGENT_LOGIN = "oz-agent"
 OZ_REVIEW_LABEL = "oz-review"
 TRIAGED_LABEL = "triaged"
 NEEDS_INFO_LABEL = "needs-info"
+READY_TO_SPEC_LABEL = "ready-to-spec"
+READY_TO_IMPLEMENT_LABEL = "ready-to-implement"
 
 OZ_AGENT_MENTION = "@oz-agent"
 OZ_REVIEW_COMMAND = "/oz-review"
@@ -190,6 +202,23 @@ def _route_plain_issue_comment(
     labels = _label_names(issue.get("labels"))
     has_mention = OZ_AGENT_MENTION in body
     if has_mention:
+        # ``ready-to-implement`` and ``ready-to-spec`` issues are
+        # already past triage — a maintainer pinging ``@oz-agent``
+        # there is asking the bot to start (or refresh) the
+        # implementation / spec PR rather than to re-triage. Check
+        # the implementation label first so issues that somehow
+        # carry both labels at once (e.g. mid-promotion) skip the
+        # spec stage.
+        if READY_TO_IMPLEMENT_LABEL in labels:
+            return RouteDecision(
+                WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+                "@oz-agent mention on ready-to-implement issue",
+            )
+        if READY_TO_SPEC_LABEL in labels:
+            return RouteDecision(
+                WORKFLOW_CREATE_SPEC_FROM_ISSUE,
+                "@oz-agent mention on ready-to-spec issue",
+            )
         return RouteDecision(
             WORKFLOW_TRIAGE_NEW_ISSUES,
             "@oz-agent mention triggers (re-)triage",
@@ -211,32 +240,102 @@ def _route_plain_issue_comment(
 def _route_issues(payload: dict[str, Any]) -> RouteDecision:
     """Route an ``issues`` webhook event.
 
-    Triage runs are dispatched on every ``opened`` event regardless of
-    the issue's existing labels. Issues that arrive with prior
-    lifecycle labels (``ready-to-spec``, ``ready-to-implement``, etc.)
-    — for example because they were imported from another repo or
-    re-opened — still get a triage pass so the bot can post a fresh
-    progress comment and pick up any state changes that landed while
-    the issue was closed. Other actions (``edited``, ``labeled``,
-    ``assigned``, …) stay on their GitHub Actions delivery paths
-    (e.g. ``comment-on-unready-assigned-issue.yml``) so this router
-    does not race with workflows that mutate issue state directly.
+    Three actions are routed:
+
+    - ``opened`` triggers a fresh triage pass regardless of the
+      issue's existing labels. Issues that arrive with prior
+      lifecycle labels (``ready-to-spec``, ``ready-to-implement``,
+      etc.) — for example because they were imported from another
+      repo or re-opened — still get a triage pass so the bot can
+      post a fresh progress comment and pick up any state changes
+      that landed while the issue was closed.
+    - ``assigned`` triggers ``create-spec-from-issue`` or
+      ``create-implementation-from-issue`` when the assignee being
+      added is ``oz-agent`` itself and the issue carries the
+      matching lifecycle label. Operators assigning humans use this
+      event for their own tracking and the bot stays out of it.
+    - ``labeled`` triggers the same workflows when the label being
+      added is ``ready-to-spec`` or ``ready-to-implement`` and
+      ``oz-agent`` is already among the issue assignees.
+
+    Both ``assigned`` and ``labeled`` are inherently trust-safe:
+    GitHub only allows repository collaborators (triage permission
+    or higher) to assign or label issues, so there is no separate
+    membership probe here. ``ready-to-implement`` wins over
+    ``ready-to-spec`` when an issue carries both labels so the bot
+    does not regenerate a spec for an issue that has already moved
+    to implementation.
     """
     action = str(payload.get("action") or "").strip()
     issue = payload.get("issue") or {}
     if not isinstance(issue, dict):
         return RouteDecision(None, "missing issue payload")
-    if action != "opened":
-        return RouteDecision(None, f"issues action {action!r} not handled")
     if issue.get("pull_request"):
         # GitHub mirrors PRs into the issues feed; the dedicated
         # ``pull_request`` route already covers them.
-        return RouteDecision(None, "issues.opened delivered for a pull request")
-    if _is_bot(issue.get("user")):
-        return RouteDecision(None, "issue authored by automation user")
-    return RouteDecision(
-        WORKFLOW_TRIAGE_NEW_ISSUES, "issues.opened triggers triage"
-    )
+        return RouteDecision(
+            None, f"issues.{action} delivered for a pull request"
+        )
+    if action == "opened":
+        if _is_bot(issue.get("user")):
+            return RouteDecision(None, "issue authored by automation user")
+        return RouteDecision(
+            WORKFLOW_TRIAGE_NEW_ISSUES, "issues.opened triggers triage"
+        )
+    if action == "assigned":
+        # Only fire when the assignee being added is ``oz-agent``
+        # itself — maintainers assigning humans use this event for
+        # their own tracking and the bot must stay out of it.
+        assignee_login = _login(payload.get("assignee"))
+        if assignee_login != OZ_AGENT_LOGIN:
+            return RouteDecision(
+                None,
+                f"issues.assigned for non-oz-agent assignee {assignee_login!r}",
+            )
+        labels = _label_names(issue.get("labels"))
+        if READY_TO_IMPLEMENT_LABEL in labels:
+            return RouteDecision(
+                WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+                "oz-agent assigned to ready-to-implement issue",
+            )
+        if READY_TO_SPEC_LABEL in labels:
+            return RouteDecision(
+                WORKFLOW_CREATE_SPEC_FROM_ISSUE,
+                "oz-agent assigned to ready-to-spec issue",
+            )
+        return RouteDecision(
+            None,
+            "oz-agent assigned to issue without ready-to-spec or ready-to-implement label",
+        )
+    if action == "labeled":
+        # Only fire when one of the lifecycle labels was just added,
+        # and ``oz-agent`` is already among the assignees so the
+        # bot has been explicitly enlisted to act.
+        label_name = str((payload.get("label") or {}).get("name") or "").strip()
+        if label_name not in {READY_TO_SPEC_LABEL, READY_TO_IMPLEMENT_LABEL}:
+            return RouteDecision(
+                None, f"unhandled label {label_name!r} on issue"
+            )
+        assignees = [
+            _login(assignee)
+            for assignee in issue.get("assignees") or []
+            if isinstance(assignee, dict)
+        ]
+        if OZ_AGENT_LOGIN not in assignees:
+            return RouteDecision(
+                None,
+                f"{label_name!r} added to issue without oz-agent assignee",
+            )
+        if label_name == READY_TO_IMPLEMENT_LABEL:
+            return RouteDecision(
+                WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+                "ready-to-implement label added with oz-agent assignee",
+            )
+        return RouteDecision(
+            WORKFLOW_CREATE_SPEC_FROM_ISSUE,
+            "ready-to-spec label added with oz-agent assignee",
+        )
+    return RouteDecision(None, f"issues action {action!r} not handled")
 
 
 def _route_pull_request(payload: dict[str, Any]) -> RouteDecision:
@@ -317,8 +416,12 @@ __all__ = [
     "OZ_REVIEW_COMMAND",
     "OZ_VERIFY_COMMAND",
     "OZ_REVIEW_LABEL",
+    "READY_TO_IMPLEMENT_LABEL",
+    "READY_TO_SPEC_LABEL",
     "RouteDecision",
     "TRIAGED_LABEL",
+    "WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE",
+    "WORKFLOW_CREATE_SPEC_FROM_ISSUE",
     "WORKFLOW_ENFORCE_PR_ISSUE_STATE",
     "WORKFLOW_RESPOND_TO_PR_COMMENT",
     "WORKFLOW_REVIEW_PR",

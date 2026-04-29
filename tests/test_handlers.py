@@ -47,6 +47,8 @@ class _HandlerTestBase(unittest.TestCase):
             "scripts.verify_pr_comment",
             "scripts.enforce_pr_issue_state",
             "scripts.triage_new_issues",
+            "scripts.create_spec_from_issue",
+            "scripts.create_implementation_from_issue",
             "oz_workflows",
             "oz_workflows.artifacts",
             "oz_workflows.helpers",
@@ -62,17 +64,25 @@ class _HandlerTestBase(unittest.TestCase):
         verify = _ensure_module("scripts.verify_pr_comment")
         enforce = _ensure_module("scripts.enforce_pr_issue_state")
         triage = _ensure_module("scripts.triage_new_issues")
+        create_spec = _ensure_module("scripts.create_spec_from_issue")
+        create_implementation = _ensure_module(
+            "scripts.create_implementation_from_issue"
+        )
         scripts.review_pr = review  # type: ignore[attr-defined]
         scripts.respond_to_pr_comment = respond  # type: ignore[attr-defined]
         scripts.verify_pr_comment = verify  # type: ignore[attr-defined]
         scripts.enforce_pr_issue_state = enforce  # type: ignore[attr-defined]
         scripts.triage_new_issues = triage  # type: ignore[attr-defined]
+        scripts.create_spec_from_issue = create_spec  # type: ignore[attr-defined]
+        scripts.create_implementation_from_issue = create_implementation  # type: ignore[attr-defined]
         review.apply_review_result = MagicMock()  # type: ignore[attr-defined]
         respond.apply_pr_comment_result = MagicMock()  # type: ignore[attr-defined]
         verify.apply_verification_result = MagicMock()  # type: ignore[attr-defined]
         verify.VERIFICATION_REPORT_FILENAME = "verification_report.json"  # type: ignore[attr-defined]
         enforce.apply_issue_association_result = MagicMock()  # type: ignore[attr-defined]
         triage.apply_triage_result_for_dispatch = MagicMock()  # type: ignore[attr-defined]
+        create_spec.apply_create_spec_result = MagicMock()  # type: ignore[attr-defined]
+        create_implementation.apply_create_implementation_result = MagicMock()  # type: ignore[attr-defined]
         oz = _ensure_module("oz_workflows")
         artifacts = _ensure_module("oz_workflows.artifacts")
         helpers = _ensure_module("oz_workflows.helpers")
@@ -414,6 +424,8 @@ class HandlerRegistryTest(_HandlerTestBase):
     def test_registry_includes_all_pr_workflows(self) -> None:
         from lib.handlers import build_handler_registry
         from lib.routing import (
+            WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+            WORKFLOW_CREATE_SPEC_FROM_ISSUE,
             WORKFLOW_ENFORCE_PR_ISSUE_STATE,
             WORKFLOW_RESPOND_TO_PR_COMMENT,
             WORKFLOW_REVIEW_PR,
@@ -432,6 +444,8 @@ class HandlerRegistryTest(_HandlerTestBase):
                 WORKFLOW_VERIFY_PR_COMMENT,
                 WORKFLOW_ENFORCE_PR_ISSUE_STATE,
                 WORKFLOW_TRIAGE_NEW_ISSUES,
+                WORKFLOW_CREATE_SPEC_FROM_ISSUE,
+                WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
             },
         )
 

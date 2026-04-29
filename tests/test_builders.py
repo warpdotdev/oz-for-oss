@@ -50,6 +50,8 @@ class _BuilderTestBase(unittest.TestCase):
             "scripts.verify_pr_comment",
             "scripts.enforce_pr_issue_state",
             "scripts.triage_new_issues",
+            "scripts.create_spec_from_issue",
+            "scripts.create_implementation_from_issue",
             "oz_workflows",
             "oz_workflows.helpers",
         ]
@@ -474,6 +476,8 @@ class BuildBuilderRegistryTest(_BuilderTestBase):
     def test_registry_keys_match_workflow_constants(self) -> None:
         from lib.builders import build_builder_registry
         from lib.routing import (
+            WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+            WORKFLOW_CREATE_SPEC_FROM_ISSUE,
             WORKFLOW_ENFORCE_PR_ISSUE_STATE,
             WORKFLOW_RESPOND_TO_PR_COMMENT,
             WORKFLOW_REVIEW_PR,
@@ -490,6 +494,8 @@ class BuildBuilderRegistryTest(_BuilderTestBase):
                 WORKFLOW_VERIFY_PR_COMMENT,
                 WORKFLOW_ENFORCE_PR_ISSUE_STATE,
                 WORKFLOW_TRIAGE_NEW_ISSUES,
+                WORKFLOW_CREATE_SPEC_FROM_ISSUE,
+                WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
             },
         )
 

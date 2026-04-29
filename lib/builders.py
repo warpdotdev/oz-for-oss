@@ -36,6 +36,8 @@ from .dispatch import DispatchRequest, PromptBuilder
 from .routing import (
     OZ_REVIEW_COMMAND,
     OZ_VERIFY_COMMAND,
+    WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+    WORKFLOW_CREATE_SPEC_FROM_ISSUE,
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
@@ -482,6 +484,143 @@ def build_triage_request(
     )
 
 
+def build_create_spec_request(
+    payload: Mapping[str, Any],
+    *,
+    github_client: Github,
+    workspace_path: Path | None = None,
+) -> DispatchRequest:
+    """Build the :class:`DispatchRequest` for a ``create-spec-from-issue`` run.
+
+    Triggered when an ``@oz-agent`` mention lands on a plain issue
+    that already carries the ``ready-to-spec`` label. The webhook
+    handler resolves the issue, gathers the spec context, posts the
+    "starting/updating spec PR" progress comment, and dispatches the
+    cloud agent. The cron poller picks up the SUCCEEDED run and calls
+    :func:`apply_create_spec_result`.
+    """
+    from scripts.create_spec_from_issue import (  # type: ignore[import-not-found]
+        build_create_spec_prompt_for_dispatch,
+        gather_create_spec_context,
+        SPEC_DRIVEN_IMPLEMENTATION_SKILL,
+    )
+
+    owner, repo, full_name = _resolve_owner_repo(payload)
+    installation_id = _resolve_installation_id(payload)
+    issue_number = _resolve_issue_number(payload)
+    requester = _resolve_requester(payload)
+    triggering_comment_id = _resolve_trigger_comment_id(payload)
+    repo_handle = github_client.get_repo(full_name)
+    from oz_workflows.helpers import (  # type: ignore[import-not-found]
+        triggering_comment_prompt_text,
+    )
+
+    triggering_comment_text = triggering_comment_prompt_text(dict(payload))
+    context = gather_create_spec_context(
+        repo_handle,
+        owner=owner,
+        repo=repo,
+        issue_number=issue_number,
+        requester=requester,
+        triggering_comment_id=triggering_comment_id,
+        triggering_comment_text=triggering_comment_text,
+        event_payload=dict(payload),
+        github_client=github_client,
+    )
+    progress_comment_id, progress_run_id = _start_progress_comment(
+        repo_handle=repo_handle,
+        owner=owner,
+        repo=repo,
+        issue_number=issue_number,
+        workflow=WORKFLOW_CREATE_SPEC_FROM_ISSUE,
+        start_line=str(context.get("progress_start_line") or ""),
+        requester_login=requester,
+        event_payload=payload,
+    )
+    prompt = build_create_spec_prompt_for_dispatch(context)
+    payload_subset: dict[str, Any] = dict(context)
+    payload_subset["progress_comment_id"] = progress_comment_id
+    payload_subset["progress_run_id"] = progress_run_id
+    return DispatchRequest(
+        workflow=WORKFLOW_CREATE_SPEC_FROM_ISSUE,
+        repo=full_name,
+        installation_id=installation_id,
+        config_name=WORKFLOW_CREATE_SPEC_FROM_ISSUE,
+        title=f"Create specs for issue #{issue_number}",
+        skill_name=SPEC_DRIVEN_IMPLEMENTATION_SKILL,
+        prompt=prompt,
+        payload_subset=payload_subset,
+    )
+
+
+def build_create_implementation_request(
+    payload: Mapping[str, Any],
+    *,
+    github_client: Github,
+    workspace_path: Path | None = None,
+) -> DispatchRequest:
+    """Build the :class:`DispatchRequest` for a ``create-implementation-from-issue`` run.
+
+    Triggered when an ``@oz-agent`` mention lands on a plain issue
+    that already carries the ``ready-to-implement`` label. The webhook
+    handler resolves the spec context (linked approved spec PR, if
+    any), posts the implementation progress comment, and dispatches
+    the cloud agent. The cron poller picks up the SUCCEEDED run and
+    calls :func:`apply_create_implementation_result`.
+    """
+    from scripts.create_implementation_from_issue import (  # type: ignore[import-not-found]
+        IMPLEMENT_SPECS_SKILL,
+        build_create_implementation_prompt_for_dispatch,
+        gather_create_implementation_context,
+    )
+
+    owner, repo, full_name = _resolve_owner_repo(payload)
+    installation_id = _resolve_installation_id(payload)
+    issue_number = _resolve_issue_number(payload)
+    requester = _resolve_requester(payload)
+    repo_handle = github_client.get_repo(full_name)
+    from oz_workflows.helpers import (  # type: ignore[import-not-found]
+        triggering_comment_prompt_text,
+    )
+
+    triggering_comment_text = triggering_comment_prompt_text(dict(payload))
+    context = gather_create_implementation_context(
+        repo_handle,
+        owner=owner,
+        repo=repo,
+        issue_number=issue_number,
+        requester=requester,
+        triggering_comment_text=triggering_comment_text,
+        event_payload=dict(payload),
+        workspace_path=workspace_path or Path("/tmp"),
+        github_client=github_client,
+    )
+    progress_comment_id, progress_run_id = _start_progress_comment(
+        repo_handle=repo_handle,
+        owner=owner,
+        repo=repo,
+        issue_number=issue_number,
+        workflow=WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+        start_line=str(context.get("progress_start_line") or ""),
+        requester_login=requester,
+        event_payload=payload,
+    )
+    prompt = build_create_implementation_prompt_for_dispatch(context)
+    payload_subset: dict[str, Any] = dict(context)
+    payload_subset["progress_comment_id"] = progress_comment_id
+    payload_subset["progress_run_id"] = progress_run_id
+    return DispatchRequest(
+        workflow=WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+        repo=full_name,
+        installation_id=installation_id,
+        config_name=WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+        title=f"Implement issue #{issue_number}",
+        skill_name=IMPLEMENT_SPECS_SKILL,
+        prompt=prompt,
+        payload_subset=payload_subset,
+    )
+
+
 def build_enforce_request(
     payload: Mapping[str, Any],
     *,
@@ -590,11 +729,17 @@ def build_builder_registry(
         # uniform.
         WORKFLOW_ENFORCE_PR_ISSUE_STATE: _wrap(build_enforce_request),
         WORKFLOW_TRIAGE_NEW_ISSUES: _wrap(build_triage_request),
+        WORKFLOW_CREATE_SPEC_FROM_ISSUE: _wrap(build_create_spec_request),
+        WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE: _wrap(
+            build_create_implementation_request
+        ),
     }
 
 
 __all__ = [
     "build_builder_registry",
+    "build_create_implementation_request",
+    "build_create_spec_request",
     "build_enforce_request",
     "build_respond_request",
     "build_review_request",

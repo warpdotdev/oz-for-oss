@@ -1,10 +1,10 @@
 """Tests for ``lib.routing``.
 
-The webhook router only handles PR-driven events; issue-triggered and
-plan-approval traffic stays on the GitHub Actions workflows under
-``.github/workflows/``. These tests cover the routes the webhook
-actually owns and confirm that issue-only payloads are dropped with a
-descriptive reason rather than re-dispatched.
+The webhook router owns every issue-driven and PR-driven Oz workflow
+that the legacy ``.github/workflows/`` adapters used to host. These
+tests cover the routes the webhook actually delivers and confirm that
+out-of-band variants (non-Oz assignees, mismatched labels, etc.) are
+dropped with a descriptive reason rather than dispatched anyway.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from . import conftest  # noqa: F401
 from lib.routing import (
     OZ_AGENT_LOGIN,
     RouteDecision,
+    WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+    WORKFLOW_CREATE_SPEC_FROM_ISSUE,
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
@@ -79,18 +81,6 @@ class IssuesEventTest(unittest.TestCase):
         )
         self.assertIsNone(decision.workflow)
 
-    def test_issues_assigned_event_is_dropped(self) -> None:
-        decision = route_event(
-            "issues",
-            {
-                "action": "assigned",
-                "assignee": {"login": OZ_AGENT_LOGIN},
-                "issue": _issue(labels=["ready-to-implement"], assignees=[OZ_AGENT_LOGIN]),
-            },
-        )
-        self.assertIsNone(decision.workflow)
-        self.assertIn("not handled", decision.reason)
-
     def test_issues_opened_for_bot_author_is_dropped(self) -> None:
         decision = route_event(
             "issues",
@@ -100,6 +90,178 @@ class IssuesEventTest(unittest.TestCase):
             },
         )
         self.assertIsNone(decision.workflow)
+
+    def test_oz_agent_assigned_to_ready_to_implement_routes_to_create_implementation(
+        self,
+    ) -> None:
+        # Maintainer-driven assignment is the canonical way to kick
+        # off implementation: oz-agent gets assigned, the
+        # ``ready-to-implement`` label is already present, and the
+        # webhook fires the create-implementation workflow.
+        decision = route_event(
+            "issues",
+            {
+                "action": "assigned",
+                "assignee": {"login": OZ_AGENT_LOGIN},
+                "issue": _issue(
+                    labels=["triaged", "ready-to-implement"],
+                    assignees=[OZ_AGENT_LOGIN],
+                ),
+            },
+        )
+        self.assertEqual(
+            decision.workflow, WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE
+        )
+
+    def test_oz_agent_assigned_to_ready_to_spec_routes_to_create_spec(self) -> None:
+        decision = route_event(
+            "issues",
+            {
+                "action": "assigned",
+                "assignee": {"login": OZ_AGENT_LOGIN},
+                "issue": _issue(
+                    labels=["triaged", "ready-to-spec"],
+                    assignees=[OZ_AGENT_LOGIN],
+                ),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_CREATE_SPEC_FROM_ISSUE)
+
+    def test_assigned_ready_to_implement_takes_precedence_over_ready_to_spec(
+        self,
+    ) -> None:
+        # An issue carrying both lifecycle labels at once (for
+        # example, mid-promotion from spec to implementation) must
+        # land on the implementation workflow so the bot does not
+        # regenerate the spec.
+        decision = route_event(
+            "issues",
+            {
+                "action": "assigned",
+                "assignee": {"login": OZ_AGENT_LOGIN},
+                "issue": _issue(
+                    labels=["triaged", "ready-to-spec", "ready-to-implement"],
+                    assignees=[OZ_AGENT_LOGIN],
+                ),
+            },
+        )
+        self.assertEqual(
+            decision.workflow, WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE
+        )
+
+    def test_issues_assigned_for_non_oz_agent_is_dropped(self) -> None:
+        # Maintainers assigning a human use this event for their own
+        # tracking; the bot must stay out of it even when the issue
+        # carries a lifecycle label.
+        decision = route_event(
+            "issues",
+            {
+                "action": "assigned",
+                "assignee": {"login": "alice"},
+                "issue": _issue(
+                    labels=["ready-to-implement"], assignees=["alice"]
+                ),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("non-oz-agent", decision.reason)
+
+    def test_issues_assigned_without_lifecycle_label_is_dropped(self) -> None:
+        decision = route_event(
+            "issues",
+            {
+                "action": "assigned",
+                "assignee": {"login": OZ_AGENT_LOGIN},
+                "issue": _issue(
+                    labels=["triaged"], assignees=[OZ_AGENT_LOGIN]
+                ),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("ready-to", decision.reason)
+
+    def test_ready_to_implement_label_added_with_oz_agent_assignee_routes_to_create_implementation(
+        self,
+    ) -> None:
+        decision = route_event(
+            "issues",
+            {
+                "action": "labeled",
+                "label": {"name": "ready-to-implement"},
+                "issue": _issue(
+                    labels=["triaged", "ready-to-implement"],
+                    assignees=[OZ_AGENT_LOGIN],
+                ),
+            },
+        )
+        self.assertEqual(
+            decision.workflow, WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE
+        )
+
+    def test_ready_to_spec_label_added_with_oz_agent_assignee_routes_to_create_spec(
+        self,
+    ) -> None:
+        decision = route_event(
+            "issues",
+            {
+                "action": "labeled",
+                "label": {"name": "ready-to-spec"},
+                "issue": _issue(
+                    labels=["triaged", "ready-to-spec"],
+                    assignees=[OZ_AGENT_LOGIN],
+                ),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_CREATE_SPEC_FROM_ISSUE)
+
+    def test_lifecycle_label_added_without_oz_agent_assignee_is_dropped(self) -> None:
+        # Adding ``ready-to-spec`` while only humans are assigned
+        # must not fire the bot — the maintainer is staging the
+        # label without delegating to oz-agent yet.
+        decision = route_event(
+            "issues",
+            {
+                "action": "labeled",
+                "label": {"name": "ready-to-spec"},
+                "issue": _issue(
+                    labels=["triaged", "ready-to-spec"],
+                    assignees=["alice"],
+                ),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("oz-agent", decision.reason)
+
+    def test_unrelated_label_added_to_issue_is_dropped(self) -> None:
+        decision = route_event(
+            "issues",
+            {
+                "action": "labeled",
+                "label": {"name": "good-first-issue"},
+                "issue": _issue(
+                    labels=["good-first-issue"], assignees=[OZ_AGENT_LOGIN]
+                ),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("unhandled label", decision.reason)
+
+    def test_issues_edited_event_is_dropped(self) -> None:
+        # ``edited`` and other actions outside of
+        # ``opened``/``assigned``/``labeled`` should still fall
+        # through to the catch-all so we do not silently miss
+        # routing surface changes.
+        decision = route_event(
+            "issues",
+            {
+                "action": "edited",
+                "issue": _issue(
+                    labels=["ready-to-implement"], assignees=[OZ_AGENT_LOGIN]
+                ),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("not handled", decision.reason)
 
 
 class IssueCommentEventTest(unittest.TestCase):
@@ -176,7 +338,10 @@ class IssueCommentEventTest(unittest.TestCase):
         )
         self.assertEqual(decision.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
 
-    def test_oz_agent_mention_on_ready_to_implement_issue_routes_to_triage(self) -> None:
+    def test_oz_agent_mention_on_ready_to_implement_issue_routes_to_create_implementation(self) -> None:
+        # ``ready-to-implement`` issues already cleared triage; a
+        # ``@oz-agent`` mention there should kick off the
+        # implementation workflow rather than another triage.
         decision = route_event(
             "issue_comment",
             {
@@ -185,7 +350,43 @@ class IssueCommentEventTest(unittest.TestCase):
                 "comment": _comment(body="@oz-agent please re-evaluate"),
             },
         )
-        self.assertEqual(decision.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
+        self.assertEqual(
+            decision.workflow, WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE
+        )
+
+    def test_oz_agent_mention_on_ready_to_spec_issue_routes_to_create_spec(self) -> None:
+        # ``ready-to-spec`` issues already cleared triage; a
+        # ``@oz-agent`` mention there should kick off the spec
+        # workflow.
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(labels=["triaged", "ready-to-spec"]),
+                "comment": _comment(body="@oz-agent please draft the spec"),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_CREATE_SPEC_FROM_ISSUE)
+
+    def test_ready_to_implement_takes_precedence_over_ready_to_spec(self) -> None:
+        # An issue that somehow carries both labels (for example,
+        # because a maintainer added ``ready-to-implement`` while
+        # ``ready-to-spec`` was still attached) should land on the
+        # implementation workflow so the bot does not regenerate the
+        # spec.
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(
+                    labels=["triaged", "ready-to-spec", "ready-to-implement"]
+                ),
+                "comment": _comment(body="@oz-agent go"),
+            },
+        )
+        self.assertEqual(
+            decision.workflow, WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE
+        )
 
     def test_oz_agent_mention_on_non_triaged_plain_issue_routes_to_triage(self) -> None:
         decision = route_event(

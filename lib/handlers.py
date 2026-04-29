@@ -35,6 +35,8 @@ from typing import Any, Callable, Mapping
 
 from .poll_runs import WorkflowHandlers
 from .routing import (
+    WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+    WORKFLOW_CREATE_SPEC_FROM_ISSUE,
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
@@ -514,6 +516,155 @@ def build_triage_handlers(
     )
 
 
+def build_create_spec_handlers(
+    github_client_factory: GithubClientFactory,
+) -> WorkflowHandlers:
+    """Return :class:`WorkflowHandlers` for ``create-spec-from-issue``.
+
+    The agent uploads ``pr-metadata.json`` after pushing its spec
+    branch. The result applier opens or updates the spec PR using
+    that metadata and posts the completion progress comment.
+    """
+    from scripts.create_spec_from_issue import (  # type: ignore[import-not-found]
+        apply_create_spec_result,
+    )
+
+    def loader(run_id: str) -> dict[str, Any]:
+        # ``apply_create_spec_result`` polls for ``pr-metadata.json``
+        # itself so a missing artifact is reported with the workflow's
+        # "no spec diff" branch. Returning an empty dict keeps the
+        # poller's contract satisfied without forcing a load.
+        return {}
+
+    def applier(*, state: RunState, result: Mapping[str, Any]) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_CREATE_SPEC_FROM_ISSUE
+        )
+        run_adapter = type(
+            "CronRunAdapter",
+            (),
+            {
+                "run_id": state.run_id,
+                "session_link": progress.session_link,
+                "created_at": None,
+            },
+        )()
+        try:
+            apply_create_spec_result(
+                repo_handle,
+                context=state.payload_subset,
+                run=run_adapter,
+                progress=progress,
+            )
+        except Exception:
+            _report_workflow_error_with_progress(progress)
+            raise
+
+    def failure(*, state: RunState, run: Any) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_CREATE_SPEC_FROM_ISSUE
+        )
+        _record_session_link_safely(progress, run)
+        _report_workflow_error_with_progress(progress)
+
+    def non_terminal(*, state: RunState, run: Any) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle, state=state, workflow=WORKFLOW_CREATE_SPEC_FROM_ISSUE
+        )
+        _record_session_link_safely(progress, run)
+
+    return WorkflowHandlers(
+        artifact_loader=loader,
+        result_applier=applier,
+        failure_handler=failure,
+        non_terminal_handler=non_terminal,
+    )
+
+
+def build_create_implementation_handlers(
+    github_client_factory: GithubClientFactory,
+) -> WorkflowHandlers:
+    """Return :class:`WorkflowHandlers` for ``create-implementation-from-issue``.
+
+    The agent uploads ``pr-metadata.json`` after pushing its
+    implementation branch. The result applier either refreshes the
+    linked approved spec PR's title/body, updates an existing draft
+    implementation PR, or opens a new draft implementation PR.
+    """
+    from scripts.create_implementation_from_issue import (  # type: ignore[import-not-found]
+        apply_create_implementation_result,
+    )
+
+    def loader(run_id: str) -> dict[str, Any]:
+        # The apply helper polls for ``pr-metadata.json`` itself via
+        # ``try_load_pr_metadata_artifact`` so a missing artifact is
+        # reported via the workflow's "no implementation diff"
+        # branch. Return an empty dict to keep the poller contract.
+        return {}
+
+    def applier(*, state: RunState, result: Mapping[str, Any]) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle,
+            state=state,
+            workflow=WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+        )
+        run_adapter = type(
+            "CronRunAdapter",
+            (),
+            {
+                "run_id": state.run_id,
+                "session_link": progress.session_link,
+                "created_at": None,
+            },
+        )()
+        try:
+            apply_create_implementation_result(
+                repo_handle,
+                context=state.payload_subset,
+                run=run_adapter,
+                progress=progress,
+            )
+        except Exception:
+            _report_workflow_error_with_progress(progress)
+            raise
+
+    def failure(*, state: RunState, run: Any) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle,
+            state=state,
+            workflow=WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+        )
+        _record_session_link_safely(progress, run)
+        _report_workflow_error_with_progress(progress)
+
+    def non_terminal(*, state: RunState, run: Any) -> None:
+        client = _client_factory(state.installation_id, github_client_factory)
+        repo_handle = client.get_repo(state.repo)
+        progress = _reconstruct_progress(
+            repo_handle,
+            state=state,
+            workflow=WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
+        )
+        _record_session_link_safely(progress, run)
+
+    return WorkflowHandlers(
+        artifact_loader=loader,
+        result_applier=applier,
+        failure_handler=failure,
+        non_terminal_handler=non_terminal,
+    )
+
+
 def build_handler_registry(
     *,
     github_client_factory: GithubClientFactory,
@@ -531,11 +682,19 @@ def build_handler_registry(
             github_client_factory
         ),
         WORKFLOW_TRIAGE_NEW_ISSUES: build_triage_handlers(github_client_factory),
+        WORKFLOW_CREATE_SPEC_FROM_ISSUE: build_create_spec_handlers(
+            github_client_factory
+        ),
+        WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE: build_create_implementation_handlers(
+            github_client_factory
+        ),
     }
 
 
 __all__ = [
     "GithubClientFactory",
+    "build_create_implementation_handlers",
+    "build_create_spec_handlers",
     "build_enforce_handlers",
     "build_handler_registry",
     "build_respond_handlers",
