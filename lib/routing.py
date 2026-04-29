@@ -29,18 +29,21 @@ Webhook coverage today:
 - ``issue_comment`` events on a pull request route to the same set as
   ``pull_request_review_comment`` (GitHub delivers PR conversation
   comments under the ``issue_comment`` event).
-- ``issues`` events on a freshly opened, non-``triaged`` issue route
-  to ``triage-new-issues``.
+- ``issues`` events on a freshly opened issue route to
+  ``triage-new-issues`` regardless of the issue's existing labels
+  (``ready-to-spec`` / ``ready-to-implement`` issues still get a
+  triage pass).
 - ``issue_comment`` events on a plain (non-PR) issue route to
   ``triage-new-issues`` when the comment carries an ``@oz-agent``
-  mention against a non-``triaged`` issue, or when the issue carries
+  mention (regardless of triaged state) or when the issue carries
   the ``needs-info`` label and the comment is the original reporter
   replying without a mention.
 
-The ``respond-to-triaged-issue-comment`` workflow (an ``@oz-agent``
-mention on an already-``triaged`` issue) still flows through GitHub
-Actions and is intentionally NOT routed here so the two delivery
-paths do not double-fire on the same comment.
+The ``respond-to-triaged-issue-comment`` GitHub Actions workflow may
+still fire on ``@oz-agent`` mentions for ``triaged`` issues that are
+not yet ``ready-to-spec`` or ``ready-to-implement``; operators can
+remove that workflow once they are comfortable letting triage handle
+every mention.
 """
 
 from __future__ import annotations
@@ -159,32 +162,25 @@ def _route_plain_issue_comment(
 ) -> RouteDecision:
     """Route an ``issue_comment`` event on a plain (non-PR) issue.
 
-    Mirrors the gating that the legacy GitHub Actions workflow
-    (``triage-new-issues-local.yml``) applies before invoking the
-    triage entrypoint:
+    Triage runs are dispatched on every ``@oz-agent`` mention, regardless
+    of the issue's lifecycle stage. Issues that have already progressed
+    to ``ready-to-spec`` / ``ready-to-implement`` would otherwise fall
+    into a routing gap: the legacy ``respond-to-triaged-issue-comment``
+    workflow excludes them, and any new context the reporter or a
+    maintainer adds in a comment would never be incorporated into the
+    issue's triage state. Routing every mention to (re-)triage closes
+    that gap.
 
-    - An ``@oz-agent`` mention on a non-``triaged`` issue triggers a
-      first-pass triage so the reporter can ping the bot manually.
-    - A reply from the original issue author on a ``needs-info`` issue
-      (without an explicit mention) triggers a re-triage so the bot
-      picks up the new context the reporter just supplied.
-    - An ``@oz-agent`` mention on an already-``triaged`` issue stays
-      on the GitHub Actions delivery path because
-      ``respond-to-triaged-issue-comment`` is not yet wired into the
-      webhook control plane.
+    Replies from the original issue author on a ``needs-info`` issue
+    (without an explicit mention) also trigger a re-triage so the bot
+    picks up the new context the reporter just supplied.
     """
     labels = _label_names(issue.get("labels"))
-    is_triaged = TRIAGED_LABEL in labels
     has_mention = OZ_AGENT_MENTION in body
     if has_mention:
-        if is_triaged:
-            return RouteDecision(
-                None,
-                "@oz-agent mention on a triaged issue handled by GitHub Actions",
-            )
         return RouteDecision(
             WORKFLOW_TRIAGE_NEW_ISSUES,
-            "@oz-agent mention on a non-triaged issue",
+            "@oz-agent mention triggers (re-)triage",
         )
     if NEEDS_INFO_LABEL in labels:
         commenter_login = _login(comment.get("user"))
@@ -203,8 +199,13 @@ def _route_plain_issue_comment(
 def _route_issues(payload: dict[str, Any]) -> RouteDecision:
     """Route an ``issues`` webhook event.
 
-    Triage runs are dispatched on ``opened`` for issues that have not
-    already been triaged. Other actions (``edited``, ``labeled``,
+    Triage runs are dispatched on every ``opened`` event regardless of
+    the issue's existing labels. Issues that arrive with prior
+    lifecycle labels (``ready-to-spec``, ``ready-to-implement``, etc.)
+    — for example because they were imported from another repo or
+    re-opened — still get a triage pass so the bot can post a fresh
+    progress comment and pick up any state changes that landed while
+    the issue was closed. Other actions (``edited``, ``labeled``,
     ``assigned``, …) stay on their GitHub Actions delivery paths
     (e.g. ``comment-on-unready-assigned-issue.yml``) so this router
     does not race with workflows that mutate issue state directly.
@@ -221,14 +222,8 @@ def _route_issues(payload: dict[str, Any]) -> RouteDecision:
         return RouteDecision(None, "issues.opened delivered for a pull request")
     if _is_bot(issue.get("user")):
         return RouteDecision(None, "issue authored by automation user")
-    labels = _label_names(issue.get("labels"))
-    if TRIAGED_LABEL in labels:
-        return RouteDecision(
-            None,
-            "issues.opened on an already-triaged issue",
-        )
     return RouteDecision(
-        WORKFLOW_TRIAGE_NEW_ISSUES, "issues.opened on a non-triaged issue"
+        WORKFLOW_TRIAGE_NEW_ISSUES, "issues.opened triggers triage"
     )
 
 

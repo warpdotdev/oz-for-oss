@@ -51,12 +51,26 @@ class IssuesEventTest(unittest.TestCase):
         decision = route_event("issues", {"action": "opened", "issue": _issue()})
         self.assertEqual(decision.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
 
-    def test_issues_opened_on_triaged_issue_is_dropped(self) -> None:
+    def test_issues_opened_on_triaged_issue_still_routes_to_triage(self) -> None:
+        # Even issues that already carry post-triage labels (``triaged``,
+        # ``ready-to-spec``, ``ready-to-implement``) should get a fresh
+        # triage pass when re-opened so the bot picks up any state
+        # changes that landed while the issue was closed.
         decision = route_event(
             "issues",
             {"action": "opened", "issue": _issue(labels=["triaged"])},
         )
-        self.assertIsNone(decision.workflow)
+        self.assertEqual(decision.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
+
+    def test_issues_opened_on_ready_to_implement_issue_routes_to_triage(self) -> None:
+        decision = route_event(
+            "issues",
+            {
+                "action": "opened",
+                "issue": _issue(labels=["triaged", "ready-to-implement"]),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
 
     def test_issues_opened_for_pull_request_is_dropped(self) -> None:
         decision = route_event(
@@ -145,7 +159,13 @@ class IssueCommentEventTest(unittest.TestCase):
         )
         self.assertIsNone(decision.workflow)
 
-    def test_oz_agent_mention_on_triaged_plain_issue_stays_on_github_actions(self) -> None:
+    def test_oz_agent_mention_on_triaged_plain_issue_routes_to_triage(self) -> None:
+        # Mentioning the bot on a triaged issue should re-trigger triage
+        # so any new context in the conversation is incorporated; this
+        # closes the lifecycle gap where issues with
+        # ``ready-to-implement`` would otherwise fall through both the
+        # webhook and the legacy ``respond-to-triaged-issue-comment``
+        # workflow (which excludes ``ready-to-implement``).
         decision = route_event(
             "issue_comment",
             {
@@ -154,8 +174,18 @@ class IssueCommentEventTest(unittest.TestCase):
                 "comment": _comment(body="@oz-agent thoughts?"),
             },
         )
-        self.assertIsNone(decision.workflow)
-        self.assertIn("GitHub Actions", decision.reason)
+        self.assertEqual(decision.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
+
+    def test_oz_agent_mention_on_ready_to_implement_issue_routes_to_triage(self) -> None:
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(labels=["triaged", "ready-to-implement"]),
+                "comment": _comment(body="@oz-agent please re-evaluate"),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
 
     def test_oz_agent_mention_on_non_triaged_plain_issue_routes_to_triage(self) -> None:
         decision = route_event(
