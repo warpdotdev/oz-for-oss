@@ -5,7 +5,6 @@ from typing import Any
 
 from github import Auth, Github
 
-from oz_workflows.actions import notice
 from oz_workflows.artifacts import load_issue_response_artifact
 from oz_workflows.env import load_event, repo_parts, repo_slug, require_env, workspace
 from oz_workflows.helpers import (
@@ -27,6 +26,10 @@ from oz_workflows.triage import extract_original_issue_report
 
 WORKFLOW_NAME = "respond-to-triaged-issue-comment"
 OZ_AGENT_METADATA_PREFIX = "<!-- oz-agent-metadata:"
+
+
+def notice(message: str) -> None:
+    print(f"::notice::{message}")
 
 
 def format_visible_issue_comments(

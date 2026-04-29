@@ -17,11 +17,13 @@ control plane is the active webhook target.
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Protocol
 
 from .routing import RouteDecision
 from .state import RunState, StateStore, save_run_state
+logger = logging.getLogger(__name__)
 
 
 # Workflow → role string accepted by ``oz_workflows.oz_client.build_agent_config``.
@@ -113,6 +115,7 @@ class DispatchRequest:
     skill_name: str | None
     prompt: str
     payload_subset: dict[str, Any]
+    on_dispatched: Callable[[str], Mapping[str, Any] | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -191,12 +194,22 @@ def dispatch_run(
     run_id = str(getattr(response, "run_id", "") or "")
     if not run_id:
         raise RuntimeError("Oz agent.run response did not include a run_id")
+    payload_subset = dict(request.payload_subset)
+    if request.on_dispatched is not None:
+        try:
+            payload_subset.update(dict(request.on_dispatched(run_id) or {}))
+        except Exception:
+            logger.exception(
+                "Post-dispatch hook failed for run %s workflow %s",
+                run_id,
+                request.workflow,
+            )
     state = RunState(
         run_id=run_id,
         workflow=request.workflow,
         repo=request.repo,
         installation_id=int(request.installation_id),
-        payload_subset=dict(request.payload_subset),
+        payload_subset=payload_subset,
     )
     save_run_state(store, state)
     return DispatchResult(run_id=run_id, state=state)

@@ -8,7 +8,6 @@ from oz_agent_sdk import OzAPI
 from oz_agent_sdk.types import AgentRunParams, AmbientAgentConfigParam
 from oz_agent_sdk.types.agent import RunItem
 
-from .actions import notice, warning
 from .env import optional_env, repo_slug, require_env, workspace
 from .workflow_paths import workflow_code_root
 
@@ -27,6 +26,16 @@ TERMINAL_STATES = {"SUCCEEDED", "FAILED", "ERROR", "CANCELLED"}
 DEFAULT_SESSION_SHARING_PUBLIC_ACCESS = "VIEWER"
 _SESSION_SHARING_DISABLED_VALUES = {"NONE", "OFF", "DISABLED", "FALSE", "0"}
 _SESSION_SHARING_SUPPORTED_LEVELS = {"VIEWER", "EDITOR"}
+
+
+def notice(message: str) -> None:
+    """Emit a GitHub Actions notice annotation."""
+    print(f"::notice::{message}")
+
+
+def warning(message: str) -> None:
+    """Emit a GitHub Actions warning annotation."""
+    print(f"::warning::{message}")
 
 
 def oz_api_base_url() -> str:

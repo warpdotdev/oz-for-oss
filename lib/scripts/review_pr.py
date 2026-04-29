@@ -567,6 +567,7 @@ def _format_non_member_review_section(
         f"""
         Non-Member Reviewer Selection:
         - The PR author (@{pr_author_login or 'unknown'}) is not a repository member or collaborator, so the workflow should request exactly one human reviewer when your `verdict` is `"APPROVE"`.
+        - If your `verdict` is `"REJECT"`, the workflow will post a GitHub `REQUEST_CHANGES` review and will not request a human reviewer.
         - Return a `recommended_reviewers` field alongside `verdict`, `summary`, and `comments`.
         - `recommended_reviewers` must be a JSON list with exactly one bare GitHub login string, for example: {{"recommended_reviewers": ["octocat"]}}.
         - Choose that single reviewer from `.github/STAKEHOLDERS` by matching the changed file paths against the STAKEHOLDERS rules. Later rules override earlier rules, and more specific matching rules should be preferred over catch-all rules.

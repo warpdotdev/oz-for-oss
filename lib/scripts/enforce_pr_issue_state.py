@@ -2,6 +2,8 @@ from __future__ import annotations
 from contextlib import closing
 
 import json
+import os
+import uuid
 from dataclasses import dataclass
 from textwrap import dedent
 from typing import Any, Mapping, TypedDict
@@ -9,7 +11,6 @@ from typing import Any, Mapping, TypedDict
 from github import Auth, Github
 from github.Repository import Repository
 
-from oz_workflows.actions import set_output
 from oz_workflows.env import optional_env, repo_parts, repo_slug, require_env, workspace
 from oz_workflows.helpers import (
     format_enforce_start_line,
@@ -21,6 +22,18 @@ from oz_workflows.artifacts import poll_for_artifact
 from oz_workflows.oz_client import build_agent_config, run_agent
 
 WORKFLOW_NAME = "enforce-pr-issue-state"
+
+
+def _append_multiline(path: str, name: str, value: str) -> None:
+    delimiter = f"oz_{uuid.uuid4()}"
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
+
+
+def set_output(name: str, value: str) -> None:
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if output_path:
+        _append_multiline(output_path, name, value)
 
 
 class EnforceContext(TypedDict):

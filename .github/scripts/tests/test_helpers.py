@@ -17,7 +17,7 @@ from oz_workflows.helpers import (
     is_automation_user,
     is_spec_only_pr,
     is_trusted_commenter,
-    org_member_comments_text,
+    format_issue_comments_for_prompt,
     POWERED_BY_SUFFIX,
     resolve_coauthor_line,
     resolve_pr_association,
@@ -264,45 +264,64 @@ class ResolveProgressRequesterLoginTest(unittest.TestCase):
                 )
 
 
-class OrgMemberCommentsTextTest(unittest.TestCase):
-    def test_includes_collaborator_comments(self) -> None:
+class FormatIssueCommentsForPromptTest(unittest.TestCase):
+    def test_includes_non_org_member_comments(self) -> None:
         self.assertEqual(
-            org_member_comments_text(
+            format_issue_comments_for_prompt(
                 [
                     {
                         "id": 1,
-                        "author_association": "COLLABORATOR",
+                        "author_association": "NONE",
                         "created_at": "2026-03-24T00:00:00Z",
-                        "body": "Collaborator context",
-                        "user": {"login": "alice"},
+                        "body": "External contributor context",
+                        "user": {"login": "contributor", "type": "User"},
                     },
-                ]
+                ],
+                metadata_prefix="<!-- oz-agent-metadata:",
             ),
-            "- alice (2026-03-24T00:00:00Z): Collaborator context",
+            "- @contributor [NONE] (2026-03-24T00:00:00Z): External contributor context",
         )
 
     def test_can_exclude_triggering_comment(self) -> None:
         self.assertEqual(
-            org_member_comments_text(
+            format_issue_comments_for_prompt(
                 [
                     {
                         "id": 1,
                         "author_association": "MEMBER",
                         "created_at": "2026-03-24T00:00:00Z",
                         "body": "Earlier context",
-                        "user": {"login": "alice"},
+                        "user": {"login": "alice", "type": "User"},
                     },
                     {
                         "id": 2,
                         "author_association": "MEMBER",
                         "created_at": "2026-03-24T01:00:00Z",
                         "body": "@oz-agent please handle this",
-                        "user": {"login": "alice"},
+                        "user": {"login": "alice", "type": "User"},
                     },
                 ],
+                metadata_prefix="<!-- oz-agent-metadata:",
                 exclude_comment_id=2,
             ),
-            "- alice (2026-03-24T00:00:00Z): Earlier context",
+            "- @alice [MEMBER] (2026-03-24T00:00:00Z): Earlier context",
+        )
+
+    def test_filters_automation_authored_comments(self) -> None:
+        self.assertEqual(
+            format_issue_comments_for_prompt(
+                [
+                    {
+                        "id": 1,
+                        "author_association": "MEMBER",
+                        "created_at": "2026-03-24T00:00:00Z",
+                        "body": "Oz metadata comment",
+                        "user": {"login": "oz-agent[bot]", "type": "Bot"},
+                    },
+                ],
+                metadata_prefix="<!-- oz-agent-metadata:",
+            ),
+            "- None",
         )
 
 class ConventionalCommitPrefixTest(unittest.TestCase):

@@ -89,6 +89,30 @@ class _BuilderTestBase(unittest.TestCase):
         helpers.triggering_comment_prompt_text = MagicMock(  # type: ignore[attr-defined]
             return_value=""
         )
+    def assert_deferred_progress(
+        self,
+        request: Any,
+        *,
+        start_line: str | None = None,
+        expect_start: bool = True,
+        expect_existing_comment_update: bool = False,
+    ) -> None:
+        self.assertNotIn("progress_run_id", request.payload_subset)
+        self.assertIsNotNone(request.on_dispatched)
+        before_count = len(self.progress_instances)
+        updates = request.on_dispatched("oz-run-123")
+        self.assertEqual(updates, {"progress_comment_id": 4242})
+        self.assertEqual(len(self.progress_instances), before_count + 1)
+        progress = self.progress_instances[-1]
+        if expect_existing_comment_update:
+            progress.start.assert_not_called()
+            progress.record_oz_run_id.assert_called_once_with("oz-run-123")
+        elif start_line is not None:
+            progress.start.assert_called_once_with(start_line)
+        elif expect_start:
+            progress.start.assert_called_once()
+        else:
+            progress.start.assert_not_called()
 
     def tearDown(self) -> None:
         for key, value in self._original_modules.items():
@@ -168,12 +192,9 @@ class BuildReviewRequestTest(_BuilderTestBase):
         self.assertEqual(request.payload_subset["pr_number"], 42)
         self.assertIn("pr_diff_text", request.payload_subset)
         github_client.get_repo.assert_called_once_with("acme/widgets")
-        # The builder must drive the WorkflowProgressComment lifecycle
-        # so the cron poller can reconstruct the same comment.
-        self.assertEqual(len(self.progress_instances), 1)
-        self.progress_instances[0].start.assert_called_once()
-        self.assertEqual(request.payload_subset["progress_comment_id"], 4242)
-        self.assertEqual(request.payload_subset["progress_run_id"], "run-uuid-hex")
+        # Progress is created after the Oz run id is available.
+        self.assertEqual(len(self.progress_instances), 0)
+        self.assert_deferred_progress(request)
 
     def test_raises_when_payload_missing_installation_id(self) -> None:
         from lib.builders import build_review_request
@@ -245,11 +266,9 @@ class BuildRespondRequestTest(_BuilderTestBase):
         self.assertEqual(request.payload_subset["trigger_comment_id"], 999)
         # The builder consumed the existing PR handle to gather context.
         repo.get_pull.assert_called_once_with(7)
-        # Progress lifecycle must be driven before dispatch.
-        self.assertEqual(len(self.progress_instances), 1)
-        self.progress_instances[0].start.assert_called_once_with("I'm starting")
-        self.assertEqual(request.payload_subset["progress_comment_id"], 4242)
-        self.assertEqual(request.payload_subset["progress_run_id"], "run-uuid-hex")
+        # Progress lifecycle is deferred until the Oz run id is known.
+        self.assertEqual(len(self.progress_instances), 0)
+        self.assert_deferred_progress(request, start_line="I'm starting")
 
 
 class BuildVerifyRequestTest(_BuilderTestBase):
@@ -298,10 +317,8 @@ class BuildVerifyRequestTest(_BuilderTestBase):
         self.assertEqual(request.skill_name, "verify-pr")
         self.assertEqual(request.prompt, "VERIFY_PROMPT_BODY")
         self.assertEqual(request.payload_subset["pr_number"], 11)
-        self.assertEqual(len(self.progress_instances), 1)
-        self.progress_instances[0].start.assert_called_once()
-        self.assertEqual(request.payload_subset["progress_comment_id"], 4242)
-        self.assertEqual(request.payload_subset["progress_run_id"], "run-uuid-hex")
+        self.assertEqual(len(self.progress_instances), 0)
+        self.assert_deferred_progress(request)
 
 
 class BuildEnforceRequestTest(_BuilderTestBase):
@@ -359,11 +376,12 @@ class BuildEnforceRequestTest(_BuilderTestBase):
         self.assertEqual(request.prompt, "ENFORCE_PROMPT_BODY")
         self.assertEqual(request.payload_subset["pr_number"], 21)
         self.assertEqual(request.payload_subset["change_kind"], "implementation")
-        # ``enforce_pr_state_synchronously`` already drove ``progress.start``
-        # for this workflow; the builder only needs to capture the
-        # resulting comment id (here returned by the MagicMock factory).
-        self.assertEqual(request.payload_subset["progress_comment_id"], 4242)
-        self.assertEqual(request.payload_subset["progress_run_id"], "run-uuid-hex")
+        # ``enforce_pr_state_synchronously`` already owns the initial
+        # progress comment for this workflow; the deferred hook refreshes
+        # that comment's metadata once the Oz run id is known.
+        self.assertEqual(len(self.progress_instances), 1)
+        self.assertNotIn("progress_comment_id", request.payload_subset)
+        self.assert_deferred_progress(request, expect_existing_comment_update=True)
 
     def test_raises_when_decision_is_not_need_cloud_match(self) -> None:
         from lib.builders import build_enforce_request
@@ -453,10 +471,8 @@ class BuildTriageRequestTest(_BuilderTestBase):
         self.assertEqual(request.skill_name, "triage-issue")
         self.assertEqual(request.prompt, "TRIAGE_PROMPT_BODY")
         self.assertEqual(request.payload_subset["issue_number"], 91)
-        self.assertEqual(len(self.progress_instances), 1)
-        self.progress_instances[0].start.assert_called_once()
-        self.assertEqual(request.payload_subset["progress_comment_id"], 4242)
-        self.assertEqual(request.payload_subset["progress_run_id"], "run-uuid-hex")
+        self.assertEqual(len(self.progress_instances), 0)
+        self.assert_deferred_progress(request)
 
     def test_raises_when_payload_is_missing_issue_number(self) -> None:
         from lib.builders import build_triage_request
@@ -560,8 +576,9 @@ class BuildPlanApprovedRequestTest(_BuilderTestBase):
         self.assertEqual(
             request.payload_subset["trigger_source"], "plan-approved"
         )
-        self.assertEqual(
-            request.payload_subset["progress_comment_id"], 4242
+        self.assert_deferred_progress(
+            request,
+            start_line="I'm implementing this issue on top of the approved spec PR's branch.",
         )
         # The builder reuses the stashed linked_issue_number rather
         # than re-resolving the PR association.

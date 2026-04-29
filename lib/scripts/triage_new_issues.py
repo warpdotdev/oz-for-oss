@@ -5,6 +5,7 @@ from pathlib import Path
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from textwrap import dedent
 from typing import Any, Mapping, TypedDict
@@ -12,7 +13,6 @@ from github import Auth, Github
 from github.GithubException import GithubException, UnknownObjectException
 from github.Repository import Repository
 
-from oz_workflows.actions import append_summary, warning
 from oz_workflows.artifacts import load_triage_artifact
 from oz_workflows.env import load_event, optional_env, repo_parts, repo_slug, require_env, workspace
 from oz_workflows.helpers import (
@@ -72,6 +72,20 @@ RESPONSE_DETAILS_SUMMARY = "Reasoning"
 RESPONSE_FALLBACK_BODY = (
     "I don't have enough information to answer this question yet."
 )
+
+
+def append_summary(text: str) -> None:
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    with open(summary_path, "a", encoding="utf-8") as handle:
+        handle.write(text)
+        if not text.endswith("\n"):
+            handle.write("\n")
+
+
+def warning(message: str) -> None:
+    print(f"::warning::{message}")
 
 
 def _lowercase_first(text: str) -> str:

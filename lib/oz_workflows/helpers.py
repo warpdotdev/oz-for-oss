@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from github import Github
 from github.GithubException import GithubException, UnknownObjectException
@@ -18,12 +19,16 @@ from github.PullRequestComment import PullRequestComment
 from github.Repository import Repository
 from oz_agent_sdk.types.agent import RunItem
 
-from . import actions
 from .artifacts import ResolvedReviewComment
 from .env import optional_env, workspace
 from .workflow_config import load_triage_workflow_config
 
 logger = logging.getLogger(__name__)
+
+
+def _github_actions_error(message: str) -> None:
+    """Emit a GitHub Actions error annotation."""
+    print(f"::error::{message}")
 
 
 # Author associations that indicate organization membership.
@@ -105,6 +110,27 @@ def is_automation_user(user: Any) -> bool:
     )
 
 
+def is_trusted_commenter(client: Any, event_payload: dict[str, Any], *, org: str) -> bool:
+    """Return whether the triggering comment author is trusted for legacy GHA flows."""
+    comment = event_payload.get("comment")
+    if not isinstance(comment, dict):
+        return False
+    association = str(comment.get("author_association") or "").upper()
+    if association in ORG_MEMBER_ASSOCIATIONS:
+        return True
+    login = get_login(comment.get("user"))
+    if not login:
+        return False
+    try:
+        status, _headers, _data = client.requester.requestJson(
+            "GET",
+            f"/orgs/{quote(str(org), safe='')}/members/{quote(login, safe='')}",
+        )
+    except Exception:
+        return False
+    return int(status) == 204
+
+
 def get_timestamp_text(value: Any) -> str:
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -178,25 +204,6 @@ def _filter_review_comments_in_thread(
         for c in all_review_comments
         if int(get_field(c, "id")) == root_id or get_field(c, "in_reply_to_id") == root_id
     ]
-
-
-def org_member_comments_text(
-    comments: list[Any],
-    *,
-    exclude_comment_id: int | None = None,
-) -> str:
-    selected = [
-        comment
-        for comment in comments
-        if get_field(comment, "author_association") in ORG_MEMBER_ASSOCIATIONS
-        and int(get_field(comment, "id") or 0) != exclude_comment_id
-    ]
-    if not selected:
-        return ""
-    return "\n".join(
-        f"- {get_login(get_field(comment, 'user')) or 'unknown'} ({get_timestamp_text(get_field(comment, 'created_at'))}): {get_field(comment, 'body') or ''}"
-        for comment in selected
-    )
 
 
 def triggering_comment_prompt_text(event_payload: dict[str, Any]) -> str:
@@ -679,6 +686,8 @@ class WorkflowProgressComment:
         normalized = (oz_run_id or "").strip()
         if not normalized or normalized == self.oz_run_id:
             return
+        if normalized == self.run_id:
+            return
         try:
             self.oz_run_id = normalized
             self.metadata = comment_metadata(
@@ -750,7 +759,7 @@ class WorkflowProgressComment:
                 self.repo,
                 self.issue_number,
             )
-            actions.error(
+            _github_actions_error(
                 f"Oz workflow '{self.workflow}' failed and the user-facing error "
                 f"comment could not be posted to issue #{self.issue_number}. "
                 f"See the workflow run logs for details."

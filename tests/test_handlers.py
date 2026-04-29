@@ -177,7 +177,6 @@ class ReviewHandlersTest(_HandlerTestBase):
                 "pr_number": 7,
                 "requester": "alice",
                 "progress_comment_id": 8888,
-                "progress_run_id": "run-hex",
             },
         )
         handlers.result_applier(state=state, result={"summary": "looks good"})
@@ -193,7 +192,7 @@ class ReviewHandlersTest(_HandlerTestBase):
         # call lands on the same comment posted by the builder.
         self.assertIs(kwargs["progress"], self.progress_instances[-1])
         self.assertEqual(self.progress_instances[-1].comment_id, 8888)
-        self.assertEqual(self.progress_instances[-1].run_id, "run-hex")
+        self.assertEqual(self.progress_instances[-1].run_id, "run-1")
 
     def test_failure_handler_posts_workflow_error(self) -> None:
         from lib.handlers import build_review_handlers
@@ -257,7 +256,6 @@ class RespondHandlersTest(_HandlerTestBase):
                 "review_reply_target_id": 999,
                 "requester": "alice",
                 "progress_comment_id": 6543,
-                "progress_run_id": "run-pr-comment-hex",
             },
         )
         handlers.result_applier(state=state, result={})
@@ -357,7 +355,6 @@ class TriageHandlersTest(_HandlerTestBase):
                 "issue_number": 91,
                 "requester": "alice",
                 "progress_comment_id": 7777,
-                "progress_run_id": "run-triage-hex",
                 "configured_labels": {},
                 "repo_label_names": [],
             },
@@ -390,7 +387,7 @@ class TriageHandlersTest(_HandlerTestBase):
         self.assertIs(kwargs["context"], state.payload_subset)
         self.assertIs(kwargs["progress"], self.progress_instances[-1])
         self.assertEqual(self.progress_instances[-1].comment_id, 7777)
-        self.assertEqual(self.progress_instances[-1].run_id, "run-triage-hex")
+        self.assertEqual(self.progress_instances[-1].run_id, "run-1")
 
     def test_failure_handler_posts_workflow_error(self) -> None:
         from lib.handlers import build_triage_handlers
@@ -474,7 +471,6 @@ class HandlerRegistryTest(_HandlerTestBase):
                 "issue_number": 91,
                 "requester": "alice",
                 "progress_comment_id": 5555,
-                "progress_run_id": "run-pa-hex",
             },
         )
         handlers.result_applier(state=state, result={"summary": "impl ok"})
