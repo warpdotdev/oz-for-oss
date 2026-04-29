@@ -22,6 +22,7 @@ from . import conftest  # noqa: F401
 from api.webhook import process_webhook_request
 from lib.dispatch import DispatchRequest
 from lib.routing import (
+    WORKFLOW_ANNOUNCE_READY_ISSUE,
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_PLAN_APPROVED,
     WORKFLOW_REVIEW_PR,
@@ -386,6 +387,120 @@ class SynchronousPlanApprovedPathTest(unittest.TestCase):
         self.assertEqual(response.status, 500)
         self.assertIn("plan-approved path failed", response.body["error"])
         builder_called.assert_not_called()
+
+
+class SynchronousAnnounceReadyIssuePathTest(unittest.TestCase):
+    def _payload(self, *, label: str = "ready-to-implement") -> dict[str, Any]:
+        return {
+            "action": "labeled",
+            "repository": {"full_name": "acme/widgets"},
+            "installation": {"id": 1234},
+            "label": {"name": label},
+            "issue": {
+                "number": 42,
+                "state": "open",
+                "assignees": [{"login": "alice"}],
+                "user": {"login": "alice", "type": "User"},
+                "labels": [
+                    {"name": "triaged"},
+                    {"name": label},
+                ],
+            },
+            "sender": {"login": "alice"},
+        }
+
+    def test_announce_outcome_short_circuits_dispatch(self) -> None:
+        # The announce-ready-issue workflow is fully synchronous;
+        # the webhook never falls through to a cloud-agent dispatch
+        # so neither the builder nor the runner should be invoked.
+        body, signature = _signed_envelope(self._payload())
+
+        sync_calls: list[Mapping[str, Any]] = []
+
+        def sync_announce(payload: Mapping[str, Any]) -> dict[str, Any]:
+            sync_calls.append(payload)
+            return {
+                "action": "announced",
+                "issue_number": 42,
+                "label": "ready-to-implement",
+            }
+
+        builder_called = MagicMock()
+        runner_called = MagicMock(side_effect=AssertionError("should not run"))
+
+        response = process_webhook_request(
+            body=body,
+            signature_header=signature,
+            event_header="issues",
+            delivery_id="delivery-ari-1",
+            secret=_SECRET,
+            builder_registry={},
+            runner=runner_called,
+            config_factory=lambda name, role: {},
+            store=InMemoryStateStore(),
+            sync_announce_ready_issue=sync_announce,
+        )
+        self.assertEqual(response.status, 202)
+        self.assertEqual(
+            response.body["workflow"], WORKFLOW_ANNOUNCE_READY_ISSUE
+        )
+        self.assertEqual(
+            response.body["announce_ready_issue"]["action"], "announced"
+        )
+        self.assertEqual(
+            response.body["announce_ready_issue"]["issue_number"], 42
+        )
+        self.assertEqual(len(sync_calls), 1)
+        builder_called.assert_not_called()
+
+    def test_returns_202_without_outcome_when_sync_helper_not_wired(self) -> None:
+        # Pure-routing unit-test path: when the sync helper is not
+        # wired in, the webhook still returns 202 with the routed
+        # decision so the GitHub deliveries UI stays green. No
+        # cloud-agent dispatch happens for this workflow regardless.
+        body, signature = _signed_envelope(self._payload())
+
+        runner_called = MagicMock(side_effect=AssertionError("should not run"))
+        response = process_webhook_request(
+            body=body,
+            signature_header=signature,
+            event_header="issues",
+            delivery_id="delivery-ari-2",
+            secret=_SECRET,
+            builder_registry={},
+            runner=runner_called,
+            config_factory=lambda name, role: {},
+            store=InMemoryStateStore(),
+        )
+        self.assertEqual(response.status, 202)
+        self.assertEqual(
+            response.body["workflow"], WORKFLOW_ANNOUNCE_READY_ISSUE
+        )
+        self.assertNotIn("announce_ready_issue", response.body)
+        runner_called.assert_not_called()
+
+    def test_500_when_sync_announce_raises(self) -> None:
+        body, signature = _signed_envelope(self._payload())
+
+        def exploding_sync(_payload: Mapping[str, Any]) -> dict[str, Any]:
+            raise RuntimeError("github outage")
+
+        response = process_webhook_request(
+            body=body,
+            signature_header=signature,
+            event_header="issues",
+            delivery_id="delivery-ari-3",
+            secret=_SECRET,
+            builder_registry={},
+            runner=lambda **_: SimpleNamespace(run_id="x"),
+            config_factory=lambda name, role: {},
+            store=InMemoryStateStore(),
+            sync_announce_ready_issue=exploding_sync,
+        )
+        self.assertEqual(response.status, 500)
+        self.assertIn(
+            "announce-ready-issue path failed", response.body["error"]
+        )
 
 
 if __name__ == "__main__":

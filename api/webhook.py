@@ -39,6 +39,7 @@ from lib.dispatch import (
 )
 from lib.routing import (
     RouteDecision,
+    WORKFLOW_ANNOUNCE_READY_ISSUE,
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_PLAN_APPROVED,
     route_event,
@@ -116,6 +117,25 @@ def _run_synchronous_plan_approved(
     return sync_plan_approved(payload)
 
 
+def _run_synchronous_announce_ready_issue(
+    payload: Mapping[str, Any],
+    *,
+    sync_announce_ready_issue: Callable[[Mapping[str, Any]], dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """Run the synchronous ``announce-ready-issue`` path inside the webhook.
+
+    The handler posts a one-shot availability-announcement comment on
+    the labeled issue. There is no cloud-agent dispatch fallback —
+    every routed delivery is fully handled inline — so the helper
+    always returns a structured outcome dict (or ``None`` when the
+    sync helper itself wasn't wired in, which only happens for unit
+    tests that exercise pure routing).
+    """
+    if sync_announce_ready_issue is None:
+        return None
+    return sync_announce_ready_issue(payload)
+
+
 def process_webhook_request(
     *,
     body: bytes,
@@ -129,6 +149,7 @@ def process_webhook_request(
     store: StateStore | None = None,
     sync_enforcer: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     sync_plan_approved: Callable[[Mapping[str, Any]], dict[str, Any] | None] | None = None,
+    sync_announce_ready_issue: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
 ) -> WebhookResponse:
     """Validate a webhook delivery and dispatch the cloud agent run.
 
@@ -223,6 +244,33 @@ def process_webhook_request(
                 body={**base_body, "plan_approved": outcome},
             )
 
+    # ``announce-ready-issue`` is fully synchronous: the webhook
+    # posts a one-shot availability-announcement comment and never
+    # dispatches a cloud agent. The sync helper always returns a
+    # structured outcome so the response body carries the action /
+    # reason for observability, and the dispatch path is skipped
+    # entirely.
+    if decision.workflow == WORKFLOW_ANNOUNCE_READY_ISSUE:
+        try:
+            outcome = _run_synchronous_announce_ready_issue(
+                payload, sync_announce_ready_issue=sync_announce_ready_issue
+            )
+        except Exception as exc:
+            logger.exception("Synchronous announce-ready-issue run failed")
+            return WebhookResponse(
+                status=500,
+                body={**base_body, "error": f"announce-ready-issue path failed: {exc}"},
+            )
+        if outcome is None:
+            # Sync helper not wired in (unit-test path that only
+            # exercises routing); surface the routed decision and
+            # return without dispatching.
+            return WebhookResponse(status=202, body=base_body)
+        return WebhookResponse(
+            status=202,
+            body={**base_body, "announce_ready_issue": outcome},
+        )
+
     if builder_registry is None or runner is None or config_factory is None or store is None:
         # The webhook handler is partially wired (e.g. unit tests that
         # only exercise routing). Keep the legacy 202 + reason
@@ -315,6 +363,7 @@ class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel requires this exac
             store=wiring["store"],
             sync_enforcer=wiring["sync_enforcer"],
             sync_plan_approved=wiring["sync_plan_approved"],
+            sync_announce_ready_issue=wiring["sync_announce_ready_issue"],
         )
         self._respond(response.status, response.body)
 
@@ -351,6 +400,9 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
     )
     from scripts.enforce_pr_issue_state import (  # type: ignore[import-not-found]
         enforce_pr_state_synchronously,
+    )
+    from scripts.announce_ready_issue import (  # type: ignore[import-not-found]
+        apply_announce_ready_issue_sync,
     )
     from scripts.plan_approved import (  # type: ignore[import-not-found]
         apply_plan_approved_sync,
@@ -498,6 +550,26 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
             repo_handle, payload=payload, github_client=client
         )
 
+    def sync_announce_ready_issue(
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        installation_id = int(
+            (payload.get("installation") or {}).get("id") or 0
+        )
+        full_name = str(
+            (payload.get("repository") or {}).get("full_name") or ""
+        )
+        if installation_id <= 0 or "/" not in full_name:
+            return {
+                "action": "skipped",
+                "reason": "missing installation_id or repository.full_name",
+            }
+        client = _mint_github_client(installation_id)
+        repo_handle = client.get_repo(full_name)
+        return apply_announce_ready_issue_sync(
+            repo_handle, payload=payload
+        )
+
     return {
         "builder_registry": builder_registry,
         "runner": runner,
@@ -505,6 +577,7 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
         "store": build_state_store(),
         "sync_enforcer": sync_enforcer,
         "sync_plan_approved": sync_plan_approved,
+        "sync_announce_ready_issue": sync_announce_ready_issue,
     }
 
 

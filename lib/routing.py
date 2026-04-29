@@ -53,9 +53,15 @@ Webhook coverage today:
     added is ``oz-agent`` and the issue carries the matching
     lifecycle label (``ready-to-spec`` /
     ``ready-to-implement``).
-  - ``labeled`` routes to the same workflows when the label being
-    added is one of ``ready-to-spec`` / ``ready-to-implement`` and
-    ``oz-agent`` is already among the assignees.
+  - ``labeled`` routes to ``create-spec-from-issue`` /
+    ``create-implementation-from-issue`` when the label being added is
+    ``ready-to-spec`` / ``ready-to-implement`` and ``oz-agent`` is
+    already among the assignees. When ``oz-agent`` is NOT assigned,
+    the same labels route to ``announce-ready-issue`` so the
+    webhook can post a one-shot announcement comment letting
+    contributors know the issue is open for the matching kind of
+    contribution and that maintainers can tag ``@oz-agent`` to start
+    automated work.
 
 - ``issue_comment`` events on a plain (non-PR) issue route to
   ``triage-new-issues`` when the comment carries an ``@oz-agent``
@@ -94,6 +100,7 @@ WORKFLOW_TRIAGE_NEW_ISSUES = "triage-new-issues"
 WORKFLOW_CREATE_SPEC_FROM_ISSUE = "create-spec-from-issue"
 WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE = "create-implementation-from-issue"
 WORKFLOW_PLAN_APPROVED = "plan-approved"
+WORKFLOW_ANNOUNCE_READY_ISSUE = "announce-ready-issue"
 
 OZ_AGENT_LOGIN = "oz-agent"
 OZ_REVIEW_LABEL = "oz-review"
@@ -326,9 +333,18 @@ def _route_issues(payload: dict[str, Any]) -> RouteDecision:
             "oz-agent assigned to issue without ready-to-spec or ready-to-implement label",
         )
     if action == "labeled":
-        # Only fire when one of the lifecycle labels was just added,
-        # and ``oz-agent`` is already among the assignees so the
-        # bot has been explicitly enlisted to act.
+        # Lifecycle labels (``ready-to-spec`` / ``ready-to-implement``)
+        # split into two routes depending on whether ``oz-agent`` is
+        # already on the issue:
+        #
+        # - oz-agent assigned -> the bot has been enlisted to do the
+        #   work itself, so route to ``create-spec-from-issue`` /
+        #   ``create-implementation-from-issue`` and let the cloud
+        #   agent handle it.
+        # - oz-agent NOT assigned -> the maintainer has merely opened
+        #   the issue up for community contributions, so route to
+        #   ``announce-ready-issue`` to post a one-shot announcement
+        #   comment instead.
         label_name = str((payload.get("label") or {}).get("name") or "").strip()
         if label_name not in {READY_TO_SPEC_LABEL, READY_TO_IMPLEMENT_LABEL}:
             return RouteDecision(
@@ -341,8 +357,10 @@ def _route_issues(payload: dict[str, Any]) -> RouteDecision:
         ]
         if OZ_AGENT_LOGIN not in assignees:
             return RouteDecision(
-                None,
-                f"{label_name!r} added to issue without oz-agent assignee",
+                WORKFLOW_ANNOUNCE_READY_ISSUE,
+                f"{label_name!r} added without oz-agent assignee; "
+                "announcing availability for community contribution",
+                extra={"label": label_name},
             )
         if label_name == READY_TO_IMPLEMENT_LABEL:
             return RouteDecision(
@@ -449,6 +467,7 @@ __all__ = [
     "READY_TO_SPEC_LABEL",
     "RouteDecision",
     "TRIAGED_LABEL",
+    "WORKFLOW_ANNOUNCE_READY_ISSUE",
     "WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE",
     "WORKFLOW_CREATE_SPEC_FROM_ISSUE",
     "WORKFLOW_ENFORCE_PR_ISSUE_STATE",

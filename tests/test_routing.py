@@ -16,6 +16,7 @@ from . import conftest  # noqa: F401
 from lib.routing import (
     OZ_AGENT_LOGIN,
     RouteDecision,
+    WORKFLOW_ANNOUNCE_READY_ISSUE,
     WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
     WORKFLOW_CREATE_SPEC_FROM_ISSUE,
     WORKFLOW_ENFORCE_PR_ISSUE_STATE,
@@ -215,10 +216,12 @@ class IssuesEventTest(unittest.TestCase):
         )
         self.assertEqual(decision.workflow, WORKFLOW_CREATE_SPEC_FROM_ISSUE)
 
-    def test_lifecycle_label_added_without_oz_agent_assignee_is_dropped(self) -> None:
-        # Adding ``ready-to-spec`` while only humans are assigned
-        # must not fire the bot — the maintainer is staging the
-        # label without delegating to oz-agent yet.
+    def test_ready_to_spec_label_without_oz_agent_assignee_routes_to_announce(self) -> None:
+        # Adding ``ready-to-spec`` without an ``oz-agent`` assignee
+        # means the maintainer is opening the issue up for community
+        # contribution rather than enlisting the bot. The webhook
+        # routes that case to the announce-ready-issue sync handler
+        # so contributors hear about it via a one-shot comment.
         decision = route_event(
             "issues",
             {
@@ -230,8 +233,33 @@ class IssuesEventTest(unittest.TestCase):
                 ),
             },
         )
-        self.assertIsNone(decision.workflow)
+        self.assertEqual(decision.workflow, WORKFLOW_ANNOUNCE_READY_ISSUE)
         self.assertIn("oz-agent", decision.reason)
+        self.assertEqual(
+            (decision.extra or {}).get("label"), "ready-to-spec"
+        )
+
+    def test_ready_to_implement_label_without_oz_agent_assignee_routes_to_announce(
+        self,
+    ) -> None:
+        # Same routing as ``ready-to-spec``: the announce handler
+        # fires whenever a lifecycle label lands without an
+        # ``oz-agent`` assignee, regardless of which one.
+        decision = route_event(
+            "issues",
+            {
+                "action": "labeled",
+                "label": {"name": "ready-to-implement"},
+                "issue": _issue(
+                    labels=["triaged", "ready-to-implement"],
+                    assignees=[],
+                ),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_ANNOUNCE_READY_ISSUE)
+        self.assertEqual(
+            (decision.extra or {}).get("label"), "ready-to-implement"
+        )
 
     def test_unrelated_label_added_to_issue_is_dropped(self) -> None:
         decision = route_event(
