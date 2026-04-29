@@ -223,6 +223,7 @@ def apply_pr_comment_result(
     result: Mapping[str, Any] | None = None,
     client: Github | None = None,
     pr: PullRequest | None = None,
+    progress: WorkflowProgressComment | None = None,
 ) -> None:
     """Apply a completed respond-to-pr-comment run back to GitHub.
 
@@ -238,6 +239,12 @@ def apply_pr_comment_result(
 
     *pr* lets callers reuse an already-fetched :class:`PullRequest`
     handle so the apply step does not have to re-fetch it.
+
+    *progress* is the reconstructed :class:`WorkflowProgressComment` the
+    Vercel cron handler hands in so the final ``complete`` call lands
+    on the comment posted at dispatch time. Callers that omit it fall
+    back to constructing a fresh instance, which keeps the legacy GHA
+    runtime contract.
     """
     owner = str(context["owner"])
     repo = str(context["repo"])
@@ -251,15 +258,16 @@ def apply_pr_comment_result(
     review_reply_target: tuple[PullRequest, int] | None = (
         (pr, review_reply_target_id) if review_reply_target_id > 0 else None
     )
-    progress = WorkflowProgressComment(
-        github,
-        owner,
-        repo,
-        pr_number,
-        workflow=WORKFLOW_NAME,
-        requester_login=requester,
-        review_reply_target=review_reply_target,
-    )
+    if progress is None:
+        progress = WorkflowProgressComment(
+            github,
+            owner,
+            repo,
+            pr_number,
+            workflow=WORKFLOW_NAME,
+            requester_login=requester,
+            review_reply_target=review_reply_target,
+        )
     next_steps_section = build_next_steps_section(
         [
             "Review the changes pushed to this PR.",

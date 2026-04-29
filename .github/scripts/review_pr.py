@@ -1158,6 +1158,7 @@ def apply_review_result(
     context: Mapping[str, Any],
     run: Any,
     result: Mapping[str, Any],
+    progress: WorkflowProgressComment | None = None,
 ) -> None:
     """Apply ``review.json`` back to the originating PR.
 
@@ -1166,6 +1167,13 @@ def apply_review_result(
     can run without a workspace checkout. Covers both the member-PR
     ``COMMENT`` flow and the non-member ``APPROVE`` /
     ``REQUEST_CHANGES`` flows.
+
+    *progress* is the reconstructed :class:`WorkflowProgressComment` the
+    Vercel cron handler hands in so the final ``complete`` /
+    ``replace_body`` calls land on the comment posted at dispatch time.
+    Callers that do not supply *progress* fall back to constructing a
+    fresh instance so the legacy GitHub Actions path keeps the same
+    runtime contract.
     """
     owner = str(context["owner"])
     repo = str(context["repo"])
@@ -1184,14 +1192,15 @@ def apply_review_result(
     diff_content_map = _deserialize_diff_content_map(
         context.get("diff_content_map") or {}
     )
-    progress = WorkflowProgressComment(
-        github,
-        owner,
-        repo,
-        pr_number,
-        workflow=WORKFLOW_NAME,
-        requester_login=requester,
-    )
+    if progress is None:
+        progress = WorkflowProgressComment(
+            github,
+            owner,
+            repo,
+            pr_number,
+            workflow=WORKFLOW_NAME,
+            requester_login=requester,
+        )
     pr = github.get_pull(pr_number)
     summary, comments = _normalize_review_payload(
         result, diff_line_map, diff_content_map

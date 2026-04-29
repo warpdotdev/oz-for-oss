@@ -271,6 +271,7 @@ def apply_issue_association_result(
     context: Mapping[str, Any],
     run: Any,
     result: Mapping[str, Any],
+    progress: WorkflowProgressComment | None = None,
 ) -> None:
     """Apply the cloud agent's issue-association decision back to GitHub.
 
@@ -278,18 +279,25 @@ def apply_issue_association_result(
     cloud agent has produced ``issue_association.json``: cleans up the
     progress comment on a match, otherwise posts the close comment +
     closes the PR.
+
+    *progress* is the reconstructed :class:`WorkflowProgressComment` the
+    Vercel cron handler hands in so cleanup / completion lands on the
+    comment posted at dispatch time. Callers that omit it fall back to
+    constructing a fresh instance, which keeps the legacy GHA runtime
+    contract.
     """
     owner = str(context["owner"])
     repo = str(context["repo"])
     pr_number = int(context["pr_number"])
-    progress = WorkflowProgressComment(
-        github,
-        owner,
-        repo,
-        pr_number,
-        workflow=WORKFLOW_NAME,
-        requester_login=str(context.get("requester") or ""),
-    )
+    if progress is None:
+        progress = WorkflowProgressComment(
+            github,
+            owner,
+            repo,
+            pr_number,
+            workflow=WORKFLOW_NAME,
+            requester_login=str(context.get("requester") or ""),
+        )
     matched = bool(result.get("matched")) and isinstance(result.get("issue_number"), int)
     if matched:
         progress.cleanup()
