@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import MagicMock
 
 from . import conftest  # noqa: F401
 
@@ -10,8 +11,10 @@ from scripts.review_pr import (  # type: ignore[import-not-found]
     _deterministic_reviewer_from_stakeholders,
     _format_non_member_review_section,
     _format_review_completion_message,
+    _parse_verdict,
     _resolve_recommended_reviewers,
     _stakeholder_pattern_matches,
+    apply_review_result,
 )
 
 
@@ -136,14 +139,19 @@ class ResolveRecommendedReviewersTest(unittest.TestCase):
 
 
 class NonMemberPromptSectionTest(unittest.TestCase):
-    def test_prompt_requires_single_reviewer_and_forbids_review_actions(self) -> None:
+    def test_prompt_requires_single_reviewer_and_gates_on_verdict(self) -> None:
         prompt = _format_non_member_review_section(
             pr_author_login="contributor",
             stakeholders_block="- /docs/ → @docs-owner",
         )
         self.assertIn("exactly one bare GitHub login", prompt)
         self.assertIn("Do not return more than one reviewer", prompt)
-        self.assertIn("Do not emit any review-action field", prompt)
+        # The prompt should tie the reviewer request to ``verdict`` =
+        # APPROVE and explicitly mention the REJECT → REQUEST_CHANGES
+        # behavior so the agent understands when its reviewer choice
+        # will actually be honored.
+        self.assertIn("`verdict` is `\"APPROVE\"`", prompt)
+        self.assertIn("REQUEST_CHANGES", prompt)
 
 
 class FormatReviewCompletionMessageTest(unittest.TestCase):
@@ -157,6 +165,183 @@ class FormatReviewCompletionMessageTest(unittest.TestCase):
         message = _format_review_completion_message("COMMENT", [])
         self.assertIn("completed the review", message)
         self.assertNotIn("approved", message.lower())
+
+
+class ParseVerdictTest(unittest.TestCase):
+    def test_uppercase_approve(self) -> None:
+        self.assertEqual(_parse_verdict({"verdict": "APPROVE"}), "APPROVE")
+
+    def test_uppercase_reject(self) -> None:
+        self.assertEqual(_parse_verdict({"verdict": "REJECT"}), "REJECT")
+
+    def test_lowercase_is_normalized(self) -> None:
+        self.assertEqual(_parse_verdict({"verdict": "approve"}), "APPROVE")
+        self.assertEqual(_parse_verdict({"verdict": "reject"}), "REJECT")
+
+    def test_surrounding_whitespace_is_stripped(self) -> None:
+        self.assertEqual(_parse_verdict({"verdict": "  REJECT "}), "REJECT")
+
+    def test_missing_verdict_defaults_to_approve(self) -> None:
+        self.assertEqual(_parse_verdict({}), "APPROVE")
+
+    def test_invalid_verdict_defaults_to_approve(self) -> None:
+        self.assertEqual(_parse_verdict({"verdict": "maybe"}), "APPROVE")
+
+    def test_non_string_verdict_defaults_to_approve(self) -> None:
+        self.assertEqual(_parse_verdict({"verdict": 1}), "APPROVE")
+        self.assertEqual(_parse_verdict({"verdict": None}), "APPROVE")
+
+
+class ApplyReviewResultVerdictTest(unittest.TestCase):
+    """Verify ``apply_review_result`` honors the agent-supplied verdict."""
+
+    def _make_context(self, *, is_non_member: bool) -> dict:
+        return {
+            "owner": "acme",
+            "repo": "widgets",
+            "pr_number": 7,
+            "requester": "alice",
+            "is_non_member": is_non_member,
+            "pr_author_login": "contributor",
+            "stakeholder_entries": STAKEHOLDERS,
+            "stakeholder_logins": ["api-owner", "docs-owner", "fallback", "python-owner"],
+            "diff_line_map": {},
+            "diff_content_map": {},
+        }
+
+    def _make_github(self, pr: MagicMock) -> MagicMock:
+        github = MagicMock()
+        github.get_pull.return_value = pr
+        return github
+
+    def test_reject_member_pr_emits_request_changes_without_reviewer_request(self) -> None:
+        pr = MagicMock()
+        github = self._make_github(pr)
+        progress = MagicMock()
+        apply_review_result(
+            github,
+            context=self._make_context(is_non_member=False),
+            run=MagicMock(),
+            result={"verdict": "REJECT", "summary": "Needs work", "comments": []},
+            progress=progress,
+        )
+        pr.create_review.assert_called_once()
+        kwargs = pr.create_review.call_args.kwargs
+        self.assertEqual(kwargs["event"], "REQUEST_CHANGES")
+        self.assertIn("Needs work", kwargs["body"])
+        pr.create_review_request.assert_not_called()
+
+    def test_reject_non_member_pr_skips_reviewer_request(self) -> None:
+        pr = MagicMock()
+        github = self._make_github(pr)
+        progress = MagicMock()
+        apply_review_result(
+            github,
+            context=self._make_context(is_non_member=True),
+            run=MagicMock(),
+            result={
+                "verdict": "REJECT",
+                "summary": "Needs work",
+                "comments": [],
+                "recommended_reviewers": ["api-owner"],
+            },
+            progress=progress,
+        )
+        pr.create_review.assert_called_once()
+        self.assertEqual(
+            pr.create_review.call_args.kwargs["event"], "REQUEST_CHANGES"
+        )
+        pr.create_review_request.assert_not_called()
+
+    def test_approve_non_member_pr_requests_reviewers_and_uses_comment_event(self) -> None:
+        pr = MagicMock()
+        github = self._make_github(pr)
+        progress = MagicMock()
+        apply_review_result(
+            github,
+            context=self._make_context(is_non_member=True),
+            run=MagicMock(),
+            result={
+                "verdict": "APPROVE",
+                "summary": "Looks good",
+                "comments": [],
+                "recommended_reviewers": ["api-owner"],
+            },
+            progress=progress,
+        )
+        pr.create_review.assert_called_once()
+        self.assertEqual(pr.create_review.call_args.kwargs["event"], "COMMENT")
+        pr.create_review_request.assert_called_once_with(reviewers=["api-owner"])
+
+    def test_approve_member_pr_uses_comment_event_without_reviewer_request(self) -> None:
+        pr = MagicMock()
+        github = self._make_github(pr)
+        progress = MagicMock()
+        apply_review_result(
+            github,
+            context=self._make_context(is_non_member=False),
+            run=MagicMock(),
+            result={"verdict": "APPROVE", "summary": "Looks good", "comments": []},
+            progress=progress,
+        )
+        pr.create_review.assert_called_once()
+        self.assertEqual(pr.create_review.call_args.kwargs["event"], "COMMENT")
+        pr.create_review_request.assert_not_called()
+
+    def test_reject_with_no_summary_still_posts_request_changes(self) -> None:
+        pr = MagicMock()
+        github = self._make_github(pr)
+        progress = MagicMock()
+        apply_review_result(
+            github,
+            context=self._make_context(is_non_member=False),
+            run=MagicMock(),
+            result={"verdict": "REJECT", "summary": "", "comments": []},
+            progress=progress,
+        )
+        pr.create_review.assert_called_once()
+        kwargs = pr.create_review.call_args.kwargs
+        self.assertEqual(kwargs["event"], "REQUEST_CHANGES")
+        # The placeholder body keeps the call valid for GitHub.
+        self.assertIn("Automated review", kwargs["body"])
+
+    def test_approve_with_no_feedback_short_circuits(self) -> None:
+        pr = MagicMock()
+        github = self._make_github(pr)
+        progress = MagicMock()
+        apply_review_result(
+            github,
+            context=self._make_context(is_non_member=False),
+            run=MagicMock(),
+            result={"verdict": "APPROVE", "summary": "", "comments": []},
+            progress=progress,
+        )
+        pr.create_review.assert_not_called()
+        pr.create_review_request.assert_not_called()
+        progress.complete.assert_called_once()
+
+    def test_approve_and_reject_use_identical_review_body_text(self) -> None:
+        approve_pr = MagicMock()
+        reject_pr = MagicMock()
+        progress = MagicMock()
+        apply_review_result(
+            self._make_github(approve_pr),
+            context=self._make_context(is_non_member=False),
+            run=MagicMock(),
+            result={"verdict": "APPROVE", "summary": "Looks good", "comments": []},
+            progress=progress,
+        )
+        apply_review_result(
+            self._make_github(reject_pr),
+            context=self._make_context(is_non_member=False),
+            run=MagicMock(),
+            result={"verdict": "REJECT", "summary": "Looks good", "comments": []},
+            progress=progress,
+        )
+        self.assertEqual(
+            approve_pr.create_review.call_args.kwargs["body"],
+            reject_pr.create_review.call_args.kwargs["body"],
+        )
 
 
 if __name__ == "__main__":

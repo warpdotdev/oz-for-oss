@@ -91,6 +91,7 @@ Create `review.json` with this shape:
 
 ```json
 {
+  "verdict": "REJECT",
   "summary": "## Overview\n...\n\n## Concerns\n- ...\n\n## Verdict\nFound: 1 critical, 2 important, 3 suggestions\n\n**Request changes**",
   "comments": [
     {
@@ -106,6 +107,7 @@ Create `review.json` with this shape:
 
 Field rules:
 
+- `verdict` is required and must be exactly the string `"APPROVE"` or `"REJECT"` (uppercase). Map your final recommendation as: `Approve` or `Approve with nits` → `"APPROVE"`; `Request changes` → `"REJECT"`. The `verdict` and the human-readable recommendation in `summary` must agree.
 - `path` must be relative to the repository root.
 - `line` is required and must target the correct side.
 - `start_line` is optional and only for multi-line ranges.
@@ -118,7 +120,7 @@ The `summary` must include:
 - A high-level overview of the PR.
 - Important concerns and any untouched-code concerns that could not be commented inline.
 - Issue counts in the format `Found: X critical, Y important, Z suggestions`.
-- A final recommendation of `Approve`, `Approve with nits`, or `Request changes`.
+- A final recommendation of `Approve`, `Approve with nits`, or `Request changes`. This recommendation must match the top-level `verdict` field (`Approve` / `Approve with nits` → `"APPROVE"`; `Request changes` → `"REJECT"`).
 
 ## Final Checks
 

@@ -55,6 +55,34 @@ _NO_SPEC_CONTEXT_MESSAGE = (
     "No approved or repository spec context was found for this PR."
 )
 
+# Allowed values for the agent-supplied ``verdict`` field on ``review.json``.
+_VERDICT_APPROVE = "APPROVE"
+_VERDICT_REJECT = "REJECT"
+_ALLOWED_VERDICTS = frozenset({_VERDICT_APPROVE, _VERDICT_REJECT})
+
+
+def _parse_verdict(review: Mapping[str, Any]) -> str:
+    """Return the normalized agent verdict from a ``review.json`` payload.
+
+    Accepts ``"APPROVE"`` or ``"REJECT"`` (case-insensitive, surrounding
+    whitespace ignored). Missing, non-string, or unrecognized values
+    fall back to ``"APPROVE"`` so the workflow degrades to the prior
+    ``COMMENT``-only behavior, and a warning is logged so we can detect
+    agents that drop or mistype the field.
+    """
+    raw = review.get("verdict") if isinstance(review, Mapping) else None
+    if isinstance(raw, str):
+        normalized = raw.strip().upper()
+        if normalized in _ALLOWED_VERDICTS:
+            return normalized
+    logger.warning(
+        "review-pr: review.json verdict %r is missing or not in %s; defaulting to %s",
+        raw,
+        sorted(_ALLOWED_VERDICTS),
+        _VERDICT_APPROVE,
+    )
+    return _VERDICT_APPROVE
+
 
 def _bundled_spec_context_script() -> Path:
     """Return the spec-context resolver bundled with this action checkout."""
@@ -538,13 +566,12 @@ def _format_non_member_review_section(
     return dedent(
         f"""
         Non-Member Reviewer Selection:
-        - The PR author (@{pr_author_login or 'unknown'}) is not a repository member or collaborator, so the workflow should request exactly one human reviewer after posting the review comment.
-        - Return a `recommended_reviewers` field alongside `summary` and `comments`.
+        - The PR author (@{pr_author_login or 'unknown'}) is not a repository member or collaborator, so the workflow should request exactly one human reviewer when your `verdict` is `"APPROVE"`.
+        - Return a `recommended_reviewers` field alongside `verdict`, `summary`, and `comments`.
         - `recommended_reviewers` must be a JSON list with exactly one bare GitHub login string, for example: {{"recommended_reviewers": ["octocat"]}}.
         - Choose that single reviewer from `.github/STAKEHOLDERS` by matching the changed file paths against the STAKEHOLDERS rules. Later rules override earlier rules, and more specific matching rules should be preferred over catch-all rules.
         - Strip any leading `@` from the login and exclude the PR author (@{pr_author_login or 'unknown'}); GitHub rejects self-review requests.
         - Do not return more than one reviewer, and do not return multiple candidates for the workflow to choose from.
-        - Do not emit any review-action field. The workflow always posts your feedback as a `COMMENT` review and handles the reviewer request itself.
         - If you genuinely cannot identify one matching eligible stakeholder, set `recommended_reviewers` to an empty list. The workflow will deterministically choose a fallback reviewer from `.github/STAKEHOLDERS`; do not invent or copy unrelated logins to satisfy the field.
         - Do not call GitHub yourself to post the review or request reviewers.
 
@@ -1282,8 +1309,13 @@ def apply_review_result(
     summary, comments = _normalize_review_payload(
         result, diff_line_map, diff_content_map
     )
-    event = "COMMENT"
-    if is_non_member:
+    verdict = _parse_verdict(result)
+    # On REJECT we emit a real GitHub ``REQUEST_CHANGES`` review action;
+    # on APPROVE we keep the prior ``COMMENT``-only behavior. Reviewer
+    # requests are only issued on APPROVE — a REJECT already signals to
+    # the author that the PR needs changes, so we skip the human ping.
+    event = "REQUEST_CHANGES" if verdict == _VERDICT_REJECT else "COMMENT"
+    if is_non_member and verdict == _VERDICT_APPROVE:
         recommended_reviewers = _resolve_recommended_reviewers(
             result,
             stakeholder_entries=stakeholder_entries,
@@ -1292,12 +1324,15 @@ def apply_review_result(
         )
     else:
         recommended_reviewers = []
-    # The empty-feedback short-circuit still applies only when there is no
-    # review body, no inline comments, and no reviewer request to issue.
+    # The empty-feedback short-circuit still applies only when the agent
+    # approved the PR, has nothing to say, and has no reviewer to ping.
+    # A REJECT must still post a ``REQUEST_CHANGES`` review even when
+    # the agent did not produce a summary or inline comments so the
+    # rejection action lands on GitHub.
     if (
         not summary
         and not comments
-        and event == "COMMENT"
+        and verdict == _VERDICT_APPROVE
         and not recommended_reviewers
     ):
         progress.complete(
@@ -1306,7 +1341,7 @@ def apply_review_result(
             )
         )
         return
-    if summary or comments:
+    if summary or comments or verdict == _VERDICT_REJECT:
         review_body = (
             f"{summary or 'Automated review'}\n\n{RETRIGGER_HINT}\n\n{POWERED_BY_SUFFIX}"
         )
@@ -1473,8 +1508,14 @@ def main() -> None:
             summary, comments = _normalize_review_payload(
                 review, diff_line_map, diff_content_map
             )
-            event = "COMMENT"
-            if is_non_member:
+            verdict = _parse_verdict(review)
+            # On REJECT we emit a real GitHub ``REQUEST_CHANGES`` review
+            # action; on APPROVE we keep the prior ``COMMENT``-only
+            # behavior. Reviewer requests are only issued on APPROVE.
+            event = (
+                "REQUEST_CHANGES" if verdict == _VERDICT_REJECT else "COMMENT"
+            )
+            if is_non_member and verdict == _VERDICT_APPROVE:
                 recommended_reviewers = _resolve_recommended_reviewers(
                     review,
                     stakeholder_entries=stakeholders_entries,
@@ -1486,19 +1527,19 @@ def main() -> None:
             if (
                 not summary
                 and not comments
-                and event == "COMMENT"
+                and verdict == _VERDICT_APPROVE
                 and not recommended_reviewers
             ):
-                # If there is no feedback and no reviewer request, skip
-                # posting an empty review. Non-member PRs with a resolved
-                # reviewer continue so the reviewer request still goes out.
+                # If the agent approved with no feedback and no reviewer
+                # request, skip posting an empty review. A REJECT must
+                # still emit ``REQUEST_CHANGES`` even with no feedback.
                 progress.complete(
                     _with_retrigger_hint(
                         "I completed the review and did not identify any actionable feedback for this pull request."
                     )
                 )
                 return
-            if summary or comments:
+            if summary or comments or verdict == _VERDICT_REJECT:
                 review_body = (
                     f"{summary or 'Automated review'}\n\n{RETRIGGER_HINT}\n\n{POWERED_BY_SUFFIX}"
                 )
