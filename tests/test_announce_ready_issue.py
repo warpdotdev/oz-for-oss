@@ -136,6 +136,8 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         body = issue.create_comment.call_args.args[0]
         self.assertIn("`ready-to-implement`", body)
         self.assertIn("@oz-agent", body)
+        self.assertIn("You can also comment `@oz-agent`", body)
+        self.assertNotIn("Maintainers can also comment", body)
         # Sanity-check the announcement encourages a code-change PR.
         self.assertIn("pull request", body.lower())
 
@@ -153,6 +155,8 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         body = issue.create_comment.call_args.args[0]
         self.assertIn("`ready-to-spec`", body)
         self.assertIn("@oz-agent", body)
+        self.assertIn("You can also comment `@oz-agent`", body)
+        self.assertNotIn("Maintainers can also comment", body)
         # The spec announcement should reference the specs/ tree so
         # contributors know where the proposal belongs.
         self.assertIn("specs/", body)

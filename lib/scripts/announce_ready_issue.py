@@ -10,7 +10,7 @@ on the issue letting contributors know:
 - that the issue is open for the matching kind of contribution
   (a code-change PR for ``ready-to-implement``; a product/tech spec PR for
   ``ready-to-spec``), and
-- that maintainers can tag ``@oz-agent`` in a comment on the issue to have
+- that anyone can tag ``@oz-agent`` in a comment on the issue to have
   the bot pick up the work automatically.
 
 The handler is fully synchronous — there is no cloud agent to dispatch —
@@ -53,7 +53,7 @@ def _build_announcement_body(label_name: str) -> str:
     The wording differs between the two labels because the kind of
     contribution that's invited is different (code change vs. spec
     proposal). Both bodies invite contributors to submit a PR directly
-    AND tell maintainers they can tag ``@oz-agent`` to have the bot
+    AND tell users they can tag ``@oz-agent`` to have the bot
     pick up the work automatically.
     """
     if label_name == READY_TO_IMPLEMENT_LABEL:
@@ -61,7 +61,7 @@ def _build_announcement_body(label_name: str) -> str:
             "This issue has been labeled `ready-to-implement` and is open "
             "for contributions involving code changes. If you'd like to "
             "tackle it, feel free to open a pull request against this "
-            "issue. Maintainers can also comment `@oz-agent` on this "
+            "issue. You can also comment `@oz-agent` on this "
             "issue to have the bot draft an implementation PR "
             "automatically."
         )
@@ -70,7 +70,7 @@ def _build_announcement_body(label_name: str) -> str:
         "This issue has been labeled `ready-to-spec` and is open for "
         "contributions in the form of a product or technical spec. "
         "If you'd like to draft one, feel free to open a pull request "
-        "with the spec under `specs/`. Maintainers can also comment "
+        "with the spec under `specs/`. You can also comment "
         "`@oz-agent` on this issue to have the bot draft the spec "
         "automatically."
     )
