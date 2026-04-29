@@ -35,6 +35,7 @@ from oz_workflows.oz_client import (
 )
 from oz_workflows.repo_local import (
     format_repo_local_prompt_section,
+    repo_local_skill_path_for_dispatch,
     resolve_repo_local_skill_path,
 )
 from oz_workflows.triage import (
@@ -395,6 +396,8 @@ def build_triage_prompt(
     template_context: dict[str, Any],
     recent_issues_text: str,
     host_workspace: Path,
+    triage_companion_override: Path | str | None = None,
+    dedupe_companion_override: Path | str | None = None,
 ) -> str:
     """Return the triage prompt string for *issue_number*.
 
@@ -402,9 +405,23 @@ def build_triage_prompt(
     isolation. The companion-skill paths referenced in the prompt point
     at the workspace checkout that the cloud agent inherits from the
     workflow runner.
+
+    *triage_companion_override* / *dedupe_companion_override* let
+    cloud-mode callers supply repo-relative paths resolved through
+    the GitHub API instead of the workspace. When the override is
+    provided it is used verbatim; otherwise the workspace-based
+    :func:`resolve_repo_local_skill_path` is consulted.
     """
-    triage_companion_path = resolve_repo_local_skill_path(host_workspace, "triage-issue")
-    dedupe_companion_path = resolve_repo_local_skill_path(host_workspace, "dedupe-issue")
+    triage_companion_path = (
+        triage_companion_override
+        if triage_companion_override is not None
+        else resolve_repo_local_skill_path(host_workspace, "triage-issue")
+    )
+    dedupe_companion_path = (
+        dedupe_companion_override
+        if dedupe_companion_override is not None
+        else resolve_repo_local_skill_path(host_workspace, "dedupe-issue")
+    )
     labels_line = ", ".join(issue_labels) or "None"
     assignees_line = ", ".join(issue_assignees) or "None"
     prompt = dedent(
@@ -1228,14 +1245,36 @@ def gather_triage_context(
     )
 
 
-def build_triage_prompt_for_dispatch(context: Mapping[str, Any]) -> str:
+def build_triage_prompt_for_dispatch(
+    context: Mapping[str, Any],
+    *,
+    repo_handle: Any | None = None,
+) -> str:
     """Build the cloud-mode triage prompt from a serialized :class:`TriageContext`.
 
     The prompt body is identical to the one produced by
     :func:`build_triage_prompt` for the legacy GitHub Actions runner so
     the security-rules block, output schema, and dedupe instructions
     stay byte-for-byte aligned across delivery surfaces.
+
+    *repo_handle* is the consuming repository handle the webhook
+    builder hands in. When provided it lets the prompt resolve the
+    ``triage-issue-local`` and ``dedupe-issue-local`` companion
+    skills via the GitHub API instead of the workspace, so the
+    cloud-mode prompt picks them up even though the Vercel function
+    does not have the consuming repo on disk. When omitted the
+    prompt falls back to the workspace-based resolver for backwards
+    compatibility with callers that still hand in a workspace.
     """
+    triage_companion: Path | str | None = None
+    dedupe_companion: Path | str | None = None
+    if repo_handle is not None:
+        triage_companion = repo_local_skill_path_for_dispatch(
+            repo_handle, "triage-issue"
+        )
+        dedupe_companion = repo_local_skill_path_for_dispatch(
+            repo_handle, "dedupe-issue"
+        )
     return build_triage_prompt(
         owner=str(context["owner"]),
         repo=str(context["repo"]),
@@ -1252,13 +1291,14 @@ def build_triage_prompt_for_dispatch(context: Mapping[str, Any]) -> str:
         stakeholders_text=str(context.get("stakeholders_text") or ""),
         template_context=dict(context.get("template_context") or {}),
         recent_issues_text=str(context.get("recent_issues_text") or ""),
-        # The cloud agent inherits the consuming repo's checkout, so
-        # ``resolve_repo_local_skill_path`` looks up companion-skill
-        # locations there. Pass through the workspace path the legacy
-        # entrypoint uses so the prompt-builder behaves identically;
-        # repo-local skills missing from the workspace silently degrade
-        # to no companion section.
+        # The cloud agent inherits the consuming repo's checkout. When
+        # we have a *repo_handle* we resolve the companion skills via
+        # the GitHub API and inject the repo-relative paths into the
+        # prompt below; otherwise we fall back to the workspace-based
+        # resolver inside ``build_triage_prompt``.
         host_workspace=workspace(),
+        triage_companion_override=triage_companion,
+        dedupe_companion_override=dedupe_companion,
     )
 
 

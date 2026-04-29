@@ -36,7 +36,7 @@ from oz_workflows.helpers import (
     format_implementation_start_line,
     get_login,
     resolve_coauthor_line,
-    resolve_spec_context_for_issue,
+    resolve_spec_context_for_issue_via_api,
     WorkflowProgressComment,
 )
 from oz_workflows.oz_client import skill_file_path
@@ -162,12 +162,12 @@ def gather_create_implementation_context(
 ) -> CreateImplementationContext:
     """Gather the GitHub-side context required to dispatch a create-implementation run.
 
-    *workspace_path* is the local checkout the spec-context resolver
-    consults for repository ``specs/`` files. The webhook hands in
-    ``Path("/tmp")`` because Vercel does not have the consuming repo
-    on disk; in that case ``resolve_spec_context_for_issue`` only sees
-    the API-backed approved-spec-PR path. The cloud agent will pick
-    up any directory-level specs from its own checkout once it runs.
+    *workspace_path* is retained for backwards compatibility but is
+    no longer consulted: the cloud-mode path resolves both the
+    approved-spec-PR and ``specs/GH<N>/`` directory branches via the
+    GitHub API on *repo_handle*, so the Vercel webhook (which hands
+    in ``Path("/tmp")``) picks up directory-level specs even though
+    no consuming-repo checkout is on disk.
     """
     issue_data = repo_handle.get_issue(int(issue_number))
     issue_title = str(issue_data.title or "")
@@ -195,12 +195,11 @@ def gather_create_implementation_context(
         except Exception:
             pass
 
-    spec_context = resolve_spec_context_for_issue(
+    spec_context = resolve_spec_context_for_issue_via_api(
         repo_handle,
         owner,
         repo,
         int(issue_number),
-        workspace=workspace_path,
     )
     selected_spec_pr = spec_context.get("selected_spec_pr") or {}
     selected_spec_pr_number = int(selected_spec_pr.get("number") or 0)

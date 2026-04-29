@@ -469,7 +469,12 @@ def build_triage_request(
         requester_login=requester,
         event_payload=payload,
     )
-    prompt = build_triage_prompt_for_dispatch(context)
+    # Pass *repo_handle* through so the cloud-mode prompt resolves
+    # the consuming repo's ``triage-issue-local`` and
+    # ``dedupe-issue-local`` companion skills via the GitHub API.
+    # The Vercel function does not have the repo on disk, so the
+    # workspace-based resolver would silently omit those sections.
+    prompt = build_triage_prompt_for_dispatch(context, repo_handle=repo_handle)
     payload_subset: dict[str, Any] = dict(context)
     payload_subset["progress_comment_id"] = progress_comment_id
     payload_subset["progress_run_id"] = progress_run_id

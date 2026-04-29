@@ -31,6 +31,11 @@ def _body_without_frontmatter(raw_text: str) -> str:
     return _FRONTMATTER_PATTERN.sub("", raw_text, count=1)
 
 
+def _repo_relative_skill_path(core_skill_name: str) -> str:
+    """Return the repo-relative path string for *core_skill_name*'s companion skill."""
+    return f".agents/skills/{core_skill_name}-local/SKILL.md"
+
+
 def resolve_repo_local_skill_path(
     workspace: Path, core_skill_name: str
 ) -> Path | None:
@@ -43,16 +48,19 @@ def resolve_repo_local_skill_path(
     A missing file, an empty file, or a file that contains only YAML
     frontmatter (no body) is treated as absent so the caller can omit the
     companion reference entirely.
+
+    Used by the legacy GitHub Actions paths that have the consuming
+    repository checked out under the runner's workspace. Vercel-mode
+    callers should use :func:`repo_local_skill_path_for_dispatch`
+    instead so the file is resolved through the GitHub API on the
+    repository that triggered the webhook.
     """
     if not core_skill_name or not core_skill_name.strip():
         return None
 
     candidate = (
         Path(workspace)
-        / ".agents"
-        / "skills"
-        / f"{core_skill_name}-local"
-        / "SKILL.md"
+        / _repo_relative_skill_path(core_skill_name)
     )
     try:
         if not candidate.is_file():
@@ -67,8 +75,46 @@ def resolve_repo_local_skill_path(
     return candidate.resolve()
 
 
+def repo_local_skill_path_for_dispatch(
+    repo_handle: Any, core_skill_name: str
+) -> str | None:
+    """Resolve the repo-local companion skill path for cloud-mode dispatch.
+
+    Drop-in API-backed counterpart to
+    :func:`resolve_repo_local_skill_path`. The Vercel webhook does not
+    have the consuming repository checked out locally, so cloud-mode
+    callers fetch ``.agents/skills/<core_skill_name>-local/SKILL.md``
+    via :func:`oz_workflows.triage.decode_repo_text_file` and return
+    the *repository-relative* path string when the body is non-empty.
+    The cloud agent's working directory is the consuming repo's
+    checkout, so a relative path resolves correctly inside the run.
+
+    Returns ``None`` when the file is missing, when the body is
+    empty, or when the file contains only YAML frontmatter — same
+    semantics as the workspace-based helper so the prompt section is
+    omitted in those cases.
+    """
+    if not core_skill_name or not core_skill_name.strip():
+        return None
+
+    # Imported lazily to avoid an import cycle: ``oz_workflows.triage``
+    # already imports from ``oz_workflows.helpers`` and we don't want
+    # ``repo_local`` (imported by ``helpers``-adjacent callers) to
+    # pull ``triage`` at module-load time.
+    from .triage import decode_repo_text_file
+
+    relative_path = _repo_relative_skill_path(core_skill_name)
+    text = decode_repo_text_file(repo_handle, relative_path)
+    if text is None:
+        return None
+    body = _body_without_frontmatter(text).strip()
+    if not body:
+        return None
+    return relative_path
+
+
 def format_repo_local_prompt_section(
-    core_skill_name: str, companion_path: Path
+    core_skill_name: str, companion_path: Path | str
 ) -> str:
     """Return the fenced prompt section that references *companion_path*.
 
@@ -76,6 +122,12 @@ def format_repo_local_prompt_section(
     override reminder. The companion body is never inlined into the prompt
     string; the agent is instructed to read the referenced file via its
     usual skill-read path.
+
+    *companion_path* accepts either an absolute :class:`pathlib.Path`
+    (legacy GitHub Actions path with a workspace checkout) or a
+    repo-relative string (Vercel cloud-mode path returned by
+    :func:`repo_local_skill_path_for_dispatch`). The agent reads the
+    file via its inherited cwd in either case.
     """
     return (
         f"## Repository-specific guidance for `{core_skill_name}`\n"

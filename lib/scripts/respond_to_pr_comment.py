@@ -24,6 +24,7 @@ from oz_workflows.helpers import (
     record_run_session_link,
     resolve_coauthor_line,
     resolve_spec_context_for_pr,
+    resolve_spec_context_for_pr_via_api,
     WorkflowProgressComment,
 )
 from oz_workflows.oz_client import build_agent_config, run_agent
@@ -91,12 +92,17 @@ def gather_pr_comment_context(
     pr_title = str(pr.title or "")
     coauthor_line = resolve_coauthor_line(client or github, dict(event))
     coauthor_directives = coauthor_prompt_lines(coauthor_line)
-    spec_context = resolve_spec_context_for_pr(
+    # Resolve spec context fully through the GitHub API so the cloud
+    # path picks up ``specs/GH<N>/`` directory specs even though the
+    # Vercel function does not have the consuming repo on disk. The
+    # legacy GHA path passed *workspace_path* here, which is now
+    # ignored — the API resolver covers both the approved-spec-PR
+    # and directory branches without touching the local filesystem.
+    spec_context = resolve_spec_context_for_pr_via_api(
         github,
         owner,
         repo,
         pr,
-        workspace=workspace_path or workspace(),
     )
     spec_sections: list[str] = []
     selected_spec_pr = spec_context.get("selected_spec_pr")

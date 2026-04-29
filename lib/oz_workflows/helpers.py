@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from github import Github
-from github.GithubException import UnknownObjectException
+from github.GithubException import GithubException, UnknownObjectException
 from github.IssueComment import IssueComment
 from github.PullRequest import PullRequest
 from github.PullRequestComment import PullRequestComment
@@ -1254,6 +1255,66 @@ def read_local_spec_files(workspace: Path, issue_number: int) -> list[tuple[str,
     return results
 
 
+def _read_repo_text_file(repo_handle: Any, path: str) -> str | None:
+    """Return the UTF-8 text of *path* in the repo via the GitHub API.
+
+    Local mirror of :func:`oz_workflows.triage.decode_repo_text_file`
+    so spec-context helpers do not have to import the triage module
+    (which would create a circular dependency at module-load time).
+    Mirrors the same tolerance for missing files / directory paths /
+    non-404 GithubException errors.
+    """
+    try:
+        contents = repo_handle.get_contents(path)
+    except UnknownObjectException:
+        return None
+    except GithubException:
+        logger.exception(
+            "Failed to fetch %s from %s",
+            path,
+            getattr(repo_handle, "full_name", ""),
+        )
+        return None
+    if isinstance(contents, list):
+        return None
+    raw = getattr(contents, "decoded_content", None)
+    if raw is None:
+        encoded = getattr(contents, "content", "") or ""
+        try:
+            raw = base64.b64decode(encoded)
+        except (ValueError, TypeError):
+            return None
+    try:
+        return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+    except UnicodeDecodeError:
+        return None
+
+
+def read_repo_spec_files(
+    repo_handle: Any, issue_number: int
+) -> list[tuple[str, str]]:
+    """Return ``[(repo_relative_path, content), ...]`` for *issue_number*'s repo specs.
+
+    Drop-in API-backed counterpart to :func:`read_local_spec_files`.
+    The Vercel webhook does not have the consuming repository
+    checked out locally, so cloud-mode callers fetch each
+    ``specs/GH<N>/{product,tech}.md`` via the GitHub API rather than
+    walking a workspace directory. Files that are missing or fail to
+    decode are silently skipped so the returned list mirrors what
+    the workspace-based helper would surface for an incomplete
+    ``specs/`` tree.
+    """
+    spec_dir_name = spec_directory_name(issue_number)
+    results: list[tuple[str, str]] = []
+    for name in ("product.md", "tech.md"):
+        rel = f"specs/{spec_dir_name}/{name}"
+        text = _read_repo_text_file(repo_handle, rel)
+        if text is None:
+            continue
+        results.append((rel, text.strip()))
+    return results
+
+
 def resolve_spec_context_for_issue(
     github: Repository,
     owner: str,
@@ -1298,6 +1359,103 @@ def resolve_spec_context_for_issue(
         "spec_context_source": spec_context_source,
         "spec_entries": spec_entries,
     }
+
+
+def resolve_spec_context_for_issue_via_api(
+    github: Repository,
+    owner: str,
+    repo: str,
+    issue_number: int,
+) -> dict[str, Any]:
+    """Fully API-backed spec-context resolver for cloud-mode callers.
+
+    Drop-in counterpart to :func:`resolve_spec_context_for_issue`
+    that does not rely on a workspace checkout: when no approved
+    spec PR is linked, the directory specs are read out of the
+    repository via the GitHub API on the default branch instead of
+    walking ``workspace / specs / GH<N>``. The Vercel webhook hands
+    in ``Path('/tmp')`` for *workspace*, so the workspace-based
+    helper would always return ``spec_entries=[]`` for the directory
+    branch and silently lose spec context for any issue that does
+    not yet have an approved spec PR.
+
+    The approved-spec-PR branch is identical to the workspace
+    helper (it already reads PR head-ref content via
+    ``github.get_contents``) so the two helpers produce the same
+    output for that case.
+    """
+    approved, unapproved = find_matching_spec_prs(github, owner, repo, issue_number)
+    selected = approved[0] if approved else None
+    if selected and selected["head_repo_full_name"] != f"{owner}/{repo}":
+        raise RuntimeError(
+            f"Linked approved spec PR #{selected['number']} uses branch "
+            f"{selected['head_repo_full_name']}:{selected['head_ref_name']}, which this workflow cannot push to."
+        )
+
+    spec_entries: list[dict[str, str]] = []
+    if selected:
+        for path in selected["spec_files"]:
+            try:
+                content_file = github.get_contents(path, ref=selected["head_ref_name"])
+            except UnknownObjectException:
+                continue
+            if isinstance(content_file, list):
+                continue
+            spec_entries.append(
+                {
+                    "path": path,
+                    "content": content_file.decoded_content.decode("utf-8").strip(),
+                }
+            )
+        spec_context_source = "approved-pr"
+    else:
+        repo_specs = read_repo_spec_files(github, issue_number)
+        for path, content in repo_specs:
+            spec_entries.append({"path": path, "content": content})
+        spec_context_source = "directory" if repo_specs else ""
+
+    return {
+        "selected_spec_pr": selected,
+        "approved_spec_prs": approved,
+        "unapproved_spec_prs": unapproved,
+        "spec_context_source": spec_context_source,
+        "spec_entries": spec_entries,
+    }
+
+
+def resolve_spec_context_for_pr_via_api(
+    github: Repository,
+    owner: str,
+    repo: str,
+    pr: Any,
+) -> dict[str, Any]:
+    """PR-shape wrapper around :func:`resolve_spec_context_for_issue_via_api`.
+
+    Mirrors :func:`resolve_spec_context_for_pr` so cloud-mode callers
+    that already hold a :class:`PullRequest` handle do not have to
+    duplicate the issue-number resolution logic.
+    """
+    files = list(pr.get_files())
+    changed_files = [str(file.filename) for file in files]
+    issue_number = resolve_issue_number_for_pr(github, owner, repo, pr, changed_files)
+    if not issue_number:
+        return {
+            "issue_number": None,
+            "spec_context_source": "",
+            "selected_spec_pr": None,
+            "approved_spec_prs": [],
+            "unapproved_spec_prs": [],
+            "spec_entries": [],
+            "changed_files": changed_files,
+            "pr_files": files,
+        }
+    spec_context = resolve_spec_context_for_issue_via_api(
+        github, owner, repo, issue_number
+    )
+    spec_context["issue_number"] = issue_number
+    spec_context["changed_files"] = changed_files
+    spec_context["pr_files"] = files
+    return spec_context
 
 
 def _is_org_member(comment: Any) -> bool:

@@ -25,6 +25,7 @@ from oz_workflows.helpers import (
     POWERED_BY_SUFFIX,
     record_run_session_link,
     resolve_issue_number_for_pr,
+    resolve_spec_context_for_pr_via_api,
     WorkflowProgressComment,
 )
 from oz_workflows.oz_client import (
@@ -34,6 +35,7 @@ from oz_workflows.oz_client import (
 )
 from oz_workflows.repo_local import (
     format_repo_local_prompt_section,
+    repo_local_skill_path_for_dispatch,
     resolve_repo_local_skill_path,
 )
 from oz_workflows.triage import (
@@ -893,6 +895,38 @@ class ReviewContext(TypedDict):
     progress_comment_id: int
 
 
+def _format_spec_context_text(spec_context: Mapping[str, Any]) -> str:
+    """Render the spec-context dict from the API resolver as markdown.
+
+    Mirrors the format that ``gather_pr_comment_context`` and the
+    legacy bundled ``resolve_spec_context.py`` script produce so the
+    review prompt continues to receive a single text block. Returns
+    an empty string when no approved or repository spec context
+    applies; ``build_review_prompt_for_dispatch`` then renders the
+    "No approved or repository spec context" placeholder for the
+    cloud agent.
+    """
+    sections: list[str] = []
+    selected = spec_context.get("selected_spec_pr") if spec_context else None
+    source = str(spec_context.get("spec_context_source") or "") if spec_context else ""
+    if source == "approved-pr" and selected:
+        number = selected.get("number")
+        url = selected.get("url") or ""
+        if number is not None:
+            sections.append(
+                f"Linked approved spec PR: [#{int(number)}]({url})"
+            )
+    elif source == "directory":
+        sections.append("Repository spec context was found in `specs/`.")
+    for entry in spec_context.get("spec_entries") or [] if spec_context else []:
+        path = str(entry.get("path") or "").strip()
+        content = str(entry.get("content") or "").strip()
+        if not path or not content:
+            continue
+        sections.append(f"## {path}\n\n{content}")
+    return "\n\n".join(sections).strip()
+
+
 def _resolve_spec_context_text_for_pr(
     *,
     workspace_path: Path,
@@ -1034,7 +1068,15 @@ def gather_review_context(
         if spec_only
         else "Also apply the repository's local `security-review-pr` skill as a supplemental security pass and fold any security findings into the same combined `review.json`. Do not produce a separate security review output."
     )
-    companion_path = resolve_repo_local_skill_path(workspace_path, skill_name)
+    # Resolve the consuming repo's companion skill via the GitHub API
+    # so the prompt section still references the file when the
+    # webhook hands in ``Path('/tmp')`` for *workspace_path*. The
+    # cloud agent inherits the consuming repo as its working
+    # directory, so a repo-relative path resolves correctly inside
+    # the run.
+    companion_path: Path | str | None = repo_local_skill_path_for_dispatch(
+        github, skill_name
+    )
     repo_local_section = (
         format_repo_local_prompt_section(skill_name, companion_path)
         if companion_path is not None
@@ -1113,11 +1155,15 @@ def gather_review_context(
         issue_line=issue_line,
     )
     pr_diff_text = _format_pr_diff(pr_files)
-    spec_context_text = _resolve_spec_context_text_for_pr(
-        workspace_path=workspace_path,
-        owner=owner,
-        repo=repo,
-        pr_number=pr_number,
+    # Resolve the spec context entirely through the GitHub API. The
+    # legacy workspace-backed resolver shells out to the bundled
+    # ``resolve_spec_context.py`` script with ``cwd=workspace_path``,
+    # which on Vercel is ``/tmp`` (no consuming-repo checkout) and
+    # always returns empty. The API resolver finds the linked
+    # approved spec PR and falls back to ``specs/GH<N>/{product,tech}.md``
+    # on the default branch when no approved spec PR exists.
+    spec_context_text = _format_spec_context_text(
+        resolve_spec_context_for_pr_via_api(github, owner, repo, pr)
     )
     diff_line_map, diff_content_map = _build_diff_maps(pr_files)
     return ReviewContext(
