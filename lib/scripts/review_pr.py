@@ -71,6 +71,15 @@ _SPEC_CONTEXT_FILENAME = "spec_context.md"
 _NO_SPEC_CONTEXT_MESSAGE = (
     "No approved or repository spec context was found for this PR."
 )
+_MANAGEMENT_APP_LOGIN_ENV_NAMES = (
+    "OZ_MANAGEMENT_APP_LOGINS",
+    "OZ_GITHUB_APP_LOGIN",
+    "OZ_MGMT_GHA_APP_LOGIN",
+)
+_STALE_REQUEST_CHANGES_DISMISSAL_MESSAGE = (
+    "Oz is superseding its previous request-changes review after a fresh "
+    "review approved the pull request."
+)
 
 
 def _bundled_spec_context_script() -> Path:
@@ -290,8 +299,10 @@ def _resolve_non_member_review_action(
       only after the agent's blockers are resolved).
     - ``verdict == "APPROVE"`` → ``event = "COMMENT"`` plus a reviewer
       request that pings a randomly-sampled stakeholder from the
-      ``recommended_reviewers`` pool. The bot's own review on this PR
-      stays a comment; the requested human is the one who approves.
+      ``recommended_reviewers`` pool. The apply step may promote this
+      to a real GitHub ``APPROVE`` only when it first dismisses a
+      stale management-app ``REQUEST_CHANGES`` review that the fresh
+      approval supersedes.
 
     Hardening for the APPROVE flow: when the agent's
     ``recommended_reviewers`` list normalizes to an empty pool (no
@@ -357,12 +368,143 @@ def _resolve_non_member_review_action(
                 )
     else:
         reviewers = []
-    # The bot only ever takes a ``REQUEST_CHANGES`` action against a
-    # PR. Positive verdicts are downgraded to ``COMMENT`` so a human
-    # has to be the one who actually approves; the reviewer request
-    # below is what hands the PR off to that human.
+    # Positive verdicts are initially downgraded to ``COMMENT`` so a
+    # human normally has to be the one who actually approves; the
+    # apply step may promote this to a real ``APPROVE`` after
+    # dismissing a stale management-app ``REQUEST_CHANGES`` review.
     event = "COMMENT" if verdict_raw == "APPROVE" else verdict_raw
     return event, reviewers
+
+
+def _review_field(review: Any, name: str, default: Any = None) -> Any:
+    if isinstance(review, dict):
+        return review.get(name, default)
+    return getattr(review, name, default)
+
+
+def _review_author_login(review: Any) -> str:
+    user = _review_field(review, "user")
+    if isinstance(user, dict):
+        return str(user.get("login") or "")
+    return str(getattr(user, "login", "") or "")
+
+
+def _configured_management_app_logins() -> set[str]:
+    """Return management-app bot logins configured via environment variables."""
+    logins: set[str] = set()
+    for env_name in _MANAGEMENT_APP_LOGIN_ENV_NAMES:
+        raw = os.environ.get(env_name, "")
+        for login in raw.split(","):
+            normalized = login.strip().lstrip("@").lower()
+            if normalized:
+                logins.add(normalized)
+    return logins
+
+
+def _is_management_app_review(
+    review: Any,
+    *,
+    management_app_logins: set[str] | None = None,
+) -> bool:
+    """Return whether *review* appears to have been posted by the management app.
+
+    Production can pin the exact bot identity with one of the
+    ``_MANAGEMENT_APP_LOGIN_ENV_NAMES`` environment variables. When no
+    login is configured, fall back to the workflow's own review
+    signature: an automation-authored review body containing the
+    retrigger hint or powered-by footer that this workflow adds to
+    every posted review. That fallback keeps the helper useful in
+    existing deployments without dismissing unrelated human reviews.
+    """
+    configured_logins = (
+        {
+            login.strip().lstrip("@").lower()
+            for login in management_app_logins
+            if login.strip()
+        }
+        if management_app_logins is not None
+        else _configured_management_app_logins()
+    )
+    login = _review_author_login(review).strip().lower()
+    if configured_logins:
+        return login in configured_logins
+    user = _review_field(review, "user")
+    body = str(_review_field(review, "body", "") or "")
+    return is_automation_user(user) and (
+        RETRIGGER_HINT in body or POWERED_BY_SUFFIX in body
+    )
+
+
+def _dismiss_management_app_request_changes_reviews(
+    pr: PullRequest,
+    *,
+    management_app_logins: set[str] | None = None,
+) -> int:
+    """Dismiss stale management-app ``REQUEST_CHANGES`` reviews on *pr*.
+
+    When the review agent previously requested changes via the
+    management app identity, that review can keep blocking the PR even
+    after a later run decides the PR is ready. Before posting the
+    later approval, dismiss every outstanding request-changes review
+    that was authored by the management app identity.
+
+    Returns the number of reviews successfully dismissed. Listing and
+    dismissal failures are logged and treated as best-effort so the
+    fresh review result can still be applied.
+    """
+    try:
+        reviews = list(pr.get_reviews())
+    except GithubException:
+        logger.exception(
+            "Failed to list existing PR reviews before checking for stale "
+            "management-app request-changes reviews"
+        )
+        return 0
+    dismissed = 0
+    for existing_review in reviews:
+        state = str(_review_field(existing_review, "state", "") or "").strip().upper()
+        if state != "REQUEST_CHANGES":
+            continue
+        if not _is_management_app_review(
+            existing_review,
+            management_app_logins=management_app_logins,
+        ):
+            continue
+        try:
+            existing_review.dismiss(_STALE_REQUEST_CHANGES_DISMISSAL_MESSAGE)
+        except GithubException:
+            logger.exception(
+                "Failed to dismiss stale management-app request-changes review %s",
+                _review_field(existing_review, "id", "unknown"),
+            )
+            continue
+        dismissed += 1
+    return dismissed
+
+
+def _promote_approval_after_stale_request_changes_dismissal(
+    pr: PullRequest,
+    *,
+    review: Mapping[str, Any],
+    event: str,
+    management_app_logins: set[str] | None = None,
+) -> tuple[str, int]:
+    """Promote an APPROVE verdict to a real approval after dismissing stale reviews."""
+    verdict = str(review.get("verdict") or "").strip().upper()
+    if event != "COMMENT" or verdict != "APPROVE":
+        return event, 0
+    dismissed = _dismiss_management_app_request_changes_reviews(
+        pr,
+        management_app_logins=management_app_logins,
+    )
+    if not dismissed:
+        return event, 0
+    logger.info(
+        "review-pr: dismissed %s stale management-app request-changes review(s) "
+        "and promoted APPROVE verdict to a GitHub APPROVE review",
+        dismissed,
+    )
+    return "APPROVE", dismissed
 
 
 def _commentable_lines_for_patch(patch: str | None) -> dict[str, set[int]]:
@@ -625,6 +767,8 @@ def _format_review_completion_message(
     """Build the progress-comment completion message for a posted review."""
     if event == "REQUEST_CHANGES":
         base = "I requested changes on this pull request and posted feedback."
+    elif event == "APPROVE":
+        base = "I approved this pull request and posted feedback."
     elif recommended_reviewers:
         # ``COMMENT`` review with a non-empty recommended-reviewer list
         # means the agent's verdict was ``APPROVE`` and the request was
@@ -1194,11 +1338,15 @@ def gather_review_context(
               commit to a verdict rather than just leaving comments.
             - Choose exactly one ``verdict`` for the review:
               - ``APPROVE`` when the PR looks ready for a human to
-                take over. The workflow always downgrades this to a
-                ``COMMENT`` review on the PR (never a real GitHub
-                approval) and pings a randomly-sampled human reviewer
-                from ``recommended_reviewers`` so a maintainer is the
-                one who actually approves.
+                take over. The workflow usually downgrades this to a
+                ``COMMENT`` review on the PR and pings a
+                randomly-sampled human reviewer from
+                ``recommended_reviewers`` so a maintainer is normally
+                the one who actually approves. Exception: when this
+                fresh approval supersedes an earlier
+                management-app-authored ``REQUEST_CHANGES`` review,
+                the workflow dismisses that stale review and posts a
+                real GitHub approval from the management app identity.
               - ``REQUEST_CHANGES`` when the PR clearly needs rework
                 before a human should spend time reviewing it. The
                 workflow posts this as a real ``REQUEST_CHANGES``
@@ -1430,6 +1578,14 @@ def apply_review_result(
     else:
         event = "COMMENT"
         recommended_reviewers = []
+    if is_non_member:
+        event, _dismissed_reviews = (
+            _promote_approval_after_stale_request_changes_dismissal(
+                pr,
+                review=result,
+                event=event,
+            )
+        )
     # The empty-feedback short-circuit still applies, but only when the
     # agent's verdict produces no GitHub-visible side effects: no review
     # body, no inline comments, plain ``COMMENT`` event, and no
@@ -1448,7 +1604,7 @@ def apply_review_result(
             )
         )
         return
-    if summary or comments or event == "REQUEST_CHANGES":
+    if summary or comments or event in {"APPROVE", "REQUEST_CHANGES"}:
         review_body = (
             f"{summary or 'Automated review'}\n\n{RETRIGGER_HINT}\n\n{POWERED_BY_SUFFIX}"
         )
@@ -1579,11 +1735,15 @@ def main() -> None:
                   commit to a verdict rather than just leaving comments.
                 - Choose exactly one ``verdict`` for the review:
                   - ``APPROVE`` when the PR looks ready for a human to
-                    take over. The workflow always downgrades this to a
-                    ``COMMENT`` review on the PR (never a real GitHub
-                    approval) and pings a randomly-sampled human reviewer
-                    from ``recommended_reviewers`` so a maintainer is the
-                    one who actually approves.
+                    take over. The workflow usually downgrades this to a
+                    ``COMMENT`` review on the PR and pings a
+                    randomly-sampled human reviewer from
+                    ``recommended_reviewers`` so a maintainer is normally
+                    the one who actually approves. Exception: when this
+                    fresh approval supersedes an earlier
+                    management-app-authored ``REQUEST_CHANGES`` review,
+                    the workflow dismisses that stale review and posts a
+                    real GitHub approval from the management app identity.
                   - ``REQUEST_CHANGES`` when the PR clearly needs rework
                     before a human should spend time reviewing it. The
                     workflow posts this as a real ``REQUEST_CHANGES``
@@ -1694,6 +1854,14 @@ def main() -> None:
             else:
                 event = "COMMENT"
                 recommended_reviewers = []
+            if is_non_member:
+                event, _dismissed_reviews = (
+                    _promote_approval_after_stale_request_changes_dismissal(
+                        pr,
+                        review=review,
+                        event=event,
+                    )
+                )
             if (
                 not summary
                 and not comments
@@ -1713,7 +1881,7 @@ def main() -> None:
                     )
                 )
                 return
-            if summary or comments or event == "REQUEST_CHANGES":
+            if summary or comments or event in {"APPROVE", "REQUEST_CHANGES"}:
                 review_body = (
                     f"{summary or 'Automated review'}\n\n{RETRIGGER_HINT}\n\n{POWERED_BY_SUFFIX}"
                 )

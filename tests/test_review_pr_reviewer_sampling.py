@@ -13,16 +13,42 @@ from __future__ import annotations
 
 import random
 import unittest
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import MagicMock
 
 from . import conftest  # noqa: F401
 
 from scripts.review_pr import (  # type: ignore[import-not-found]
+    POWERED_BY_SUFFIX,
     _REVIEWER_SAMPLE_SIZE,
+    RETRIGGER_HINT,
+    _dismiss_management_app_request_changes_reviews,
     _fallback_reviewer_pool,
     _format_review_completion_message,
+    _is_management_app_review,
     _normalize_reviewer_logins,
+    _promote_approval_after_stale_request_changes_dismissal,
     _resolve_non_member_review_action,
 )
+
+
+def _existing_review(
+    *,
+    state: str = "REQUEST_CHANGES",
+    login: str = "oz-management[bot]",
+    user_type: str = "Bot",
+    body: str | None = None,
+    review_id: int = 123,
+) -> Any:
+    review = SimpleNamespace(
+        id=review_id,
+        state=state,
+        user=SimpleNamespace(login=login, type=user_type),
+        body=body if body is not None else f"Review body\n\n{RETRIGGER_HINT}",
+    )
+    review.dismiss = MagicMock()
+    return review
 
 
 class NormalizeReviewerLoginsTest(unittest.TestCase):
@@ -320,6 +346,139 @@ class ResolveNonMemberReviewActionTest(unittest.TestCase):
             )
 
 
+class ManagementAppReviewDismissalTest(unittest.TestCase):
+    def test_identifies_configured_management_app_login(self) -> None:
+        review = _existing_review(
+            login="oz-management[bot]",
+            user_type="Bot",
+            body="plain review body",
+        )
+        self.assertTrue(
+            _is_management_app_review(
+                review,
+                management_app_logins={"oz-management[bot]"},
+            )
+        )
+
+    def test_identifies_signed_bot_review_without_configured_login(self) -> None:
+        review_with_retrigger_hint = _existing_review(body=RETRIGGER_HINT)
+        review_with_powered_by = _existing_review(body=POWERED_BY_SUFFIX)
+        self.assertTrue(
+            _is_management_app_review(
+                review_with_retrigger_hint,
+                management_app_logins=set(),
+            )
+        )
+        self.assertTrue(
+            _is_management_app_review(
+                review_with_powered_by,
+                management_app_logins=set(),
+            )
+        )
+
+    def test_does_not_identify_human_review_without_configured_login(self) -> None:
+        review = _existing_review(
+            login="alice",
+            user_type="User",
+            body=RETRIGGER_HINT,
+        )
+        self.assertFalse(_is_management_app_review(review, management_app_logins=set()))
+
+    def test_dismisses_only_matching_request_changes_reviews(self) -> None:
+        stale_management_review = _existing_review(
+            state="REQUEST_CHANGES",
+            login="oz-management[bot]",
+            body="plain management review body",
+            review_id=1,
+        )
+        stale_human_review = _existing_review(
+            state="REQUEST_CHANGES",
+            login="alice",
+            user_type="User",
+            body="human review body",
+            review_id=2,
+        )
+        already_approved_management_review = _existing_review(
+            state="APPROVED",
+            login="oz-management[bot]",
+            body="plain management review body",
+            review_id=3,
+        )
+        pr = SimpleNamespace(
+            get_reviews=MagicMock(
+                return_value=[
+                    stale_management_review,
+                    stale_human_review,
+                    already_approved_management_review,
+                ]
+            )
+        )
+        dismissed = _dismiss_management_app_request_changes_reviews(
+            pr,  # type: ignore[arg-type]
+            management_app_logins={"oz-management[bot]"},
+        )
+        self.assertEqual(dismissed, 1)
+        stale_management_review.dismiss.assert_called_once()
+        stale_human_review.dismiss.assert_not_called()
+        already_approved_management_review.dismiss.assert_not_called()
+
+    def test_promotes_approve_verdict_after_dismissing_stale_review(self) -> None:
+        stale_management_review = _existing_review(
+            state="REQUEST_CHANGES",
+            login="oz-management[bot]",
+            body="plain management review body",
+        )
+        pr = SimpleNamespace(
+            get_reviews=MagicMock(return_value=[stale_management_review])
+        )
+        event, dismissed = _promote_approval_after_stale_request_changes_dismissal(
+            pr,  # type: ignore[arg-type]
+            review={"verdict": "APPROVE"},
+            event="COMMENT",
+            management_app_logins={"oz-management[bot]"},
+        )
+        self.assertEqual(event, "APPROVE")
+        self.assertEqual(dismissed, 1)
+        stale_management_review.dismiss.assert_called_once()
+
+    def test_does_not_promote_without_stale_matching_review(self) -> None:
+        human_review = _existing_review(
+            state="REQUEST_CHANGES",
+            login="alice",
+            user_type="User",
+            body="human review body",
+        )
+        pr = SimpleNamespace(get_reviews=MagicMock(return_value=[human_review]))
+        event, dismissed = _promote_approval_after_stale_request_changes_dismissal(
+            pr,  # type: ignore[arg-type]
+            review={"verdict": "APPROVE"},
+            event="COMMENT",
+            management_app_logins={"oz-management[bot]"},
+        )
+        self.assertEqual(event, "COMMENT")
+        self.assertEqual(dismissed, 0)
+        human_review.dismiss.assert_not_called()
+
+    def test_does_not_promote_non_approve_verdict(self) -> None:
+        stale_management_review = _existing_review(
+            state="REQUEST_CHANGES",
+            login="oz-management[bot]",
+            body="plain management review body",
+        )
+        pr = SimpleNamespace(
+            get_reviews=MagicMock(return_value=[stale_management_review])
+        )
+        event, dismissed = _promote_approval_after_stale_request_changes_dismissal(
+            pr,  # type: ignore[arg-type]
+            review={"verdict": "REQUEST_CHANGES"},
+            event="REQUEST_CHANGES",
+            management_app_logins={"oz-management[bot]"},
+        )
+        self.assertEqual(event, "REQUEST_CHANGES")
+        self.assertEqual(dismissed, 0)
+        stale_management_review.dismiss.assert_not_called()
+
+
 class FormatReviewCompletionMessageTest(unittest.TestCase):
     def test_request_changes_message(self) -> None:
         message = _format_review_completion_message("REQUEST_CHANGES", [])
@@ -343,6 +502,11 @@ class FormatReviewCompletionMessageTest(unittest.TestCase):
         self.assertIn("completed the review", message)
         # Must NOT claim that the bot itself approved the PR.
         self.assertNotIn("approved", message.lower())
+
+    def test_approve_message(self) -> None:
+        message = _format_review_completion_message("APPROVE", ["alice"])
+        self.assertIn("I approved this pull request", message)
+        self.assertNotIn("maintainer can approve", message)
 
 
 if __name__ == "__main__":
