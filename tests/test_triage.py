@@ -888,7 +888,6 @@ class BuildTriagePromptTest(unittest.TestCase):
             "comments_text": "- none",
             "triggering_comment_text": "- none",
             "triage_config": {"labels": {}},
-            "stakeholders_text": "No stakeholders configured.",
             "template_context": {},
             "recent_issues_text": "No recent issues.",
             "host_workspace": Path("/workspace/oz-for-oss"),

@@ -3,7 +3,6 @@ from contextlib import closing
 from itertools import islice
 from pathlib import Path
 
-import base64
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -43,9 +42,6 @@ from oz_workflows.triage import (
     dedupe_strings,
     discover_issue_templates,
     extract_original_issue_report,
-    format_stakeholders_for_prompt,
-    load_stakeholders,
-    load_stakeholders_from_repo,
     load_triage_config,
     select_recent_untriaged_issues,
 )
@@ -120,8 +116,6 @@ def main() -> None:
         return
     triage_config = load_triage_config(workspace() / ".github" / "issue-triage" / "config.json")
     configured_labels = triage_config["labels"]
-    stakeholder_entries = load_stakeholders(workspace() / ".github" / "STAKEHOLDERS")
-    stakeholders_text = format_stakeholders_for_prompt(stakeholder_entries)
     lookback_minutes = int(optional_env("LOOKBACK_MINUTES") or "60")
     issue_number_override = resolve_issue_number_override(event_name, event)
     triggering_comment_id = int((event.get("comment") or {}).get("id") or 0) or None
@@ -160,12 +154,11 @@ def main() -> None:
                     triage_config=triage_config,
                     configured_labels=configured_labels,
                     repo_labels=repo_labels,
-                    triggering_comment_id=triggering_comment_id,
-                    triggering_comment_text=triggering_comment_text,
-                    stakeholders_text=stakeholders_text,
-                    template_context=template_context,
-                    recent_open_issues=recent_open_issues,
-                )
+                triggering_comment_id=triggering_comment_id,
+                triggering_comment_text=triggering_comment_text,
+                template_context=template_context,
+                recent_open_issues=recent_open_issues,
+            )
             except Exception as exc:
                 warning(f"Issue triage failed for #{issue_number}: {exc}")
                 append_summary(f"- Issue #{issue_number}: triage failed ({exc}).\n")
@@ -210,7 +203,6 @@ def process_issue(
     repo_labels: dict[str, Any],
     triggering_comment_id: int | None,
     triggering_comment_text: str,
-    stakeholders_text: str,
     template_context: dict[str, Any],
     recent_open_issues: list[Any] | None,
 ) -> None:
@@ -250,7 +242,6 @@ def process_issue(
         comments_text=comments_text,
         triggering_comment_text=triggering_comment_text,
         triage_config=triage_config,
-        stakeholders_text=stakeholders_text,
         template_context=template_context,
         recent_issues_text=recent_issues_text,
         host_workspace=workspace(),
@@ -392,7 +383,6 @@ def build_triage_prompt(
     comments_text: str,
     triggering_comment_text: str,
     triage_config: dict[str, Any],
-    stakeholders_text: str,
     template_context: dict[str, Any],
     recent_issues_text: str,
     host_workspace: Path,
@@ -447,9 +437,6 @@ def build_triage_prompt(
         Repository Triage Configuration JSON:
         {json.dumps(triage_config, indent=2)}
 
-        Repository Stakeholders:
-        {stakeholders_text}
-
         Repository Issue Template Context JSON:
         {json.dumps(template_context, indent=2)}
 
@@ -470,7 +457,6 @@ def build_triage_prompt(
         - Provide an initial label set for this issue.
         - Estimate how reproducible the issue seems from the report.
         - Infer the most likely root cause and relevant files from the current codebase when possible.
-        - Suggest subject-matter experts, preferring the stakeholder config and otherwise using recent git contributors to related files.
         - Identify the specific ambiguities that still require reporter input, especially when the issue is environment-sensitive, account/backend-sensitive, or framed with an unverified root-cause claim.
         - When an explicit triggering comment is present, treat it as additional triage guidance for this triage pass.
 
@@ -514,7 +500,6 @@ def build_triage_prompt(
             "labels": ["triaged", "bug", "area:workflow", "repro:medium"],
             "reproducibility": {{"level": "high | medium | low | unknown", "reasoning": "string"}},
             "root_cause": {{"summary": "string", "confidence": "high | medium | low", "relevant_files": ["path/to/file"]}},
-            "sme_candidates": [{{"login": "github-login", "reason": "string"}}],
             "selected_template_path": "path or empty string",
             "issue_body": "markdown triage summary to post as a standalone issue comment",
             "statements": "markdown string for reporter-facing findings, or empty string",
@@ -1042,7 +1027,6 @@ class TriageContext(TypedDict, total=False):
     original_report: str
     recent_issues_text: str
     triage_config: dict[str, Any]
-    stakeholders_text: str
     template_context: dict[str, Any]
     configured_labels: dict[str, Any]
     repo_label_names: list[str]
@@ -1051,7 +1035,6 @@ class TriageContext(TypedDict, total=False):
 
 
 _TRIAGE_CONFIG_PATH = ".github/issue-triage/config.json"
-_STAKEHOLDERS_PATH = ".github/STAKEHOLDERS"
 _ISSUE_TEMPLATE_DIR = ".github/ISSUE_TEMPLATE"
 
 
@@ -1089,17 +1072,6 @@ def _load_triage_config_from_repo(repo_handle: Any) -> dict[str, Any]:
     if not isinstance(parsed.get("labels"), dict):
         parsed["labels"] = {}
     return parsed
-
-
-def _load_stakeholders_from_repo(repo_handle: Any) -> list[dict[str, Any]]:
-    """Backward-compatible alias for :func:`oz_workflows.triage.load_stakeholders_from_repo`.
-
-    Kept as a private name so existing test fixtures that patch
-    ``scripts.triage_new_issues._load_stakeholders_from_repo``
-    continue to work after the implementation moved into
-    ``oz_workflows.triage``.
-    """
-    return load_stakeholders_from_repo(repo_handle)
 
 
 def _discover_issue_templates_from_repo(repo_handle: Any) -> dict[str, Any]:
@@ -1185,8 +1157,8 @@ def gather_triage_context(
     *github* is a PyGithub :class:`Repository` handle minted from the
     payload's installation id. The function fetches the issue, the
     issue comments, recent open issues for dedupe, the consuming
-    repo's triage config / stakeholders / issue templates, and the
-    repo's full label set. Everything is serialized into JSON-friendly
+    repo's triage config and issue templates, and the repo's full
+    label set. Everything is serialized into JSON-friendly
     primitives so the cron poller can apply the result without
     re-fetching the issue.
     """
@@ -1209,8 +1181,6 @@ def gather_triage_context(
         recent_open_issues, issue_number
     )
     triage_config = _load_triage_config_from_repo(github)
-    stakeholder_entries = _load_stakeholders_from_repo(github)
-    stakeholders_text = format_stakeholders_for_prompt(stakeholder_entries)
     template_context = _discover_issue_templates_from_repo(github)
     repo_label_names = sorted(
         {
@@ -1236,7 +1206,6 @@ def gather_triage_context(
         original_report=original_report,
         recent_issues_text=recent_issues_text,
         triage_config=dict(triage_config),
-        stakeholders_text=stakeholders_text,
         template_context=dict(template_context),
         configured_labels=dict(triage_config.get("labels") or {}),
         repo_label_names=list(repo_label_names),
@@ -1288,7 +1257,6 @@ def build_triage_prompt_for_dispatch(
         comments_text=str(context.get("comments_text") or ""),
         triggering_comment_text=str(context.get("triggering_comment_text") or ""),
         triage_config=dict(context.get("triage_config") or {}),
-        stakeholders_text=str(context.get("stakeholders_text") or ""),
         template_context=dict(context.get("template_context") or {}),
         recent_issues_text=str(context.get("recent_issues_text") or ""),
         # The cloud agent inherits the consuming repo's checkout. When

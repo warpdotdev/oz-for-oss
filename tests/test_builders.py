@@ -417,7 +417,6 @@ class BuildTriageRequestTest(_BuilderTestBase):
                 "original_report": "",
                 "recent_issues_text": "No recent issues.",
                 "triage_config": {"labels": {}},
-                "stakeholders_text": "No stakeholders configured.",
                 "template_context": {},
                 "configured_labels": {},
                 "repo_label_names": [],
