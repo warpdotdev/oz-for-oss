@@ -1,8 +1,11 @@
 .venv/
 __pycache__/
 *.pyc
+*.pyo
 .pytest_cache/
 .mypy_cache/
+# Vercel CLI output
+.vercel/
 triage_result.json
 review.json
 pr_diff.txt

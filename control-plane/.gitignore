@@ -1,9 +1,0 @@
-# Local virtualenvs and Python build artifacts
-.venv/
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-
-# Vercel CLI output
-.vercel/

@@ -1,11 +1,11 @@
 name: Run Tests
 on:
-  workflow_call:
-    inputs:
-      pr_number:
-        description: Pull request number to test
-        required: true
-        type: string
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch: {}
+concurrency:
+  group: run-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   run_tests:
     name: Run tests
@@ -19,7 +19,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           has_code=true
-          if files=$(gh api --paginate "repos/${{ github.repository }}/pulls/${{ inputs.pr_number }}/files" --jq '.[].filename') && [ -n "$files" ]; then
+          pr_number="${{ github.event.pull_request.number }}"
+          if [ -n "$pr_number" ] && files=$(gh api --paginate "repos/${{ github.repository }}/pulls/${pr_number}/files" --jq '.[].filename') && [ -n "$files" ]; then
             has_code=false
             while IFS= read -r file; do
               if [[ ! "$file" =~ \.md$ ]]; then
@@ -32,8 +33,6 @@ jobs:
       - name: Checkout PR
         if: steps.filter.outputs.has_code_changes == 'true'
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          ref: refs/pull/${{ inputs.pr_number }}/merge
       - name: Lint GitHub Actions workflows
         if: steps.filter.outputs.has_code_changes == 'true'
         uses: docker://rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
@@ -42,8 +41,11 @@ jobs:
       - name: Set up Oz Python environment
         if: steps.filter.outputs.has_code_changes == 'true'
         uses: ./.github/actions/setup-oz-python
-      - name: Run tests
+      - name: Run webhook control-plane tests
+        if: steps.filter.outputs.has_code_changes == 'true'
+        run: python -m pytest tests
+      - name: Run shared helper unit tests
         if: steps.filter.outputs.has_code_changes == 'true'
         env:
-          PYTHONPATH: .github/scripts
+          PYTHONPATH: lib:.github/scripts
         run: python -m unittest discover -s .github/scripts/tests

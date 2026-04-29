@@ -1,15 +1,38 @@
 """Map an incoming GitHub webhook event to a target workflow handler.
 
-The control-plane webhook handler invokes :func:`route_event` with the
-GitHub event name and the parsed JSON payload. The router returns a
-:class:`RouteDecision` describing which Oz workflow (if any) should run
-and why. A return value of ``None`` for ``workflow`` means the event is
-deliberately ignored — for example, automation-authored comments,
-unsupported event types, or PRs that close without changes.
+The webhook receiver in :mod:`api.webhook` invokes :func:`route_event`
+with the GitHub event name and the parsed JSON payload. The router
+returns a :class:`RouteDecision` describing which Oz workflow (if any)
+should run and why. A return value of ``None`` for ``workflow`` means
+the event is deliberately ignored — for example, automation-authored
+comments, unsupported event types, or PRs that close without changes.
 
-The routing table mirrors the conditions baked into
-``.github/workflows/*.yml`` today so flipping the GitHub App webhook
-from GitHub Actions to the Vercel control plane preserves behavior.
+The webhook is the sole delivery surface for *PR-triggered* bot
+behavior. Issue-triggered and plan-approval events still flow through
+the legacy GitHub Actions wrappers under ``.github/workflows/`` because
+those workflows perform repository-mutating work (cloning repos,
+pushing branches, opening PRs) that is easier to express as a job in
+the GitHub Actions runtime than as a fire-and-forget cloud agent
+dispatch. The router intentionally drops ``issues`` events and plain
+``issue_comment`` events (i.e. comments that are not on a pull
+request) so the webhook does not double-fire alongside the GitHub
+Actions workflow.
+
+Webhook coverage today:
+
+- ``pull_request`` events (``opened``, ``ready_for_review``,
+  ``review_requested``, ``synchronize``/``edited``, ``labeled``) route
+  to ``review-pull-request`` or ``enforce-pr-issue-state``.
+- ``pull_request_review_comment`` events route to
+  ``review-pull-request`` (``/oz-review``), ``verify-pr-comment``
+  (``/oz-verify``), or ``respond-to-pr-comment`` (``@oz-agent``).
+- ``issue_comment`` events on a pull request route to the same set as
+  ``pull_request_review_comment`` (GitHub delivers PR conversation
+  comments under the ``issue_comment`` event).
+
+Issue-only events (``issues``, ``issue_comment`` on plain issues) are
+deliberately not routed here — the GitHub Actions workflows under
+``.github/workflows/`` cover them directly.
 """
 
 from __future__ import annotations
@@ -20,20 +43,15 @@ from typing import Any
 # Workflow identifiers the dispatcher knows how to handle. These strings
 # are used as state-store keys and as ``RouteDecision.workflow`` values
 # so adding a new workflow only requires touching the dispatcher and
-# this module.
-WORKFLOW_TRIAGE = "triage-new-issues"
-WORKFLOW_RESPOND_TRIAGED = "respond-to-triaged-issue-comment"
+# this module. Issue-triggered and plan-approval workflows live in
+# ``.github/workflows/`` and are intentionally not exposed here so the
+# webhook does not race with the GitHub Actions runtime.
 WORKFLOW_REVIEW_PR = "review-pull-request"
-WORKFLOW_CREATE_SPEC = "create-spec-from-issue"
-WORKFLOW_CREATE_IMPLEMENTATION = "create-implementation-from-issue"
 WORKFLOW_RESPOND_TO_PR_COMMENT = "respond-to-pr-comment"
 WORKFLOW_VERIFY_PR_COMMENT = "verify-pr-comment"
 WORKFLOW_ENFORCE_PR_ISSUE_STATE = "enforce-pr-issue-state"
 
 OZ_AGENT_LOGIN = "oz-agent"
-READY_TO_SPEC_LABEL = "ready-to-spec"
-READY_TO_IMPLEMENT_LABEL = "ready-to-implement"
-TRIAGED_LABEL = "triaged"
 OZ_REVIEW_LABEL = "oz-review"
 
 OZ_AGENT_MENTION = "@oz-agent"
@@ -98,42 +116,6 @@ def _is_bot(actor: Any) -> bool:
     return bool(login) and login.endswith("[bot]")
 
 
-def _route_issues(payload: dict[str, Any]) -> RouteDecision:
-    action = str(payload.get("action") or "").strip()
-    issue = payload.get("issue") or {}
-    if not isinstance(issue, dict):
-        return RouteDecision(None, "missing issue payload")
-    if issue.get("pull_request"):
-        return RouteDecision(None, "issue payload describes a pull request")
-    labels = _label_names(issue.get("labels"))
-    assignees = [_login(a) for a in issue.get("assignees") or []]
-    if action in {"opened", "reopened", "edited"}:
-        return RouteDecision(WORKFLOW_TRIAGE, f"issue {action}")
-    if action == "labeled":
-        label_name = ((payload.get("label") or {}).get("name") or "").strip()
-        if label_name == READY_TO_SPEC_LABEL and OZ_AGENT_LOGIN in assignees:
-            return RouteDecision(WORKFLOW_CREATE_SPEC, "ready-to-spec on assigned issue")
-        if label_name == READY_TO_IMPLEMENT_LABEL and OZ_AGENT_LOGIN in assignees:
-            return RouteDecision(
-                WORKFLOW_CREATE_IMPLEMENTATION,
-                "ready-to-implement on assigned issue",
-            )
-        return RouteDecision(WORKFLOW_TRIAGE, f"label {label_name!r} added")
-    if action == "assigned":
-        assignee_login = ((payload.get("assignee") or {}).get("login") or "").strip()
-        if assignee_login != OZ_AGENT_LOGIN:
-            return RouteDecision(None, "issue assigned to a non-Oz user")
-        if READY_TO_SPEC_LABEL in labels:
-            return RouteDecision(WORKFLOW_CREATE_SPEC, "oz-agent assigned with ready-to-spec")
-        if READY_TO_IMPLEMENT_LABEL in labels:
-            return RouteDecision(
-                WORKFLOW_CREATE_IMPLEMENTATION,
-                "oz-agent assigned with ready-to-implement",
-            )
-        return RouteDecision(None, "oz-agent assigned without ready label")
-    return RouteDecision(None, f"issues action {action!r} not handled")
-
-
 def _route_issue_comment(payload: dict[str, Any]) -> RouteDecision:
     action = str(payload.get("action") or "").strip()
     if action not in {"created", "edited"}:
@@ -147,30 +129,18 @@ def _route_issue_comment(payload: dict[str, Any]) -> RouteDecision:
     issue = payload.get("issue") or {}
     if not isinstance(issue, dict):
         return RouteDecision(None, "missing issue payload")
-    is_pr = bool(issue.get("pull_request"))
-    labels = _label_names(issue.get("labels"))
-    if is_pr:
-        if OZ_VERIFY_COMMAND in body:
-            return RouteDecision(WORKFLOW_VERIFY_PR_COMMENT, "/oz-verify on PR comment")
-        if OZ_REVIEW_COMMAND in body:
-            return RouteDecision(WORKFLOW_REVIEW_PR, "/oz-review on PR comment")
-        if OZ_AGENT_MENTION in body:
-            return RouteDecision(WORKFLOW_RESPOND_TO_PR_COMMENT, "@oz-agent mention on PR")
-        return RouteDecision(None, "PR comment without Oz command or mention")
-    # Plain issue comments.
-    if OZ_AGENT_MENTION in body and READY_TO_SPEC_LABEL in labels:
-        return RouteDecision(WORKFLOW_CREATE_SPEC, "@oz-agent mention on ready-to-spec issue")
-    if (
-        OZ_AGENT_MENTION in body
-        and TRIAGED_LABEL in labels
-        and READY_TO_SPEC_LABEL not in labels
-        and READY_TO_IMPLEMENT_LABEL not in labels
-    ):
-        return RouteDecision(
-            WORKFLOW_RESPOND_TRIAGED,
-            "@oz-agent mention on triaged issue without ready labels",
-        )
-    return RouteDecision(WORKFLOW_TRIAGE, "issue comment retriage")
+    if not issue.get("pull_request"):
+        # Plain issue comments stay on the GitHub Actions delivery path
+        # (``triage-new-issues.yml``,
+        # ``respond-to-triaged-issue-comment.yml``, etc.).
+        return RouteDecision(None, "issue_comment on a plain issue handled by GitHub Actions")
+    if OZ_VERIFY_COMMAND in body:
+        return RouteDecision(WORKFLOW_VERIFY_PR_COMMENT, "/oz-verify on PR comment")
+    if OZ_REVIEW_COMMAND in body:
+        return RouteDecision(WORKFLOW_REVIEW_PR, "/oz-review on PR comment")
+    if OZ_AGENT_MENTION in body:
+        return RouteDecision(WORKFLOW_RESPOND_TO_PR_COMMENT, "@oz-agent mention on PR")
+    return RouteDecision(None, "PR comment without Oz command or mention")
 
 
 def _route_pull_request(payload: dict[str, Any]) -> RouteDecision:
@@ -222,7 +192,6 @@ def _route_pull_request_review_comment(payload: dict[str, Any]) -> RouteDecision
 
 
 _EVENT_HANDLERS = {
-    "issues": _route_issues,
     "issue_comment": _route_issue_comment,
     "pull_request": _route_pull_request,
     "pull_request_review_comment": _route_pull_request_review_comment,
@@ -250,17 +219,10 @@ __all__ = [
     "OZ_REVIEW_COMMAND",
     "OZ_VERIFY_COMMAND",
     "OZ_REVIEW_LABEL",
-    "READY_TO_IMPLEMENT_LABEL",
-    "READY_TO_SPEC_LABEL",
     "RouteDecision",
-    "TRIAGED_LABEL",
-    "WORKFLOW_CREATE_IMPLEMENTATION",
-    "WORKFLOW_CREATE_SPEC",
     "WORKFLOW_ENFORCE_PR_ISSUE_STATE",
     "WORKFLOW_RESPOND_TO_PR_COMMENT",
-    "WORKFLOW_RESPOND_TRIAGED",
     "WORKFLOW_REVIEW_PR",
-    "WORKFLOW_TRIAGE",
     "WORKFLOW_VERIFY_PR_COMMENT",
     "route_event",
 ]

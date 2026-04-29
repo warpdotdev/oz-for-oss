@@ -8,7 +8,7 @@ inputs:
   requirements-path:
     description: Path to the requirements.txt file to install.
     required: false
-    default: .github/scripts/requirements.txt
+    default: requirements.txt
   python-version:
     description: Python version for the uv-managed virtual environment.
     required: false

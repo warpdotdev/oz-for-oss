@@ -46,29 +46,48 @@ Contributors can file issues, comment on issues and PRs, and open PRs directly. 
 
 Marking an issue as ready is not meant to lock it. It just means the repo is open for that next chunk of work. Someone can take a swing at it with Oz, another coding agent, or by hand. If multiple people explore the same issue, that is still normal open source behavior and we will select the best implementation through normal review.
 
-## Local Vercel dev (control plane)
+## Local development
 
-The webhook receiver and cron poller live in [`control-plane/`](control-plane/). To iterate on them locally:
+The webhook control plane (`api/`, `lib/`, `tests/`, `vercel.json`) is the delivery surface for PR-triggered flows; the GitHub Actions workflows under `.github/workflows/` still handle issue-triggered, plan-approval, and self-improvement flows. Both surfaces share the Python helpers in `lib/oz_workflows/` and `lib/scripts/`.
+
+### Set up the Python env
 
 ```sh
-cd control-plane
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt pytest
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+### Run the test suites
+
+```sh
+# Webhook + dispatcher tests
+python -m pytest tests
+
+# Shared helper + GitHub Actions entrypoint tests
+PYTHONPATH=lib:.github/scripts python -m unittest discover -s .github/scripts/tests
+```
+
+`run-tests.yml` runs both suites on every pull request.
+
+### Run the webhook locally
+
+```sh
 vercel dev
 ```
 
 `vercel dev` boots the same Python entrypoints (`api/webhook.py`, `api/cron.py`) behind a local HTTP server. To replay a synthetic GitHub webhook delivery, sign the payload with the same `OZ_GITHUB_WEBHOOK_SECRET` Vercel uses and POST it at `/api/webhook`:
 
 ```sh
-BODY='{"action":"opened","issue":{"number":42,"labels":[]}}'
+BODY='{"action":"opened","pull_request":{"number":42,"state":"open","draft":false,"user":{"login":"alice","type":"User"}},"repository":{"full_name":"acme/widgets"},"installation":{"id":1234}}'
 SECRET="$OZ_GITHUB_WEBHOOK_SECRET"
 SIGNATURE="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')"
 curl -sS -X POST http://localhost:3000/api/webhook \
   -H "Content-Type: application/json" \
-  -H "X-GitHub-Event: issues" \
+  -H "X-GitHub-Event: pull_request" \
   -H "X-Hub-Signature-256: $SIGNATURE" \
   --data "$BODY"
 ```
 
-The handler returns 202 with the routed workflow id (or `null` when the event is intentionally ignored). Run `python -m pytest control-plane/tests` to exercise the same logic without the HTTP plumbing.
+The handler returns 202 with the routed workflow id (or `null` when the event is intentionally ignored). Run `python -m pytest tests` to exercise the same logic without the HTTP plumbing.

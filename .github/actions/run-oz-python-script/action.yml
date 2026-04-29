@@ -1,17 +1,16 @@
 name: Run Oz Python workflow script
 description: >-
-  Install the shared Oz workflow Python dependencies and run a script from
-  warpdotdev/oz-for-oss/.github/scripts at the same revision this composite
-  action was loaded at. The repository is laid down on disk by GitHub when the
-  action is referenced via `uses:`, so no additional checkout is needed.
+  Install the shared Oz workflow Python dependencies and run a self-improvement
+  entrypoint from warpdotdev/oz-for-oss/.github/scripts at the same revision
+  this composite action was loaded at. The repository is laid down on disk by
+  GitHub when the action is referenced via `uses:`, so no additional checkout
+  is needed. Webhook traffic does not flow through this action; only the
+  scheduled self-improvement workflows under `.github/workflows/update-*.yml`
+  do.
 inputs:
   script-path:
     description: Path to the Python entrypoint relative to .github/scripts.
     required: true
-outputs:
-  allow_review:
-    description: Optional pass-through output for scripts that set allow_review.
-    value: ${{ steps.run-script.outputs.allow_review }}
 runs:
   using: composite
   steps:
@@ -23,7 +22,7 @@ runs:
         # inside the oz-for-oss checkout GitHub created for this action; the
         # repository root is three directories above it.
         working-directory: ${{ github.action_path }}/../../..
-        cache-dependency-glob: ${{ github.action_path }}/../../scripts/requirements.txt
+        cache-dependency-glob: ${{ github.action_path }}/../../../requirements.txt
         activate-environment: true
         python-version: "3.12"
     - name: Install Python workflow dependencies
@@ -32,7 +31,7 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        uv pip install -r "$ACTION_PATH/../../scripts/requirements.txt"
+        uv pip install -r "$ACTION_PATH/../../../requirements.txt"
     - name: Run Oz Python workflow script
       id: run-script
       shell: bash
@@ -42,6 +41,12 @@ runs:
         WORKFLOW_CODE_REPOSITORY: warpdotdev/oz-for-oss
       run: |
         set -euo pipefail
-        script_root="$(cd "$ACTION_PATH/../../scripts" && pwd)"
-        export PYTHONPATH="${script_root}${PYTHONPATH:+:${PYTHONPATH}}"
+        repo_root="$(cd "$ACTION_PATH/../../.." && pwd)"
+        script_root="$repo_root/.github/scripts"
+        # The self-improvement entrypoints import the shared
+        # ``oz_workflows`` package out of ``lib/`` (canonical location
+        # since the webhook moved to the repo root). Add both directories
+        # to PYTHONPATH so ``import oz_workflows`` and bare-name imports
+        # such as ``import update_dedupe`` continue to resolve.
+        export PYTHONPATH="${repo_root}/lib:${script_root}${PYTHONPATH:+:${PYTHONPATH}}"
         python "${script_root}/${OZ_SCRIPT_PATH}"
