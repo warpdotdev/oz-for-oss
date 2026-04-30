@@ -109,6 +109,37 @@ class DispatchRunTest(unittest.TestCase):
         self.assertEqual(result.state.installation_id, 12345)
         self.assertEqual(result.state.payload_subset, {"pr_number": 1})
 
+    def test_persists_post_dispatch_progress_comment_id_with_run_id(self) -> None:
+        runner, _calls = _runner_factory(run_id="oz-run-123")
+        store = InMemoryStateStore()
+
+        request = _request()
+        request = DispatchRequest(
+            workflow=request.workflow,
+            repo=request.repo,
+            installation_id=request.installation_id,
+            config_name=request.config_name,
+            title=request.title,
+            skill_name=request.skill_name,
+            prompt=request.prompt,
+            payload_subset=dict(request.payload_subset),
+            on_dispatched=lambda run_id: {
+                "progress_comment_id": 4242,
+                "seen_run_id": run_id,
+            },
+        )
+
+        result = dispatch_run(
+            request=request,
+            runner=runner,
+            config_factory=_config_factory,
+            store=store,
+        )
+
+        self.assertEqual(result.state.run_id, "oz-run-123")
+        self.assertEqual(result.state.payload_subset["progress_comment_id"], 4242)
+        self.assertEqual(result.state.payload_subset["seen_run_id"], "oz-run-123")
+
     def test_uses_default_role_for_unregistered_workflow(self) -> None:
         runner, calls = _runner_factory()
         store = InMemoryStateStore()

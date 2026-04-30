@@ -222,8 +222,6 @@ def comment_metadata(
     issue_number: int,
     *,
     run_id: str = "",
-    oz_run_id: str = "",
-    github_run_id: str = "",
 ) -> str:
     payload: dict[str, Any] = {
         "type": "issue-status",
@@ -232,10 +230,6 @@ def comment_metadata(
     }
     if run_id:
         payload["run_id"] = run_id
-    if github_run_id:
-        payload["github_run_id"] = github_run_id
-    if oz_run_id:
-        payload["oz_run_id"] = oz_run_id
     return f"<!-- oz-agent-metadata: {json.dumps(payload, separators=(',', ':'))} -->"
 
 
@@ -247,9 +241,9 @@ def _workflow_metadata_prefix(workflow: str, issue_number: int) -> str:
 def _strip_workflow_metadata(body: str, workflow_prefix: str) -> str:
     """Remove any metadata marker in *body* whose prefix matches *workflow_prefix*.
 
-    The progress comment metadata marker is rebuilt mid-run when additional
-    identifiers (e.g. the Oz run id) become available. This helper strips any
-    existing marker for the same workflow+issue so callers can rebuild the
+    The progress comment metadata marker can be rebuilt mid-run when a legacy
+    synchronous caller adopts the Oz run id as its run id. This helper strips
+    any existing marker for the same workflow+issue so callers can rebuild the
     body with the current metadata.
     """
     if not body or not workflow_prefix:
@@ -612,21 +606,18 @@ class WorkflowProgressComment:
         self.workflow = workflow
         self.event_payload = event_payload or {}
         self.requester_login = requester_login
-        # The Vercel control plane persists ``run_id`` (and any Oz run
-        # id captured mid-run) alongside the GitHub comment id so the
-        # cron poller can reconstruct an instance that targets the
-        # exact comment posted at dispatch time. When the caller does
-        # not provide a ``run_id`` we fall back to a fresh uuid so
+        # The Vercel control plane persists ``run_id`` alongside the GitHub
+        # comment id so the cron poller can reconstruct an instance that
+        # targets the exact comment posted at dispatch time. When the caller
+        # does not provide a ``run_id`` we fall back to a fresh uuid so
         # synchronous callers keep generating run-scoped metadata.
-        self.run_id = (run_id or "").strip() or uuid.uuid4().hex
-        self.github_run_id = optional_env("GITHUB_RUN_ID")
-        self.oz_run_id: str = (oz_run_id or "").strip()
+        explicit_run_id = (run_id or "").strip()
+        self.run_id = explicit_run_id or uuid.uuid4().hex
+        self._run_id_can_be_adopted = not explicit_run_id
         self.metadata = comment_metadata(
             workflow,
             issue_number,
             run_id=self.run_id,
-            oz_run_id=self.oz_run_id,
-            github_run_id=self.github_run_id,
         )
         self._workflow_prefix = _workflow_metadata_prefix(workflow, issue_number)
         app_slug = optional_env("GH_APP_SLUG")
@@ -661,26 +652,27 @@ class WorkflowProgressComment:
         self.session_link = normalized
 
     def record_oz_run_id(self, oz_run_id: str) -> None:
-        """Record the Oz agent run id and refresh the metadata marker.
+        """Adopt the Oz agent run id as the metadata run id when needed.
 
-        When the Oz run id becomes known mid-run (after ``client.agent.run``
-        returns its run id), fold it into the comment metadata so the marker
-        on the GitHub comment captures the Oz run id alongside the hosting
-        workflow run id.
+        Cloud-dispatched callers construct the progress comment only after
+        ``client.agent.run`` returns, so ``self.run_id`` is already the Oz run
+        id and this method is a no-op. Legacy synchronous callers may create a
+        progress comment earlier with a generated uuid; once the Oz run id is
+        available, adopt it as the single run identity and refresh the metadata
+        marker in place.
         """
         normalized = (oz_run_id or "").strip()
-        if not normalized or normalized == self.oz_run_id:
+        if not normalized or normalized == self.run_id:
             return
-        if normalized == self.run_id:
+        if not self._run_id_can_be_adopted:
             return
         try:
-            self.oz_run_id = normalized
+            self.run_id = normalized
+            self._run_id_can_be_adopted = False
             self.metadata = comment_metadata(
                 self.workflow,
                 self.issue_number,
                 run_id=self.run_id,
-                oz_run_id=self.oz_run_id,
-                github_run_id=self.github_run_id,
             )
             existing = self._get_or_find_existing_comment()
             if existing is None:
@@ -848,10 +840,12 @@ class WorkflowProgressComment:
             return False
         metadata = _parse_workflow_metadata(body, self._workflow_prefix) or {}
         current_run_id = self.run_id.strip()
-        return bool(current_run_id) and str(metadata.get("run_id") or "").strip() == current_run_id
+        if not current_run_id:
+            return False
+        return str(metadata.get("run_id") or "").strip() == current_run_id
 
     def _dedupe_duplicate_created_comments(self, *, created_id: int) -> int:
-        """Consolidate progress comments for this workflow+issue and run id.
+        """Consolidate progress comments for this workflow+issue and run.
 
         Two situations can leave duplicate progress comments behind:
 
@@ -859,16 +853,16 @@ class WorkflowProgressComment:
           responses. When GitHub returns a 5xx but actually processed the
           create-comment request server-side, those retries produce
           duplicates that all share this run's unique ``run_id`` marker.
-        - Multiple ``WorkflowProgressComment`` instances created for the
-          same dispatched Oz run can both list comments, see no existing
-          same-run match, and create their own comment before either
-          learns of the other. The resulting comments share the stable
-          workflow+issue prefix and the same generated ``run_id``.
+        - Multiple ``WorkflowProgressComment`` instances created during
+          the same run can both list comments, see no
+          existing same-run match, and create their own comment before
+          either learns of the other. The resulting comments share the
+          stable workflow+issue prefix and the same ``run_id``.
 
         In both cases, gather every progress comment for this
-        workflow+issue that belongs to the current run id, keep the
-        oldest (lowest-numbered) as the canonical entry, and delete the
-        rest. Return the id of the canonical comment so the
+        workflow+issue that belongs to the current run,
+        keep the oldest (lowest-numbered) as the canonical entry, and
+        delete the rest. Return the id of the canonical comment so the
         caller can adopt it as its own ``comment_id``. Best-effort: if
         listing the comments fails, fall back to the just-created id.
         """

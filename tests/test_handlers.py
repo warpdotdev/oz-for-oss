@@ -227,10 +227,20 @@ class ReviewHandlersTest(_HandlerTestBase):
         github_client = MagicMock()
         github_client.get_repo.return_value = MagicMock(name="repo")
         handlers = build_review_handlers(_factory(github_client))
-
-        state = _state("review-pull-request")
+        state = _state(
+            "review-pull-request",
+            payload_subset={
+                "owner": "acme",
+                "repo": "widgets",
+                "pr_number": 7,
+                "requester": "alice",
+                "progress_comment_id": 8888,
+            },
+        )
         run = MagicMock(state="RUNNING", session_link="https://app.warp.dev/run/abc", run_id="oz-run-123")
         handlers.non_terminal_handler(state=state, run=run)
+        self.assertEqual(self.progress_instances[-1].comment_id, 8888)
+        self.assertEqual(self.progress_instances[-1].run_id, "run-1")
         helpers = sys.modules["oz.helpers"]
         helpers.record_run_session_link.assert_called_once_with(  # type: ignore[attr-defined]
             self.progress_instances[-1], run
