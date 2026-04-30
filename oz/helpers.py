@@ -846,11 +846,22 @@ class WorkflowProgressComment:
         body = str(get_field(comment, "body") or "")
         if self._workflow_prefix not in body:
             return False
-        current_github_run_id = self.github_run_id.strip()
-        if not current_github_run_id:
-            return True
         metadata = _parse_workflow_metadata(body, self._workflow_prefix) or {}
-        return str(metadata.get("github_run_id") or "").strip() == current_github_run_id
+        current_github_run_id = self.github_run_id.strip()
+        if current_github_run_id:
+            return str(metadata.get("github_run_id") or "").strip() == current_github_run_id
+        current_run_ids = {
+            value
+            for value in (self.run_id.strip(), self.oz_run_id.strip())
+            if value
+        }
+        if not current_run_ids:
+            return False
+        metadata_run_ids = {
+            str(metadata.get("run_id") or "").strip(),
+            str(metadata.get("oz_run_id") or "").strip(),
+        }
+        return bool(current_run_ids.intersection(metadata_run_ids))
 
     def _dedupe_duplicate_created_comments(self, *, created_id: int) -> int:
         """Consolidate progress comments for this workflow+issue and GitHub run.
@@ -922,7 +933,7 @@ class WorkflowProgressComment:
             except UnknownObjectException:
                 self.comment_id = None
         # Reuse only comments that belong to this workflow+issue and the
-        # current hosting workflow run. A later run should create a fresh
+        # current run. A later run should create a fresh
         # progress comment rather than appending onto an earlier run's
         # history.
         comments = self._list_comments()
