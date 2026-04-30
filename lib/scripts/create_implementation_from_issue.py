@@ -89,7 +89,7 @@ def build_create_implementation_prompt(
         - This script (and the filtering it applies) is the only supported way to read issue content during this run. Do not retrieve the issue body, comments, or triggering comment via any other mechanism.
 
         Cloud Workflow Requirements:
-        - Use the shared implementation skills `{implement_specs_skill_path}` and `{spec_driven_implementation_skill_path}` as the base workflow for this run. Prefer the consuming repository's versions when present; otherwise use the checked-in oz-for-oss copies.
+        - Use the shared implementation skills `{implement_specs_skill_path}` and `{spec_driven_implementation_skill_path}` from the workflow-code repository as the base workflow for this run.
         - Read the Oz wrapper skill `{implement_issue_skill_path}` and apply its instructions for `spec_context.md`, `issue_comments.txt`, `implementation_summary.md`, and `pr_description.md`.
         - You are running in a cloud environment, so the caller cannot read your local diff.
         - Work on branch `{target_branch}`.

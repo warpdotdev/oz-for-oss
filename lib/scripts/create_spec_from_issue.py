@@ -145,7 +145,7 @@ def build_create_spec_prompt(
         Cloud Workflow Requirements:
         - You are running in a cloud environment, so the caller cannot read your local diff.
         - Start from the repository default branch `{default_branch}`.
-        - Use the shared spec-first skill `{spec_driven_implementation_skill_path}` as the base workflow for this run. Prefer the consuming repository's version when present; otherwise use the checked-in oz-for-oss copy.
+        - Use the shared spec-first skill `{spec_driven_implementation_skill_path}` from the workflow-code repository as the base workflow for this run.
         - First, read the shared product-spec skill `{write_product_spec_skill_path}`, then read the Oz wrapper skill `{create_product_spec_skill_path}`, and create a product spec at `specs/GH{issue_number}/product.md`.
         - Then, read the shared tech-spec skill `{write_tech_spec_skill_path}`, then read the Oz wrapper skill `{create_tech_spec_skill_path}`, and create a tech spec at `specs/GH{issue_number}/tech.md`.
         - If you produce spec changes, write `pr-metadata.json` at the repository root containing a JSON object with these required fields:

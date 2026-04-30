@@ -38,7 +38,6 @@ from lib.scripts.triage_new_issues import (
     format_recent_issues_for_dedupe,
     format_issue_comments,
     load_recent_issues_for_dedupe,
-    resolve_issue_number_override,
     triage_heuristics_prompt,
     _triage_summary_comment_metadata,
     _cleanup_legacy_triage_comments,
@@ -349,18 +348,6 @@ class PreservedOriginalReportTest(unittest.TestCase):
         self.assertIn("<summary>Original issue report</summary>", updated)
         self.assertIn("Original report text", updated)
 
-class ResolveIssueNumberOverrideTest(unittest.TestCase):
-    def test_uses_issue_number_from_issue_comment_event(self) -> None:
-        self.assertEqual(
-            resolve_issue_number_override("issue_comment", {"issue": {"number": 42}}),
-            "42",
-        )
-
-    def test_uses_issue_number_from_issue_opened_event(self) -> None:
-        self.assertEqual(
-            resolve_issue_number_override("issues", {"issue": {"number": 84}}),
-            "84",
-        )
 
 # Removed: text-matching tests of raw workflow YAML were brittle and
 # broke on cosmetic formatting changes without asserting runtime behavior
@@ -597,7 +584,7 @@ class ApplyTriageResultTest(unittest.TestCase):
         self.assertEqual(github.added_labels, ["enhancement", "repro:high", "area:workflow", "triaged"])
         self.assertEqual(github.updated_issue_body, "")
         # Triage summary is no longer posted as a separate comment;
-        # it is embedded in the progress comment by process_issue.
+        # it is embedded in the progress comment by the dispatch applier.
         self.assertEqual(len(github.comments), 0)
 
 
@@ -693,7 +680,7 @@ class ApplyTriageResultTest(unittest.TestCase):
         )
         self.assertEqual(github.updated_issue_body, "")
         # Triage summary is no longer posted as a separate comment;
-        # it is embedded in the progress comment by process_issue.
+        # it is embedded in the progress comment by the dispatch applier.
         self.assertEqual(len(github.comments), 0)
 
     def test_removes_triaged_on_retriage_with_needs_info(self) -> None:
@@ -1098,7 +1085,7 @@ class MutualExclusivityTest(unittest.TestCase):
     only the duplicate section appears above the fold."""
 
     def _build_comment_parts(self, result: dict, issue: dict) -> str:
-        """Simulate the comment assembly logic from process_issue."""
+        """Simulate the comment assembly logic from the dispatch applier."""
         from lib.scripts.triage_new_issues import _lowercase_first
         summary = _lowercase_first(str(result.get("summary") or "triage completed").strip())
         issue_body = str(result.get("issue_body") or "").strip()

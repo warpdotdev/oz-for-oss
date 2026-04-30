@@ -1,36 +1,23 @@
 from __future__ import annotations
-from contextlib import closing
 from itertools import islice
 from pathlib import Path
 
 import json
 import logging
-import os
-from datetime import datetime, timedelta, timezone
 from textwrap import dedent
 from typing import Any, Mapping, TypedDict
-from github import Auth, Github
 from github.GithubException import GithubException, UnknownObjectException
 from github.Repository import Repository
 
-from oz_workflows.artifacts import load_triage_artifact
-from oz_workflows.env import load_event, optional_env, repo_parts, repo_slug, require_env, workspace
+from oz_workflows.env import workspace
 from oz_workflows.helpers import (
     get_field,
     _format_triage_session_link,
     format_triage_session_line,
-    format_triage_start_line,
     get_label_name,
     format_issue_comments_for_prompt,
-    is_automation_user,
     issue_has_prior_triage,
-    triggering_comment_prompt_text,
     WorkflowProgressComment,
-)
-from oz_workflows.oz_client import (
-    ROLE_REVIEW_TRIAGE,
-    build_agent_config,
-    run_agent,
 )
 from oz_workflows.repo_local import (
     format_repo_local_prompt_section,
@@ -40,10 +27,7 @@ from oz_workflows.repo_local import (
 from oz_workflows.triage import (
     decode_repo_text_file,
     dedupe_strings,
-    discover_issue_templates,
     extract_original_issue_report,
-    load_triage_config,
-    select_recent_untriaged_issues,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,19 +58,6 @@ RESPONSE_FALLBACK_BODY = (
 )
 
 
-def append_summary(text: str) -> None:
-    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if not summary_path:
-        return
-    with open(summary_path, "a", encoding="utf-8") as handle:
-        handle.write(text)
-        if not text.endswith("\n"):
-            handle.write("\n")
-
-
-def warning(message: str) -> None:
-    print(f"::warning::{message}")
-
 
 def _lowercase_first(text: str) -> str:
     """Lowercase the first character of *text* so it reads naturally mid-sentence.
@@ -109,7 +80,7 @@ def triage_heuristics_prompt(owner: str, repo: str) -> str:
     Repo-specific heuristics are no longer hardcoded here. They live in the
     consuming repository's ``.agents/skills/triage-issue-local/SKILL.md``
     companion skill and are referenced at prompt assembly time by
-    ``process_issue`` via the ``resolve_repo_local_skill_path`` helper.
+    ``build_triage_prompt`` via the ``resolve_repo_local_skill_path`` helper.
     """
     return dedent(
         """
@@ -119,268 +90,6 @@ def triage_heuristics_prompt(owner: str, repo: str) -> str:
         - Prefer issue-specific questions over generic “please share more info” requests.
         """
     ).strip()
-
-
-def main() -> None:
-    owner, repo = repo_parts()
-    event = load_event()
-    event_name = optional_env("GITHUB_EVENT_NAME")
-    if event_name == "issue_comment" and is_automation_user((event.get("comment") or {}).get("user")):
-        append_summary("Skipping automation-authored issue comment.\n")
-        return
-    triage_config = load_triage_config(workspace() / ".github" / "issue-triage" / "config.json")
-    configured_labels = triage_config["labels"]
-    lookback_minutes = int(optional_env("LOOKBACK_MINUTES") or "60")
-    issue_number_override = resolve_issue_number_override(event_name, event)
-    triggering_comment_id = int((event.get("comment") or {}).get("id") or 0) or None
-    triggering_comment_text = triggering_comment_prompt_text(event)
-    with closing(Github(auth=Auth.Token(require_env("GH_TOKEN")))) as client:
-        github = client.get_repo(repo_slug())
-        repo_labels = {
-            str(label.name or ""): label
-            for label in github.get_labels()
-            if label.name
-        }
-        issues = resolve_issues_to_triage(
-            github,
-            owner,
-            repo,
-            issue_number_override=issue_number_override,
-            lookback_minutes=lookback_minutes,
-        )
-        if not issues:
-            append_summary("No recent untriaged issues found.\n")
-            return
-        queue_text = ", ".join(f"#{get_field(issue, 'number')}" for issue in issues)
-        append_summary(f"Triage queue: {queue_text}\n")
-        template_context = discover_issue_templates(workspace())
-        recent_open_issues = load_recent_issues_for_dedupe(github)
-
-        for issue in issues:
-            issue_number = int(get_field(issue, "number"))
-            try:
-                process_issue(
-                    github,
-                    owner,
-                    repo,
-                    issue,
-                    event_payload=event,
-                    triage_config=triage_config,
-                    configured_labels=configured_labels,
-                    repo_labels=repo_labels,
-                triggering_comment_id=triggering_comment_id,
-                triggering_comment_text=triggering_comment_text,
-                template_context=template_context,
-                recent_open_issues=recent_open_issues,
-            )
-            except Exception as exc:
-                warning(f"Issue triage failed for #{issue_number}: {exc}")
-                append_summary(f"- Issue #{issue_number}: triage failed ({exc}).\n")
-
-
-def resolve_issue_number_override(event_name: str, event: dict[str, Any]) -> str:
-    """Resolve an explicitly requested issue number from the triggering event."""
-    if event_name in {"issue_comment", "issues"}:
-        issue_number = (event.get("issue") or {}).get("number")
-        return str(issue_number or "").strip()
-    return optional_env("TRIAGE_ISSUE_NUMBER")
-
-
-def resolve_issues_to_triage(
-    github: Repository,
-    owner: str,
-    repo: str,
-    *,
-    issue_number_override: str,
-    lookback_minutes: int,
-) -> list[Any]:
-    """Return the issues this workflow run should triage."""
-    if issue_number_override:
-        issue = github.get_issue(int(issue_number_override))
-        return [] if issue.pull_request else [issue]
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
-    return select_recent_untriaged_issues(
-        list(github.get_issues(state="open")),
-        cutoff=cutoff,
-    )
-
-
-def process_issue(
-    github: Repository,
-    owner: str,
-    repo: str,
-    issue: Any,
-    *,
-    event_payload: dict[str, Any],
-    triage_config: dict[str, Any],
-    configured_labels: dict[str, Any],
-    repo_labels: dict[str, Any],
-    triggering_comment_id: int | None,
-    triggering_comment_text: str,
-    template_context: dict[str, Any],
-    recent_open_issues: list[Any] | None,
-) -> None:
-    """Run the end-to-end triage flow for a single GitHub issue."""
-    issue_number = int(issue.number)
-    is_retriage = issue_has_prior_triage(list(get_field(issue, "labels", []) or []))
-    progress = WorkflowProgressComment(
-        github,
-        owner,
-        repo,
-        issue_number,
-        workflow=WORKFLOW_NAME,
-        event_payload=event_payload,
-    )
-    progress.start(format_triage_start_line(is_retriage=is_retriage))
-    # Fetch the issue comments once and reuse them for legacy-comment cleanup
-    # and the triage prompt so we avoid two back-to-back
-    # ``GET /issues/{n}/comments`` calls on the same issue.
-    comments = list(issue.get_comments())
-    _cleanup_legacy_triage_comments(
-        github, owner, repo, issue, comments=comments
-    )
-    comments_text = format_issue_comments(comments, exclude_comment_id=triggering_comment_id)
-    current_body = str(issue.body or "").strip()
-    original_report = extract_original_issue_report(current_body)
-    recent_issues_text = format_recent_issues_for_dedupe(recent_open_issues, issue_number)
-    prompt = build_triage_prompt(
-        owner=owner,
-        repo=repo,
-        issue_number=issue_number,
-        issue_title=str(issue.title or ""),
-        issue_labels=[label.name for label in issue.labels],
-        issue_assignees=[assignee.login for assignee in issue.assignees],
-        issue_created_at=str(issue.created_at or "Unknown"),
-        current_body=current_body,
-        original_report=original_report,
-        comments_text=comments_text,
-        triggering_comment_text=triggering_comment_text,
-        triage_config=triage_config,
-        template_context=template_context,
-        recent_issues_text=recent_issues_text,
-        host_workspace=workspace(),
-    )
-
-    config = build_agent_config(
-        config_name="triage-new-issues",
-        workspace=workspace(),
-        role=ROLE_REVIEW_TRIAGE,
-    )
-    try:
-        run = run_agent(
-            prompt=prompt,
-            skill_name="triage-issue",
-            title=f"Triage issue #{issue_number}",
-            config=config,
-            on_poll=lambda current_run: _record_triage_session_link(
-                progress, current_run, is_retriage=is_retriage
-            ),
-        )
-        _record_triage_session_link(progress, run, is_retriage=is_retriage)
-        result = load_triage_artifact(run.run_id)
-        comment_type = extract_comment_type(result)
-        if comment_type == COMMENT_TYPE_RESPONSE:
-            # Question-response mode: leave labels alone and post the
-            # lighter response comment in place of the standard triage
-            # comment.
-            progress.replace_body(
-                build_response_comment_body(
-                    response_body=extract_response_body(result),
-                    details=extract_response_details(result),
-                    session_link=progress.session_link,
-                )
-            )
-            append_summary(
-                f"- Issue #{issue_number}: response posted (no label changes).\n"
-            )
-            return
-        apply_triage_result(
-            github,
-            owner,
-            repo,
-            issue,
-            result=result,
-            configured_labels=configured_labels,
-            repo_labels=repo_labels,
-        )
-
-        labels_text = ", ".join(extract_requested_labels(result)) or "no labels"
-        summary = _lowercase_first(str(result.get("summary") or "triage completed").strip())
-        issue_body = str(result.get("issue_body") or "").strip()
-        session_link = progress.session_link
-
-        follow_up_questions = extract_follow_up_questions(result)
-        duplicates = extract_duplicate_of(result, current_issue_number=issue_number)
-        statements = extract_statements(result)
-        show_statements = bool(statements and not duplicates)
-
-        # Build the consolidated Stage 3 comment body.
-        # Layout: preamble + session link → user-facing content → maintainer details (collapsed).
-        parts: list[str] = []
-
-        # When there is no visible user-facing content, add a preamble so
-        # the comment reads naturally as a standalone message.
-        if not show_statements and not follow_up_questions and not duplicates:
-            if session_link:
-                link_text = _format_triage_session_link(session_link)
-                parts.append(
-                    "I've finished triaging this issue. "
-                    "A maintainer will verify the details shortly. "
-                    f"You can view {link_text}."
-                )
-            else:
-                parts.append("I've completed the triage of this issue.")
-        elif session_link:
-            # Follow-up questions or duplicates are present; show session link
-            # on its own line before the user-facing content.
-            link_text = _format_triage_session_link(session_link)
-            parts.append(f"You can view {link_text}.")
-
-        # User-facing content above the fold: follow-up questions or duplicate info.
-        # Follow-up questions and duplicates are mutually exclusive.
-        # If duplicates are found, suppress follow-up questions.
-        if show_statements:
-            parts.append(build_statements_section(issue, statements))
-        if duplicates:
-            parts.append(build_duplicate_section(issue, duplicates))
-        elif follow_up_questions:
-            parts.append(build_follow_up_section(issue, follow_up_questions))
-
-        # Maintainer-facing content collapsed behind <details>.
-        maintainer_parts: list[str] = []
-        maintainer_parts.append(f"I concluded that {summary}.")
-        if not duplicates and issue_body:
-            maintainer_parts.append(issue_body)
-        if duplicates:
-            # Include similarity reasons in maintainer section.
-            dup_reasoning_lines: list[str] = []
-            for dup in duplicates:
-                reason = dup.get("similarity_reason") or ""
-                if reason:
-                    dup_reasoning_lines.append(f"- #{dup['issue_number']}: {reason}")
-            if dup_reasoning_lines:
-                maintainer_parts.append(
-                    "**Duplicate reasoning**\n" + "\n".join(dup_reasoning_lines)
-                )
-        if follow_up_questions:
-            reasoning_lines = build_question_reasoning_section(follow_up_questions)
-            if reasoning_lines:
-                maintainer_parts.append(reasoning_lines)
-
-        details_body = "\n\n".join(maintainer_parts)
-        parts.append(
-            "<details>\n"
-            "<summary>Maintainer details</summary>\n\n"
-            f"{details_body}\n\n"
-            "</details>"
-        )
-
-        parts.append(TRIAGE_DISCLAIMER)
-        progress.replace_body("\n\n".join(parts))
-        append_summary(f"- Issue #{issue_number}: {summary} Labels: {labels_text}.\n")
-    except Exception:
-        progress.report_error()
-        raise
 
 
 def build_triage_prompt(
@@ -593,7 +302,11 @@ def apply_triage_result(
         if label_name in repo_labels:
             managed_labels.append(label_name)
             continue
-        warning(f"Skipping unmanaged label '{label_name}' for issue #{issue_number}")
+        logger.warning(
+            "Skipping unmanaged label %r for issue #%s",
+            label_name,
+            issue_number,
+        )
     for label_name in current_labels:
         if should_replace_triage_label(label_name) and label_name not in managed_labels:
             issue.remove_from_labels(label_name)
@@ -1323,8 +1036,8 @@ def apply_triage_result_for_dispatch(
 ) -> None:
     """Apply ``triage_result.json`` back onto the originating issue.
 
-    Applies the trailing branch of :func:`process_issue` for the
-    cloud-mode delivery path. *github* is a PyGithub
+    Applies the triage result for the cloud-mode delivery path. *github*
+    is a PyGithub
     :class:`Repository` handle, *context* is a serialized
     :class:`TriageContext`, and *progress* is the reconstructed
     :class:`WorkflowProgressComment` posted at dispatch time so the
@@ -1435,7 +1148,3 @@ def apply_triage_result_for_dispatch(
     )
     parts.append(TRIAGE_DISCLAIMER)
     progress.replace_body("\n\n".join(parts))
-
-
-if __name__ == "__main__":
-    main()

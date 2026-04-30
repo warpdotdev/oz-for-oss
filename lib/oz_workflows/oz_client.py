@@ -8,7 +8,7 @@ from oz_agent_sdk import OzAPI
 from oz_agent_sdk.types import AgentRunParams, AmbientAgentConfigParam
 from oz_agent_sdk.types.agent import RunItem
 
-from .env import optional_env, repo_slug, require_env, workspace
+from .env import optional_env, require_env
 from .workflow_paths import workflow_code_root
 
 
@@ -192,52 +192,35 @@ def _workflow_code_root() -> Path:
 
 
 def _resolve_skill_location(skill_name: str) -> tuple[str, str, Path]:
-    """Resolve a skill to the repo slug, relative path, and on-disk file location."""
+    """Resolve a bundled workflow skill to its repo slug, path, and local file."""
     if ":" in skill_name:
         repo, skill_path = skill_name.split(":", 1)
         return repo, skill_path, Path(skill_path)
 
     skill_path = _normalize_skill_path(skill_name)
     workflow_repo_root = _workflow_code_root()
-    consumer_repo_slug = optional_env("GITHUB_REPOSITORY")
     workflow_repo_slug = (
         optional_env("WORKFLOW_CODE_REPOSITORY")
-        or consumer_repo_slug
         or _DEFAULT_WORKFLOW_CODE_REPOSITORY
     )
-
-    candidates: list[tuple[str, Path]] = []
-    if consumer_repo_slug:
-        candidates.append((consumer_repo_slug, workspace()))
-    if (workflow_repo_slug, workflow_repo_root) not in candidates:
-        candidates.append((workflow_repo_slug, workflow_repo_root))
-
-    for candidate_repo_slug, candidate_root in candidates:
-        candidate_path = candidate_root / skill_path
-        if candidate_path.is_file():
-            return candidate_repo_slug, skill_path, candidate_path
-
-    checked_locations = ", ".join(
-        str(candidate_root / skill_path) for _candidate_repo_slug, candidate_root in candidates
-    )
+    candidate_path = workflow_repo_root / skill_path
+    if candidate_path.is_file():
+        return workflow_repo_slug, skill_path, candidate_path
     raise RuntimeError(
-        f"Unable to resolve skill {skill_name!r}. Checked: {checked_locations}"
+        f"Unable to resolve skill {skill_name!r}. Checked: {candidate_path}"
     )
 
 
 def skill_file_path(skill_name: str) -> str:
-    """Resolve a skill to the workspace-relative file path that the agent should read."""
-    _repo_slug, skill_path, resolved_path = _resolve_skill_location(skill_name)
+    """Resolve a skill to the repository-relative path that the agent should read."""
+    _repo_slug, skill_path, _resolved_path = _resolve_skill_location(skill_name)
     if ":" in skill_name:
         return skill_path
-    try:
-        return resolved_path.relative_to(workspace()).as_posix()
-    except ValueError:
-        return resolved_path.as_posix()
+    return skill_path
 
 
 def skill_spec(skill_name: str) -> str:
-    """Resolve a skill name into a fully qualified spec, preferring consumer repo overrides."""
+    """Resolve a skill name into a fully qualified workflow-repo skill spec."""
     resolved_repo_slug, skill_path, _resolved_path = _resolve_skill_location(skill_name)
     if ":" in skill_name:
         return skill_name

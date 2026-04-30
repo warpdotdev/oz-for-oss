@@ -1,26 +1,16 @@
 from __future__ import annotations
 
-from contextlib import closing
 from pathlib import Path
 from textwrap import dedent
 from typing import Any, Mapping, TypedDict
 
-from github import Auth, Github
 from github.Repository import Repository
 
-from oz_workflows.artifacts import load_run_artifact, poll_for_artifact
-from oz_workflows.env import load_event, repo_parts, repo_slug, require_env, workspace
-from oz_workflows.helpers import (
-    WorkflowProgressComment,
-    is_automation_user,
-    record_run_session_link,
-)
-from oz_workflows.oz_client import build_agent_config, run_agent
+from oz_workflows.helpers import WorkflowProgressComment
 from oz_workflows.verification import (
     discover_verification_skills,
     discover_verification_skills_from_repo,
     format_verification_skills_for_prompt,
-    list_downloadable_verification_artifacts,
     render_verification_comment,
 )
 
@@ -95,18 +85,16 @@ def apply_verification_result(
 ) -> None:
     """Apply a completed verification report back to GitHub.
 
-    Mirrors the cleanup branch in :func:`main`: replaces the progress
-    comment body with the rendered report and (when present) any
-    downloadable verification artifacts the agent uploaded. The cron
-    poller passes through the same ``WorkflowProgressComment`` shape
-    that ``main`` constructs so the rendered comment metadata is
-    identical between synchronous and cron-applied paths.
+    Replaces the progress comment body with the rendered report and
+    (when present) any downloadable verification artifacts the agent
+    uploaded. The cron poller passes through the
+    ``WorkflowProgressComment`` posted at dispatch time so the final
+    comment metadata remains stable.
 
     *progress* is the reconstructed :class:`WorkflowProgressComment` the
     Vercel cron handler hands in so the final ``replace_body`` call
     lands on the comment posted at dispatch time. Callers that omit it
-    fall back to constructing a fresh instance for compatibility with
-    synchronous invocation.
+    fall back to constructing a fresh instance.
     """
     if progress is None:
         progress = WorkflowProgressComment(
@@ -182,100 +170,3 @@ def build_verification_prompt(
         - Upload `verification_report.json` as an artifact via `oz artifact upload verification_report.json` (or `oz-preview artifact upload verification_report.json` if the `oz` CLI is not available).
         """
     ).strip()
-
-
-def main() -> None:
-    owner, repo = repo_parts()
-    event = load_event()
-    comment = event.get("comment") or {}
-    if is_automation_user(comment.get("user")):
-        return
-    issue = event.get("issue") or {}
-    if not issue.get("pull_request"):
-        return
-
-    trigger_comment_id = int(comment["id"])
-    requester = (comment.get("user") or {}).get("login") or ""
-    pr_number = int(issue["number"])
-
-    with closing(Github(auth=Auth.Token(require_env("GH_TOKEN")))) as client:
-        # The organization-membership gate was removed: the bot now
-        # runs ``/oz-verify`` for every human-authored mention. The
-        # ``is_automation_user`` check above already skips bot-authored
-        # commands, which is the only filter we still apply.
-        github = client.get_repo(repo_slug())
-        pr = github.get_pull(pr_number)
-        pr.get_issue_comment(trigger_comment_id).create_reaction("eyes")
-
-        workspace_path = workspace()
-        verification_skills = discover_verification_skills(workspace_path)
-        progress = WorkflowProgressComment(
-            github,
-            owner,
-            repo,
-            pr_number,
-            workflow=WORKFLOW_NAME,
-            event_payload=event,
-            requester_login=requester,
-        )
-        progress.start(
-            "I'm running `/oz-verify` for this pull request using the repository's verification-enabled skills."
-        )
-
-        if not verification_skills:
-            progress.complete(
-                "I couldn't run `/oz-verify` because this repository does not currently expose any skills with `metadata.verification: true` under `.agents/skills/`."
-            )
-            return
-
-        context = gather_verify_context(
-            github,
-            owner=owner,
-            repo=repo,
-            pr_number=pr_number,
-            trigger_comment_id=trigger_comment_id,
-            requester=requester,
-            workspace_path=workspace_path,
-        )
-        prompt = build_verification_prompt(
-            owner=context["owner"],
-            repo=context["repo"],
-            pr_number=context["pr_number"],
-            base_branch=context["base_branch"],
-            head_branch=context["head_branch"],
-            trigger_comment_id=context["trigger_comment_id"],
-            requester=context["requester"],
-            verification_skills_text=context["verification_skills_text"],
-        )
-
-        config = build_agent_config(
-            config_name=WORKFLOW_NAME,
-            workspace=workspace(),
-        )
-        try:
-            run = run_agent(
-                prompt=prompt,
-                skill_name=VERIFY_PR_SKILL,
-                title=f"Verify PR #{pr_number}",
-                config=config,
-                on_poll=lambda current_run: record_run_session_link(progress, current_run),
-            )
-            report = poll_for_artifact(run.run_id, filename=VERIFICATION_REPORT_FILENAME)
-            artifacts = list_downloadable_verification_artifacts(
-                run,
-                exclude_filenames={VERIFICATION_REPORT_FILENAME},
-            )
-            apply_verification_result(
-                github,
-                context=context,
-                run=run,
-                result=report,
-                artifacts=artifacts,
-            )
-        except Exception:
-            progress.report_error()
-            raise
-
-
-if __name__ == "__main__":
-    main()

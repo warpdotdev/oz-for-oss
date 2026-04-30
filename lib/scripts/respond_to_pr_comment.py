@@ -1,11 +1,9 @@
 from __future__ import annotations
-from contextlib import closing
 
 from datetime import datetime, timedelta, timezone
 from textwrap import dedent
 from typing import Any, Mapping, TypedDict
-
-from github import Auth, Github
+from github import Github
 from github.PullRequest import PullRequest
 from github.Repository import Repository
 
@@ -13,21 +11,16 @@ from oz_workflows.artifacts import (
     try_load_pr_metadata_artifact,
     try_load_resolved_review_comments_artifact,
 )
-from oz_workflows.env import load_event, optional_env, repo_parts, repo_slug, require_env, workspace
 from oz_workflows.helpers import (
     branch_updated_since,
     build_next_steps_section,
     coauthor_prompt_lines,
     format_pr_comment_start_line,
-    is_automation_user,
     post_resolved_review_comment_replies,
-    record_run_session_link,
     resolve_coauthor_line,
-    resolve_spec_context_for_pr,
     resolve_spec_context_for_pr_via_api,
     WorkflowProgressComment,
 )
-from oz_workflows.oz_client import build_agent_config, run_agent
 
 WORKFLOW_NAME = "respond-to-pr-comment"
 FETCH_CONTEXT_SCRIPT = ".agents/skills/implement-specs/scripts/fetch_github_context.py"
@@ -331,181 +324,3 @@ def apply_pr_comment_result(
         )
     completion_sections.append(next_steps_section)
     progress.complete("\n\n".join(completion_sections))
-
-
-def main() -> None:
-    owner, repo = repo_parts()
-    event = load_event()
-    github_event_name = optional_env("GITHUB_EVENT_NAME")
-    user_payload_key = "review" if github_event_name == "pull_request_review" else "comment"
-    if is_automation_user((event.get(user_payload_key) or {}).get("user")):
-        return
-    with closing(Github(auth=Auth.Token(require_env("GH_TOKEN")))) as client:
-        # Organization-membership gates were removed deliberately: the
-        # bot now responds to every human-authored ``@oz-agent`` mention
-        # regardless of the commenter's ``author_association``. The only
-        # authors we still ignore are automation accounts (``type=Bot``
-        # or a ``[bot]``-suffixed login), which the
-        # ``is_automation_user`` check above already drops before we
-        # reach this branch.
-        github = client.get_repo(repo_slug())
-        if github_event_name == "pull_request_review_comment":
-            _handle_review_comment(client, github, owner, repo, event)
-        elif github_event_name == "issue_comment":
-            _handle_issue_comment(client, github, owner, repo, event)
-        elif github_event_name == "pull_request_review":
-            _handle_review_body(client, github, owner, repo, event)
-        else:
-            raise RuntimeError(f"Unsupported event: {github_event_name}")
-
-
-def _handle_review_comment(
-    client: Github,
-    github: Repository,
-    owner: str,
-    repo: str,
-    event: dict,
-) -> None:
-    comment = event["comment"]
-    trigger_comment_id = int(comment["id"])
-    pr_number = int(event["pull_request"]["number"])
-    pr = github.get_pull(pr_number)
-    pr.get_review_comment(trigger_comment_id).create_reaction("eyes")
-    requester = (comment.get("user") or {}).get("login") or ""
-
-    _run_implementation(
-        client,
-        github,
-        owner,
-        repo,
-        pr,
-        event=event,
-        trigger_comment_id=trigger_comment_id,
-        trigger_kind="review",
-        requester=requester,
-        review_reply_target=(pr, trigger_comment_id),
-    )
-
-
-def _handle_issue_comment(
-    client: Github,
-    github: Repository,
-    owner: str,
-    repo: str,
-    event: dict,
-) -> None:
-    comment = event["comment"]
-    trigger_comment_id = int(comment["id"])
-    pr_number = int(event["issue"]["number"])
-    pr = github.get_pull(pr_number)
-    pr.get_issue_comment(trigger_comment_id).create_reaction("eyes")
-    requester = (comment.get("user") or {}).get("login") or ""
-
-    _run_implementation(
-        client,
-        github,
-        owner,
-        repo,
-        pr,
-        event=event,
-        trigger_comment_id=trigger_comment_id,
-        trigger_kind="conversation",
-        requester=requester,
-    )
-
-
-def _handle_review_body(
-    client: Github,
-    github: Repository,
-    owner: str,
-    repo: str,
-    event: dict,
-) -> None:
-    review = event["review"]
-    trigger_review_id = int(review["id"])
-    pr_number = int(event["pull_request"]["number"])
-    pr = github.get_pull(pr_number)
-    requester = (review.get("user") or {}).get("login") or ""
-    # GitHub's REST API has no reactions endpoint for pull request review bodies
-    # (only for comments), so no create_reaction("eyes") call is made here.
-    # The progress issue comment is the sole user-visible acknowledgement.
-
-    _run_implementation(
-        client,
-        github,
-        owner,
-        repo,
-        pr,
-        event=event,
-        trigger_comment_id=trigger_review_id,
-        trigger_kind="review_body",
-        requester=requester,
-    )
-
-
-def _run_implementation(
-    client: Github,
-    github: Repository,
-    owner: str,
-    repo: str,
-    pr: PullRequest,
-    *,
-    event: dict,
-    trigger_comment_id: int,
-    trigger_kind: str,
-    requester: str,
-    review_reply_target: tuple[PullRequest, int] | None = None,
-) -> None:
-    pr_number = pr.number
-    context = gather_pr_comment_context(
-        github,
-        owner=owner,
-        repo=repo,
-        pr_number=pr_number,
-        trigger_kind=trigger_kind,
-        trigger_comment_id=trigger_comment_id,
-        requester=requester,
-        event=event,
-        review_reply_target=review_reply_target,
-        workspace_path=workspace(),
-        client=client,
-        pr=pr,
-    )
-    progress = WorkflowProgressComment(
-        github,
-        owner,
-        repo,
-        pr_number,
-        workflow=WORKFLOW_NAME,
-        event_payload=event,
-        requester_login=requester,
-        review_reply_target=review_reply_target,
-    )
-    progress.start(context["progress_start_line"])
-    prompt = build_pr_comment_prompt(context)
-    config = build_agent_config(
-        config_name=WORKFLOW_NAME,
-        workspace=workspace(),
-    )
-
-    try:
-        run = run_agent(
-            prompt=prompt,
-            skill_name="implement-issue",
-            title=f"Respond to PR comment #{pr_number}",
-            config=config,
-            on_poll=lambda current_run: record_run_session_link(progress, current_run),
-        )
-        apply_pr_comment_result(
-            github,
-            context=context,
-            run=run,
-            client=client,
-            pr=pr,
-        )
-    except Exception:
-        progress.report_error()
-        raise
-
-if __name__ == "__main__":
-    main()
