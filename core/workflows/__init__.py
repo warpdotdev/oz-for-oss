@@ -88,32 +88,32 @@ def _resolve_requester(payload: Mapping[str, Any]) -> str:
 def _resolve_trigger_source(payload: Mapping[str, Any], event_hint: str | None = None) -> str:
     if event_hint:
         return event_hint
-    if isinstance(payload.get("review"), dict):
-        return "pull_request_review"
     if isinstance(payload.get("comment"), dict):
         if isinstance(payload.get("pull_request"), dict):
             return "pull_request_review_comment"
         return "issue_comment"
+    if isinstance(payload.get("review"), dict):
+        return "pull_request_review"
     if isinstance(payload.get("pull_request"), dict):
         return "pull_request"
     return ""
 
 
 def _resolve_trigger_kind(payload: Mapping[str, Any]) -> str:
-    if isinstance(payload.get("review"), dict):
-        return "review_body"
     if isinstance(payload.get("comment"), dict) and isinstance(payload.get("pull_request"), dict):
         return "review"
+    if isinstance(payload.get("review"), dict):
+        return "review_body"
     return "conversation"
 
 
 def _resolve_trigger_comment_id(payload: Mapping[str, Any]) -> int:
-    review = payload.get("review")
-    if isinstance(review, dict):
-        return int(review.get("id") or 0)
     comment = payload.get("comment")
     if isinstance(comment, dict):
         return int(comment.get("id") or 0)
+    review = payload.get("review")
+    if isinstance(review, dict):
+        return int(review.get("id") or 0)
     return 0
 
 

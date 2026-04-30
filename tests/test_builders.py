@@ -270,6 +270,36 @@ class BuildRespondRequestTest(_BuilderTestBase):
         # Progress lifecycle is deferred until the Oz run id is known.
         self.assertEqual(len(self.progress_instances), 0)
         self.assert_deferred_progress(request, start_line="I'm starting")
+
+    def test_review_comment_payload_prefers_comment_id_over_review_id(self) -> None:
+        from core.builders import build_respond_request
+
+        github_client = MagicMock()
+        repo = MagicMock(name="repo")
+        github_client.get_repo.return_value = repo
+        pr = MagicMock(name="pr")
+        repo.get_pull.return_value = pr
+
+        payload = {
+            "repository": {"full_name": "acme/widgets"},
+            "installation": {"id": 1},
+            "pull_request": {"number": 7},
+            "comment": {"id": 999, "user": {"login": "alice"}},
+            "review": {"id": 1234, "user": {"login": "alice"}},
+        }
+
+        build_respond_request(
+            payload,
+            github_client=github_client,
+            workspace_path=Path("/tmp/ws"),
+        )
+
+        respond_module = sys.modules["workflows.respond_to_pr_comment"]
+        kwargs = respond_module.gather_pr_comment_context.call_args.kwargs  # type: ignore[attr-defined]
+        self.assertEqual(kwargs["trigger_kind"], "review")
+        self.assertEqual(kwargs["trigger_comment_id"], 999)
+        self.assertEqual(kwargs["review_reply_target"], (pr, 999))
+
     def test_returns_dispatch_request_for_review_body(self) -> None:
         from core.builders import build_respond_request
         from core.routing import WORKFLOW_RESPOND_TO_PR_COMMENT
