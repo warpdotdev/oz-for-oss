@@ -10,10 +10,7 @@ poller picks up the SUCCEEDED run, polls for the agent's
 :func:`apply_create_spec_result` to open or update the spec PR and
 finish the progress comment.
 
-The legacy GitHub Actions entrypoint
-(``.github/scripts/create_spec_from_issue.py``) keeps the same
-prompt-and-apply behavior; this module is the cloud-dispatch
-counterpart so the webhook can drive it without going through GHA.
+This module is used directly by the webhook builder and cron handler.
 """
 
 from __future__ import annotations
@@ -63,11 +60,9 @@ def _spec_branch_name(issue_number: int) -> str:
 def ensure_spec_pr_issue_reference(pr_body: str, issue_number: int) -> str:
     """Ensure *pr_body* contains a non-closing reference to *issue_number*.
 
-    Mirrors the legacy GitHub Actions helper so the cloud-dispatch and
-    GHA paths produce byte-for-byte identical PR bodies. Spec PRs must
-    not auto-close the underlying issue when they merge — only the
-    implementation PR does — so any ``Closes #N`` / ``Fixes #N`` line
-    is rewritten to ``Related issue: #N``.
+    Spec PRs must not auto-close the underlying issue when they merge —
+    only the implementation PR does — so any ``Closes #N`` /
+    ``Fixes #N`` line is rewritten to ``Related issue: #N``.
     """
     related_issue_line = _RELATED_ISSUE_LINE.format(issue_number=issue_number)
     normalized_body = str(pr_body or "").strip()
@@ -122,9 +117,8 @@ def build_create_spec_prompt(
 ) -> str:
     """Render the cloud-mode create-spec prompt.
 
-    Mirrors ``.github/scripts/create_spec_from_issue.py:build_create_spec_prompt``
-    so the cloud-dispatch and legacy GHA paths feed the agent the same
-    instructions.
+    Used by the webhook dispatch path to feed the spec-writing agent
+    the issue context and required handoff contract.
     """
     return dedent(
         f"""
@@ -222,9 +216,7 @@ def gather_create_spec_context(
     *github_client* is optional — when callers pass it through it is
     used by :func:`resolve_coauthor_line` to look up the commenter's
     GitHub user record (their public name + noreply email) instead of
-    the repository handle. The legacy GHA path does the same lookup
-    so the produced co-author lines stay byte-for-byte identical
-    across delivery surfaces.
+    the repository handle.
     """
     issue_data = repo_handle.get_issue(int(issue_number))
     issue_title = str(issue_data.title or "")
@@ -314,10 +306,9 @@ def gather_create_spec_context(
 def build_create_spec_prompt_for_dispatch(context: Mapping[str, Any]) -> str:
     """Build the create-spec prompt from a serialized :class:`CreateSpecContext`.
 
-    The prompt body is byte-for-byte identical to the one
-    :func:`build_create_spec_prompt` produces for the legacy GitHub
-    Actions runner so the security-rules block, output paths, and skill
-    references stay aligned across delivery surfaces.
+    The prompt body is produced by :func:`build_create_spec_prompt` so
+    the security-rules block, output paths, and skill references stay
+    aligned across callers.
     """
     return build_create_spec_prompt(
         owner=str(context["owner"]),

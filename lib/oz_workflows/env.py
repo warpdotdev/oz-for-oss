@@ -36,7 +36,7 @@ def workspace() -> Path:
 
 
 def load_event() -> dict[str, Any]:
-    """Load the GitHub Actions event payload JSON."""
+    """Load the workflow event payload JSON."""
     event_path = require_env("GITHUB_EVENT_PATH")
     with open(event_path, "r", encoding="utf-8") as handle:
         return json.load(handle)

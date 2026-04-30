@@ -203,9 +203,9 @@ def process_webhook_request(
 
     # ``enforce-pr-issue-state`` is special: the synchronous decision
     # (allow / close) does not need the cloud agent. Run it inline so
-    # the legacy GitHub Actions latency profile is preserved. When the
-    # decision is ``need-cloud-match``, the synchronous helper returns
-    # ``None`` and the request falls through to the dispatch path.
+    # GitHub receives a fast decision. When the decision is
+    # ``need-cloud-match``, the synchronous helper returns ``None`` and
+    # the request falls through to the dispatch path.
     if decision.workflow == WORKFLOW_ENFORCE_PR_ISSUE_STATE:
         try:
             outcome = _run_synchronous_enforce(payload, sync_enforcer=sync_enforcer)
@@ -273,8 +273,8 @@ def process_webhook_request(
 
     if builder_registry is None or runner is None or config_factory is None or store is None:
         # The webhook handler is partially wired (e.g. unit tests that
-        # only exercise routing). Keep the legacy 202 + reason
-        # response so the GitHub deliveries UI stays green.
+        # only exercise routing). Keep returning 202 + reason so the
+        # GitHub deliveries UI stays green.
         return WebhookResponse(status=202, body=base_body)
 
     try:

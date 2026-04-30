@@ -97,13 +97,13 @@ def apply_verification_result(
     downloadable verification artifacts the agent uploaded. The cron
     poller passes through the same ``WorkflowProgressComment`` shape
     that ``main`` constructs so the rendered comment metadata is
-    identical between the GitHub Actions and Vercel paths.
+    identical between synchronous and cron-applied paths.
 
     *progress* is the reconstructed :class:`WorkflowProgressComment` the
     Vercel cron handler hands in so the final ``replace_body`` call
     lands on the comment posted at dispatch time. Callers that omit it
-    fall back to constructing a fresh instance, which keeps the legacy
-    GHA runtime contract.
+    fall back to constructing a fresh instance for compatibility with
+    synchronous invocation.
     """
     if progress is None:
         progress = WorkflowProgressComment(

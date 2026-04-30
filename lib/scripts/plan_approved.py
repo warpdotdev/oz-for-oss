@@ -53,9 +53,7 @@ _SPEC_BRANCH_PATTERN = re.compile(r"(?:^|/)spec-issue-\d+(?:$|[/-])")
 def _is_spec_pr(pr_obj: Any, changed_files: list[str]) -> bool:
     """Return True when *pr_obj* looks like a spec PR.
 
-    Mirrors the legacy ``_is_spec_pr`` helper from
-    ``.github/scripts/trigger_implementation_on_plan_approved.py``: a
-    PR qualifies when its head branch matches the agent's
+    A PR qualifies when its head branch matches the agent's
     ``oz-agent/spec-issue-{N}`` naming convention OR every changed
     file lives under ``specs/``. This keeps the plan-approved flow
     from firing on arbitrary non-spec PRs that merely reference an
@@ -74,9 +72,8 @@ def _is_spec_pr(pr_obj: Any, changed_files: list[str]) -> bool:
 def _build_plan_approved_comment(*, owner: str, repo: str, pr_number: int) -> str:
     """Return the spec-approved comment body posted on the linked issue.
 
-    Wording mirrors ``.github/workflows/comment-on-plan-approved.yml``
-    so in-flight ``plan-approved`` PRs see byte-for-byte identical
-    notifications across the migration boundary.
+    Wording is kept stable so in-flight ``plan-approved`` PRs see
+    consistent notifications across deployments.
     """
     pr_url = f"https://github.com/{owner}/{repo}/pull/{pr_number}"
     return (
@@ -195,7 +192,7 @@ def apply_plan_approved_sync(
             )
 
     # Remove the ``ready-to-spec`` label so the issue's lifecycle
-    # advances. Mirrors ``.github/scripts/remove_stale_issue_labels_on_plan_approved.py``.
+    # advances.
     label_names = {
         str(getattr(label, "name", "") or "")
         for label in (issue_handle.labels or [])

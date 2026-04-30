@@ -18,11 +18,9 @@ and runs inline inside the Vercel webhook function. Idempotency is
 enforced via a workflow-scoped ``oz-agent-metadata`` marker so retried
 webhook deliveries do not double-post the announcement.
 
-This module is the migration target for the legacy
-``.github/workflows/comment-on-ready-to-implement.yml`` and
-``.github/workflows/comment-on-ready-to-spec.yml`` adapters; both YAMLs
-are deleted once the webhook owns this behavior so the GitHub Actions
-runtime does not race the Vercel function.
+This module owns the webhook-era replacement for the deleted
+ready-issue announcement adapters, so the Vercel function is the single
+runtime for this behavior.
 """
 
 from __future__ import annotations

@@ -19,10 +19,9 @@ It must NOT touch:
 
 - `.agents/skills/dedupe-issue/SKILL.md` (the core contract)
 - `.agents/skills/triage-issue-local/SKILL.md` (owned by `update-triage`)
-- any file under `.github/scripts/`
 - any other core skill
 
-The Python entrypoint (`update_dedupe.py`) enforces this via a `git diff` check against allowed prefixes before pushing. A violation aborts the run.
+The self-improvement runner enforces this via a `git diff` check against allowed prefixes before pushing. A violation aborts the run.
 
 ## Inputs
 

@@ -54,10 +54,6 @@ class RoleForWorkflowTest(unittest.TestCase):
     def test_review_triage_role_for_triage_workflow(self) -> None:
         self.assertEqual(role_for_workflow("triage-new-issues"), "review-triage")
 
-    def test_review_triage_role_for_respond_to_triaged_workflow(self) -> None:
-        self.assertEqual(
-            role_for_workflow("respond-to-triaged-issue-comment"), "review-triage"
-        )
 
     def test_default_role_for_other_workflows(self) -> None:
         self.assertEqual(role_for_workflow("create-spec-from-issue"), "default")
@@ -70,7 +66,6 @@ class RoleForWorkflowTest(unittest.TestCase):
             set(WORKFLOW_ROLES.keys()),
             {
                 "triage-new-issues",
-                "respond-to-triaged-issue-comment",
                 "review-pull-request",
             },
         )

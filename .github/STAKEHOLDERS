@@ -2,9 +2,13 @@
 # NOTE: This file is advisory only — GitHub does not enforce it.
 
 # --- Workflow and automation ---
-/.github/scripts/ @captainsafia
+/.agents/skills/ @captainsafia
 /.github/workflows/ @captainsafia
 /.github/issue-triage/ @captainsafia
+/api/ @captainsafia
+/lib/ @captainsafia
+/requirements.txt @captainsafia
+/vercel.json @captainsafia
 
 # --- Documentation and plans ---
 /README.md @captainsafia

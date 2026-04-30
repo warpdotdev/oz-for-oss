@@ -8,10 +8,9 @@ poller to drain.
 This module intentionally keeps prompt construction abstract:
 ``PromptBuilder`` is a callable contract so the webhook handler can
 plug in workflow-specific prompt builders without coupling the
-dispatcher to GitHub/PR/Issue specifics. The default builders live
-alongside the existing GitHub Actions entrypoints in
-``.github/scripts/`` and are re-imported by the Vercel runtime when the
-control plane is the active webhook target.
+dispatcher to GitHub/PR/Issue specifics. The default builders live in
+``lib/builders.py`` and delegate workflow-specific context gathering,
+prompt construction, and result application to ``lib/scripts``.
 """
 
 from __future__ import annotations
@@ -35,7 +34,6 @@ _DEFAULT_ROLE = "default"
 
 WORKFLOW_ROLES: Mapping[str, str] = {
     "triage-new-issues": _REVIEW_TRIAGE_ROLE,
-    "respond-to-triaged-issue-comment": _REVIEW_TRIAGE_ROLE,
     "review-pull-request": _REVIEW_TRIAGE_ROLE,
 }
 
@@ -74,7 +72,8 @@ def cloud_skill_spec(skill_name: str, *, workflow_repo: str | None = None) -> st
     ``invalid skill_spec format: missing ':' separator``; this helper
     exists so the dispatcher can produce valid specs from inside the
     Vercel runtime, which has no filesystem access to the skill files
-    that the legacy ``oz_workflows.oz_client.skill_spec`` checks against.
+    that ``oz_workflows.oz_client.skill_spec`` checks against in
+    workspace-backed invocations.
     """
     if not skill_name:
         return skill_name

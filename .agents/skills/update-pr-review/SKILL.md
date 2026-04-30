@@ -20,11 +20,10 @@ It must NOT touch:
 
 - `.agents/skills/review-pr/SKILL.md` (the core contract)
 - `.agents/skills/review-spec/SKILL.md` (the core contract)
-- any file under `.github/scripts/`
 - any file under `.github/issue-triage/` (that taxonomy is owned by the `update-triage` loop)
 - any other core skill
 
-The Python entrypoint (`update_pr_review.py`) enforces this via a `git diff` check against allowed prefixes before pushing. A violation aborts the run.
+The self-improvement runner enforces this via a `git diff` check against allowed prefixes before pushing. A violation aborts the run.
 
 ## Inputs
 

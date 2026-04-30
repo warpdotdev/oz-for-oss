@@ -19,11 +19,10 @@ This self-improvement loop may only write to:
 It must NOT touch:
 
 - `.agents/skills/triage-issue/SKILL.md` (the core contract)
-- any file under `.github/scripts/`
 - any other core skill
 - the dedupe companion `.agents/skills/dedupe-issue-local/SKILL.md` (owned by `update-dedupe`)
 
-The Python entrypoint (`update_triage.py`) enforces this via a `git diff` check against allowed prefixes before pushing. A violation aborts the run.
+The self-improvement runner enforces this via a `git diff` check against allowed prefixes before pushing. A violation aborts the run.
 
 ## Inputs
 

@@ -48,7 +48,7 @@ Marking an issue as ready is not meant to lock it. It just means the repo is ope
 
 ## Local development
 
-The webhook control plane (`api/`, `lib/`, `tests/`, `vercel.json`) is the delivery surface for PR-triggered flows; the GitHub Actions workflows under `.github/workflows/` still handle issue-triggered, plan-approval, and self-improvement flows. Both surfaces share the Python helpers in `lib/oz_workflows/` and `lib/scripts/`.
+The Vercel webhook control plane (`api/`, `lib/`, `tests/`, `vercel.json`) is the delivery surface for agent-backed flows. GitHub Actions is used only for repository CI.
 
 ### Set up the Python env
 
@@ -62,17 +62,13 @@ python -m pip install -r requirements.txt
 python -m pip install 'pytest>=8,<9' 'pytest-subtests>=0.13,<1'
 ```
 
-### Run the test suites
+### Run the test suite
 
 ```sh
-# Webhook + dispatcher tests
 python -m pytest tests
-
-# Shared helper + GitHub Actions entrypoint tests
-PYTHONPATH=lib:.github/scripts python -m unittest discover -s .github/scripts/tests
 ```
 
-`run-tests.yml` runs both suites on every pull request.
+`run-tests.yml` runs this suite on every pull request.
 
 ### Run the webhook locally
 
@@ -86,11 +82,7 @@ vercel dev
 BODY='{"action":"opened","pull_request":{"number":42,"state":"open","draft":false,"user":{"login":"alice","type":"User"}},"repository":{"full_name":"acme/widgets"},"installation":{"id":1234}}'
 SECRET="$OZ_GITHUB_WEBHOOK_SECRET"
 SIGNATURE="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')"
-curl -sS -X POST http://localhost:3000/api/webhook \
-  -H "Content-Type: application/json" \
-  -H "X-GitHub-Event: pull_request" \
-  -H "X-Hub-Signature-256: $SIGNATURE" \
-  --data "$BODY"
+curl -sS -X POST http://localhost:3000/api/webhook   -H "Content-Type: application/json"   -H "X-GitHub-Event: pull_request"   -H "X-Hub-Signature-256: $SIGNATURE"   --data "$BODY"
 ```
 
 The handler returns 202 with the routed workflow id (or `null` when the event is intentionally ignored). Run `python -m pytest tests` to exercise the same logic without the HTTP plumbing.

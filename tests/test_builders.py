@@ -1,11 +1,10 @@
 """Tests for ``control_plane.lib.builders``.
 
-The builders are thin wrappers around the ``gather_*_context`` /
-``build_*_prompt`` helpers exposed by the GitHub Actions entrypoints.
-The mirrored copies live under ``control-plane/lib/scripts/`` after
-``scripts/vercel_install.sh`` runs. The tests stub each gather/build
-helper so the assertions stay focused on builder wiring (payload
-parsing, repo handle resolution, DispatchRequest shape).
+The builders are thin wrappers around the workflow-specific
+``gather_*_context`` / ``build_*_prompt`` helpers in ``lib/scripts``.
+The tests stub each gather/build helper so the assertions stay focused
+on builder wiring (payload parsing, repo handle resolution,
+DispatchRequest shape).
 """
 
 from __future__ import annotations

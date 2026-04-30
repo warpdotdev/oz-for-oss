@@ -29,12 +29,12 @@ _SESSION_SHARING_SUPPORTED_LEVELS = {"VIEWER", "EDITOR"}
 
 
 def notice(message: str) -> None:
-    """Emit a GitHub Actions notice annotation."""
+    """Emit a CI-compatible notice annotation."""
     print(f"::notice::{message}")
 
 
 def warning(message: str) -> None:
-    """Emit a GitHub Actions warning annotation."""
+    """Emit a CI-compatible warning annotation."""
     print(f"::warning::{message}")
 
 
@@ -50,12 +50,12 @@ def oz_api_base_url() -> str:
 
 
 def build_oz_client() -> OzAPI:
-    """Build an authenticated Oz SDK client for GitHub Actions workflows."""
+    """Build an authenticated Oz SDK client for workflow helpers."""
     return OzAPI(
         api_key=require_env("WARP_API_KEY"),
         base_url=oz_api_base_url(),
         default_headers={
-            "x-oz-api-source": "GITHUB_ACTION",
+            "x-oz-api-source": "WEBHOOK_CONTROL_PLANE",
         },
     )
 
@@ -89,8 +89,8 @@ def _resolve_session_sharing_public_access() -> str | None:
 # environment-id env var is consulted first when picking a cloud
 # environment for the run. ``"review-triage"`` covers the workflows that
 # share the dedicated review/triage environment (PR review, issue
-# triage, respond-to-triaged-issue-comment); every other workflow keeps
-# using ``WARP_ENVIRONMENT_ID`` directly.
+# triage); every other workflow keeps using ``WARP_ENVIRONMENT_ID``
+# directly.
 ROLE_REVIEW_TRIAGE = "review-triage"
 ROLE_DEFAULT = "default"
 _KNOWN_ROLES = {ROLE_DEFAULT, ROLE_REVIEW_TRIAGE}
@@ -253,9 +253,9 @@ def dispatch_run(
     returns 202 immediately. The cron poller then drains the run on the
     next tick and applies the result back to GitHub.
 
-    The legacy GitHub Actions path still wants the synchronous behavior,
-    so :func:`run_agent` wraps this helper plus the existing polling
-    loop and surfaces the terminal :class:`RunItem`.
+    Synchronous callers can use :func:`run_agent`, which wraps this
+    helper plus the existing polling loop and surfaces the terminal
+    :class:`RunItem`.
 
     *client* is parameterized so callers (the cron poller, the webhook
     handler) that have already constructed an :class:`OzAPI` instance can
@@ -286,8 +286,8 @@ def run_agent(
     """Run an Oz agent and poll until it reaches a terminal state.
 
     Wraps :func:`dispatch_run` (fire-and-forget) plus a polling loop so
-    the legacy GitHub Actions entrypoints retain their synchronous
-    behavior. Cloud-mode dispatch in the Vercel control plane uses
+    synchronous compatibility path retains its blocking behavior.
+    Cloud-mode dispatch in the Vercel control plane uses
     :func:`dispatch_run` directly and lets the cron poller observe the
     terminal state.
     """

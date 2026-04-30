@@ -58,11 +58,10 @@ def _parse_stakeholders_lines(text: str) -> list[dict[str, Any]]:
 def load_stakeholders(path: Path) -> list[dict[str, Any]]:
     """Parse a CODEOWNERS-style STAKEHOLDERS file into structured entries.
 
-    Used by the legacy GitHub Actions paths that have the consuming
-    repository checked out under the runner's workspace. Vercel-mode
-    callers should use :func:`load_stakeholders_from_repo` instead so
-    the file is read via the GitHub API on the repository that
-    triggered the webhook.
+    Used by workspace-backed callers that have the consuming repository
+    checked out locally. Vercel-mode callers should use
+    :func:`load_stakeholders_from_repo` instead so the file is read via
+    the GitHub API on the repository that triggered the webhook.
 
     Each non-comment, non-blank line is expected to have the form:
         <pattern> @owner1 @owner2 ...

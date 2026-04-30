@@ -88,12 +88,11 @@ When the prompt says you are running in a cloud workflow:
 - still perform the triage as above
 - do not apply labels or edit the issue directly yourself
 - after validating the result file the prompt names (for example
-  `triage_result.json` for triage runs or `issue_response.json` for
-  respond-to-triaged-issue-comment runs) with `jq`, upload it as an
-  artifact via `oz artifact upload <filename>.json` (or
-  `oz-preview artifact upload <filename>.json` if the `oz` CLI is not
-  available). The host workflow downloads the artifact after the run
-  reaches a terminal state and applies the result back to GitHub.
+  `triage_result.json`) with `jq`, upload it as an artifact via
+  `oz artifact upload <filename>.json` (or `oz-preview artifact upload
+  <filename>.json` if the `oz` CLI is not available). The host workflow
+  downloads the artifact after the run reaches a terminal state and
+  applies the result back to GitHub.
 - IMPORTANT: the upload subcommand is `artifact` (singular) on both
   `oz` and `oz-preview`. Do not use `artifacts` (plural) — that is not
   a valid subcommand and will fail.

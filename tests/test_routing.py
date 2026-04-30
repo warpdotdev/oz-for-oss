@@ -1,7 +1,7 @@
 """Tests for ``lib.routing``.
 
 The webhook router owns every issue-driven and PR-driven Oz workflow
-that the legacy ``.github/workflows/`` adapters used to host. These
+that the deleted ``.github/workflows/`` adapters used to host. These
 tests cover the routes the webhook actually delivers and confirm that
 out-of-band variants (non-Oz assignees, mismatched labels, etc.) are
 dropped with a descriptive reason rather than dispatched anyway.
@@ -353,10 +353,8 @@ class IssueCommentEventTest(unittest.TestCase):
     def test_oz_agent_mention_on_triaged_plain_issue_routes_to_triage(self) -> None:
         # Mentioning the bot on a triaged issue should re-trigger triage
         # so any new context in the conversation is incorporated; this
-        # closes the lifecycle gap where issues with
-        # ``ready-to-implement`` would otherwise fall through both the
-        # webhook and the legacy ``respond-to-triaged-issue-comment``
-        # workflow (which excludes ``ready-to-implement``).
+        # closes the lifecycle gap where triaged issues with new
+        # follow-up context should get another pass.
         decision = route_event(
             "issue_comment",
             {

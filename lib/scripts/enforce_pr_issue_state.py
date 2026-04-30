@@ -137,9 +137,9 @@ def enforce_pr_state_synchronously(
     Returns an :class:`EnforceDecision` describing what the caller should
     do. Mutations on the PR (closing, posting the close comment, cleaning
     up the progress comment) are applied here when the caller passes a
-    *progress* helper, mirroring the legacy GitHub Actions ``main()``.
-    Callers that want to apply the GitHub state changes themselves (the
-    Vercel webhook) can pass ``progress=None`` and read the decision.
+    *progress* helper. Callers that want to apply the GitHub state
+    changes themselves (the Vercel webhook) can pass ``progress=None``
+    and read the decision.
     """
     pr = github.get_pull(pr_number)
     if pr.state != "open":
@@ -288,16 +288,14 @@ def apply_issue_association_result(
 ) -> None:
     """Apply the cloud agent's issue-association decision back to GitHub.
 
-    Mirrors the trailing branch of the legacy ``main()`` after the
-    cloud agent has produced ``issue_association.json``: cleans up the
-    progress comment on a match, otherwise posts the close comment +
-    closes the PR.
+    Applies the cloud agent's ``issue_association.json`` result: cleans
+    up the progress comment on a match, otherwise posts the close
+    comment and closes the PR.
 
     *progress* is the reconstructed :class:`WorkflowProgressComment` the
     Vercel cron handler hands in so cleanup / completion lands on the
     comment posted at dispatch time. Callers that omit it fall back to
-    constructing a fresh instance, which keeps the legacy GHA runtime
-    contract.
+    constructing a fresh instance.
     """
     owner = str(context["owner"])
     repo = str(context["repo"])
@@ -365,8 +363,7 @@ def main() -> None:
             set_output("allow_review", "false")
             return
         # ``need-cloud-match``: dispatch the cloud agent and apply the
-        # result inline so the GitHub Actions path keeps the synchronous
-        # behavior the workflow YAML expects.
+        # result inline for synchronous callers.
         context = decision.context
         if context is None:
             raise RuntimeError("need-cloud-match decision must include an EnforceContext")
@@ -389,8 +386,8 @@ def main() -> None:
         except Exception:
             progress.report_error()
             raise
-        # Reuse the apply helper so the cloud-mode path (Vercel) and the
-        # GitHub Actions path stay byte-for-byte identical.
+        # Reuse the apply helper so synchronous and webhook callers use
+        # the same GitHub mutation logic.
         run_for_apply = run
         if session_links and not getattr(run_for_apply, "session_link", None):
             try:

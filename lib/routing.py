@@ -8,16 +8,10 @@ the event is deliberately ignored — for example, automation-authored
 comments, unsupported event types, or PRs that close without changes.
 
 The webhook is the sole delivery surface for the bot behavior that
-the control plane drives. The legacy GitHub Actions adapters that
-used to mirror these triggers (``create-spec-from-issue-local.yml``,
-``create-implementation-from-issue-local.yml``,
-``trigger-implementation-on-plan-approved.yml``, etc.) are deleted
-as routing moves into this module so the webhook does not race the
-runner. The few remaining ``.github/workflows/`` entries cover
-cron-driven feedback aggregators (``update-pr-review``,
-``update-triage``, ``update-dedupe``), the
-``comment-on-unready-assigned-issue`` complement of the
-webhook's ``issues.assigned`` route, and CI (``run-tests.yml``).
+the control plane drives. The older Actions adapters that used to
+mirror these triggers are deleted so webhook dispatch is the only bot
+runtime. The remaining ``.github/workflows/`` entry is repository CI
+(``run-tests.yml``).
 
 Webhook coverage today:
 
@@ -65,20 +59,10 @@ Webhook coverage today:
 
 - ``issue_comment`` events on a plain (non-PR) issue route to
   ``triage-new-issues`` when the comment carries an ``@oz-agent``
-  mention (regardless of triaged / needs-info / ready-to-implement
-  state) or when the issue carries the ``needs-info`` label and the
-  comment is the original reporter replying without a mention. The
-  triage workflow then picks the comment shape it returns from the
-  ``comment_type`` discriminator on its result payload — a fresh
-  triage emits the standard structured comment plus label changes,
-  and a follow-up question on an already-triaged issue emits the
-  lighter response-style comment without touching labels.
-
-The ``respond-to-triaged-issue-comment`` GitHub Actions workflow may
-still fire on ``@oz-agent`` mentions for ``triaged`` issues that are
-not yet ``ready-to-spec`` or ``ready-to-implement``; operators can
-remove that workflow once they are comfortable letting triage handle
-every mention.
+  mention and the issue is not already ready for spec or implementation.
+  Mentions on ``ready-to-spec`` or ``ready-to-implement`` issues route
+  directly to the matching spec or implementation workflow. Replies from
+  the original reporter on ``needs-info`` issues also route to triage.
 """
 
 from __future__ import annotations
@@ -89,9 +73,7 @@ from typing import Any
 # Workflow identifiers the dispatcher knows how to handle. These strings
 # are used as state-store keys and as ``RouteDecision.workflow`` values
 # so adding a new workflow only requires touching the dispatcher and
-# this module. Issue-triggered and plan-approval workflows live in
-# ``.github/workflows/`` and are intentionally not exposed here so the
-# webhook does not race with the GitHub Actions runtime.
+# this module.
 WORKFLOW_REVIEW_PR = "review-pull-request"
 WORKFLOW_RESPOND_TO_PR_COMMENT = "respond-to-pr-comment"
 WORKFLOW_VERIFY_PR_COMMENT = "verify-pr-comment"
@@ -204,21 +186,13 @@ def _route_plain_issue_comment(
 ) -> RouteDecision:
     """Route an ``issue_comment`` event on a plain (non-PR) issue.
 
-    Triage runs are dispatched on every ``@oz-agent`` mention, regardless
-    of the issue's lifecycle stage — ``triaged``,
-    ``ready-to-implement``, ``ready-to-spec``, or ``needs-info`` issues
-    all route to the triage workflow when a maintainer or reporter
-    pings the bot. The triage workflow itself decides whether to emit
-    a fresh triage comment (with labels, follow-ups, and duplicate
-    detection) or a lighter ``response``-type comment that just answers
-    the question without changing the issue's lifecycle labels; the
-    routing layer does not need to make that distinction. Issues that
-    have already progressed to ``ready-to-spec`` / ``ready-to-implement``
-    would otherwise fall into a gap: the legacy
-    ``respond-to-triaged-issue-comment`` workflow excludes them and any
-    new context a maintainer adds would never be acknowledged. Routing
-    every mention to the triage workflow closes that gap and lets the
-    workflow's ``comment_type`` discriminator pick the right reply.
+    Triage runs are dispatched for ``@oz-agent`` mentions unless the
+    issue has already moved into a ready-for-work lifecycle state. On
+    ``ready-to-spec`` issues, a mention starts or refreshes the spec
+    workflow; on ``ready-to-implement`` issues, it starts or refreshes
+    the implementation workflow. Other mentions route to triage, whose
+    ``comment_type`` discriminator decides whether to emit a full triage
+    mutation or a lighter response-style comment.
 
     Replies from the original issue author on a ``needs-info`` issue
     (without an explicit mention) also trigger a re-triage so the bot

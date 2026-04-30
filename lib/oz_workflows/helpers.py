@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 def _github_actions_error(message: str) -> None:
-    """Emit a GitHub Actions error annotation."""
+    """Emit a CI-compatible error annotation."""
     print(f"::error::{message}")
 
 
@@ -111,7 +111,7 @@ def is_automation_user(user: Any) -> bool:
 
 
 def is_trusted_commenter(client: Any, event_payload: dict[str, Any], *, org: str) -> bool:
-    """Return whether the triggering comment author is trusted for legacy GHA flows."""
+    """Return whether the triggering comment author is trusted."""
     comment = event_payload.get("comment")
     if not isinstance(comment, dict):
         return False
@@ -493,7 +493,7 @@ def format_enforce_start_line(
 
 
 def _workflow_run_url() -> str:
-    """Build the GitHub Actions workflow run URL from environment variables."""
+    """Build the workflow run URL from environment variables."""
     server_url = optional_env("GITHUB_SERVER_URL") or "https://github.com"
     repository = optional_env("GITHUB_REPOSITORY")
     run_id = optional_env("GITHUB_RUN_ID")
@@ -631,8 +631,8 @@ class WorkflowProgressComment:
         # id captured mid-run) alongside the GitHub comment id so the
         # cron poller can reconstruct an instance that targets the
         # exact comment posted at dispatch time. When the caller does
-        # not provide a ``run_id`` we fall back to a fresh uuid so the
-        # legacy GHA path keeps generating run-scoped metadata.
+        # not provide a ``run_id`` we fall back to a fresh uuid so
+        # synchronous callers keep generating run-scoped metadata.
         self.run_id = (run_id or "").strip() or uuid.uuid4().hex
         self.github_run_id = optional_env("GITHUB_RUN_ID")
         self.oz_run_id: str = (oz_run_id or "").strip()
@@ -680,8 +680,8 @@ class WorkflowProgressComment:
 
         When the Oz run id becomes known mid-run (after ``client.agent.run``
         returns its run id), fold it into the comment metadata so the marker
-        on the GitHub comment captures the Oz run id alongside the GitHub
-        Actions run id.
+        on the GitHub comment captures the Oz run id alongside the hosting
+        workflow run id.
         """
         normalized = (oz_run_id or "").strip()
         if not normalized or normalized == self.oz_run_id:
@@ -725,7 +725,7 @@ class WorkflowProgressComment:
         it via ``resolve_progress_requester_login`` (which can trigger an
         events API lookup through ``resolve_oz_assigner_login``). When the
         fallback comment write itself fails, surface the problem via logs
-        and a GitHub Actions ``::error::`` annotation instead of silently
+        and a CI-compatible ``::error::`` annotation instead of silently
         swallowing the exception.
         """
         run_url = _workflow_run_url()
@@ -877,13 +877,13 @@ class WorkflowProgressComment:
           create-comment request server-side, those retries produce
           duplicates that all share this run's unique ``run_id`` marker.
         - Multiple ``WorkflowProgressComment`` instances created during
-          the same GitHub Actions run can both list comments, see no
+          the same hosting workflow run can both list comments, see no
           existing same-run match, and create their own comment before
           either learns of the other. The resulting comments share the
           stable workflow+issue prefix and the same ``github_run_id``.
 
         In both cases, gather every progress comment for this
-        workflow+issue that belongs to the current GitHub Actions run,
+        workflow+issue that belongs to the current hosting workflow run,
         keep the oldest (lowest-numbered) as the canonical entry, and
         delete the rest. Return the id of the canonical comment so the
         caller can adopt it as its own ``comment_id``. Best-effort: if
@@ -937,7 +937,7 @@ class WorkflowProgressComment:
             except UnknownObjectException:
                 self.comment_id = None
         # Reuse only comments that belong to this workflow+issue and the
-        # current GitHub Actions run. A later run should create a fresh
+        # current hosting workflow run. A later run should create a fresh
         # progress comment rather than appending onto an earlier run's
         # history.
         comments = self._list_comments()

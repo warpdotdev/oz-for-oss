@@ -59,8 +59,8 @@ class NonTerminalHandler(Protocol):
     """Updates the progress comment while a run is still pending.
 
     The cron poller invokes this hook on every poll where the Oz run
-    has not yet reached a terminal state. It is the cron equivalent of
-    the legacy ``on_poll`` callback the GHA path passes to
+    has not yet reached a terminal state. It is the cron-side equivalent
+    of the ``on_poll`` callback synchronous callers pass to
     :func:`run_agent` and is wired by :mod:`lib.handlers` to call
     :func:`oz_workflows.helpers.record_run_session_link`. Implementations
     must absorb their own exceptions so a transient GitHub API failure

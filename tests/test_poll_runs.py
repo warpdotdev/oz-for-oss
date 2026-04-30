@@ -85,8 +85,8 @@ class DrainInFlightRunsTest(unittest.TestCase):
     def test_pending_run_invokes_non_terminal_handler(self) -> None:
         """On a non-terminal poll, the handler must drive progress forward.
 
-        This is the cron-side equivalent of the legacy ``on_poll``
-        callback the GHA path passes to ``run_agent``: the handler is
+        This is the cron-side equivalent of the ``on_poll`` callback
+        synchronous callers pass to ``run_agent``: the handler is
         responsible for surfacing the session-share link on the
         progress comment as soon as Oz reports it.
         """

@@ -59,7 +59,7 @@ class _PlanApprovedTestBase(unittest.TestCase):
         oz.helpers = helpers  # type: ignore[attr-defined]
 
         # Stub the helpers used by ``apply_plan_approved_sync``. The
-        # real implementations are exercised in the legacy GHA suite.
+        # real implementations are exercised by their own unit tests.
         helpers._workflow_metadata_prefix = MagicMock(  # type: ignore[attr-defined]
             return_value=(
                 '<!-- oz-agent-metadata: {"type":"issue-status","workflow":"plan-approved","issue":91'
@@ -288,7 +288,7 @@ class ApplyPlanApprovedSyncTest(_PlanApprovedTestBase):
     def test_spec_only_filenames_qualify_without_spec_branch(self) -> None:
         # PR on an unusual branch still qualifies if every changed
         # file lives under ``specs/``. This mirrors the spec-only
-        # heuristic in the legacy trigger script.
+        # heuristic used by the sync helper.
         from scripts.plan_approved import apply_plan_approved_sync
 
         pr = _pr_obj(

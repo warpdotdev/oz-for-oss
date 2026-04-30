@@ -49,11 +49,11 @@ def resolve_repo_local_skill_path(
     frontmatter (no body) is treated as absent so the caller can omit the
     companion reference entirely.
 
-    Used by the legacy GitHub Actions paths that have the consuming
-    repository checked out under the runner's workspace. Vercel-mode
-    callers should use :func:`repo_local_skill_path_for_dispatch`
-    instead so the file is resolved through the GitHub API on the
-    repository that triggered the webhook.
+    Used by workspace-backed callers that have the consuming repository
+    checked out locally. Vercel-mode callers should use
+    :func:`repo_local_skill_path_for_dispatch` instead so the file is
+    resolved through the GitHub API on the repository that triggered the
+    webhook.
     """
     if not core_skill_name or not core_skill_name.strip():
         return None
@@ -124,8 +124,8 @@ def format_repo_local_prompt_section(
     usual skill-read path.
 
     *companion_path* accepts either an absolute :class:`pathlib.Path`
-    (legacy GitHub Actions path with a workspace checkout) or a
-    repo-relative string (Vercel cloud-mode path returned by
+    (workspace-backed path) or a repo-relative string (Vercel cloud-mode
+    path returned by
     :func:`repo_local_skill_path_for_dispatch`). The agent reads the
     file via its inherited cwd in either case.
     """

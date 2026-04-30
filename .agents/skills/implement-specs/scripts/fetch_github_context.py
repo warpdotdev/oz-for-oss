@@ -53,7 +53,7 @@ Set ``GH_TOKEN`` or ``GITHUB_TOKEN`` in the environment. Then::
         --repo OWNER/REPO --number N
 
 The default repository is the current ``GITHUB_REPOSITORY`` environment
-variable, so ``--repo`` is optional inside GitHub Actions runners.
+variable, so ``--repo`` is optional inside workflow runners that set it.
 """
 
 from __future__ import annotations

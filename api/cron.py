@@ -7,10 +7,8 @@ via the registered :class:`~control_plane.lib.poll_runs.WorkflowHandlers`.
 
 The handler registers concrete result appliers for the live
 webhook-served workflows: PR review, respond-to-PR-comment,
-verification, PR/issue state enforcement, and issue triage. The
-respond-to-triaged-issue-comment, plan-approval, and self-improvement
-workflows remain on the legacy GitHub Actions path until their
-builders and handlers are added in a follow-up.
+verification, PR/issue state enforcement, issue triage, spec creation,
+implementation creation, and the plan-approved handoff.
 """
 
 from __future__ import annotations

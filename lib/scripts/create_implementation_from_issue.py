@@ -11,10 +11,7 @@ run, polls for the agent's ``pr-metadata.json`` artifact, and calls
 linked approved spec PR's title/body, update an existing draft
 implementation PR, or open a new draft implementation PR.
 
-The legacy GitHub Actions entrypoint
-(``.github/scripts/create_implementation_from_issue.py``) keeps the
-same prompt-and-apply behavior; this module is the cloud-dispatch
-counterpart so the webhook can drive it without going through GHA.
+This module is used directly by the webhook builder and cron handler.
 """
 
 from __future__ import annotations
@@ -70,10 +67,8 @@ def build_create_implementation_prompt(
 ) -> str:
     """Render the cloud-mode create-implementation prompt.
 
-    Mirrors the prompt assembled by the legacy
-    ``.github/scripts/create_implementation_from_issue.py`` ``main()`` so
-    the cloud-dispatch and GHA paths feed the agent the same
-    instructions.
+    Used by the webhook dispatch path to feed the implementation agent
+    the issue/spec context and required handoff contract.
     """
     return dedent(
         f"""
@@ -298,9 +293,8 @@ def build_create_implementation_prompt_for_dispatch(
 ) -> str:
     """Build the create-implementation prompt from a serialized context.
 
-    The prompt body is byte-for-byte identical to the one assembled
-    inside the legacy GHA ``main()`` so cloud-dispatch and GHA paths
-    feed the agent the same instructions.
+    The prompt body is produced by :func:`build_create_implementation_prompt`
+    so all callers feed the agent the same instructions.
     """
     return build_create_implementation_prompt(
         owner=str(context["owner"]),

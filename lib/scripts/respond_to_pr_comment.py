@@ -81,9 +81,8 @@ def gather_pr_comment_context(
     cron poller never re-runs this and instead reads from
     ``RunState.payload_subset``.
 
-    Callers that already have a :class:`PullRequest` handle (the legacy
-    ``main()`` path) may pass it via *pr* to avoid an additional GitHub
-    API round trip.
+    Callers that already have a :class:`PullRequest` handle may pass it
+    via *pr* to avoid an additional GitHub API round trip.
     """
     if pr is None:
         pr = github.get_pull(pr_number)
@@ -95,9 +94,9 @@ def gather_pr_comment_context(
     # Resolve spec context fully through the GitHub API so the cloud
     # path picks up ``specs/GH<N>/`` directory specs even though the
     # Vercel function does not have the consuming repo on disk. The
-    # legacy GHA path passed *workspace_path* here, which is now
-    # ignored — the API resolver covers both the approved-spec-PR
-    # and directory branches without touching the local filesystem.
+    # *workspace_path* is now ignored — the API resolver covers both the
+    # approved-spec-PR and directory branches without touching the local
+    # filesystem.
     spec_context = resolve_spec_context_for_pr_via_api(
         github,
         owner,
@@ -231,10 +230,9 @@ def apply_pr_comment_result(
 ) -> None:
     """Apply a completed respond-to-pr-comment run back to GitHub.
 
-    Mirrors the trailing portion of :func:`_run_implementation`: checks
-    whether the head branch was updated, refreshes the PR description
-    when ``pr-metadata.json`` was uploaded, replies on resolved review
-    threads, and posts a completion progress comment.
+    Checks whether the head branch was updated, refreshes the PR
+    description when ``pr-metadata.json`` was uploaded, replies on
+    resolved review threads, and posts a completion progress comment.
 
     *result* is reserved for callers that want to feed in pre-loaded
     artifact contents (e.g. tests). Production callers leave it ``None``
@@ -247,8 +245,7 @@ def apply_pr_comment_result(
     *progress* is the reconstructed :class:`WorkflowProgressComment` the
     Vercel cron handler hands in so the final ``complete`` call lands
     on the comment posted at dispatch time. Callers that omit it fall
-    back to constructing a fresh instance, which keeps the legacy GHA
-    runtime contract.
+    back to constructing a fresh instance.
     """
     owner = str(context["owner"])
     repo = str(context["repo"])

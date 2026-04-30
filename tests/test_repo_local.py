@@ -93,9 +93,9 @@ class FormatRepoLocalPromptSectionTest(unittest.TestCase):
         self.assertIn(".agents/skills/review-pr-local/SKILL.md", section)
 
     def test_renders_section_with_path_object(self) -> None:
-        # The legacy GitHub Actions path hands in a workspace-rooted
-        # absolute :class:`pathlib.Path`; the formatter must also
-        # accept it so both delivery surfaces share the same helper.
+        # Workspace-backed callers can hand in an absolute
+        # :class:`pathlib.Path`; the formatter must also accept it so
+        # both path-resolution modes share the same helper.
         from pathlib import Path
 
         section = format_repo_local_prompt_section(

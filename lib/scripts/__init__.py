@@ -1,7 +1,7 @@
-"""Mirrored copies of the GitHub Actions entrypoints.
+"""Workflow-specific helpers used by the webhook control plane.
 
-Vercel install hook (``scripts/vercel_install.sh``) populates this
-directory by copying the four PR-flow entrypoints from
-``.github/scripts/`` so the control plane can reuse their helpers
-without GitHub Actions runtime context.
+Each module owns one workflow's context gathering, prompt construction,
+and GitHub result-application logic. The Vercel webhook builders and
+cron handlers import these helpers directly; they are no longer mirrored
+from separate workflow entrypoints.
 """

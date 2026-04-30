@@ -931,8 +931,8 @@ def _format_spec_context_text(spec_context: Mapping[str, Any]) -> str:
     """Render the spec-context dict from the API resolver as markdown.
 
     Mirrors the format that ``gather_pr_comment_context`` and the
-    legacy bundled ``resolve_spec_context.py`` script produce so the
-    review prompt continues to receive a single text block. Returns
+    bundled ``resolve_spec_context.py`` script produce so the review
+    prompt continues to receive a single text block. Returns
     an empty string when no approved or repository spec context
     applies; ``build_review_prompt_for_dispatch`` then renders the
     "No approved or repository spec context" placeholder for the
@@ -1068,10 +1068,8 @@ def gather_review_context(
       so :func:`apply_review_result` can validate ``review.json``
       without re-fetching the PR diff.
 
-    The legacy GitHub Actions ``main()`` path keeps writing the
-    file-based context out for the cloud agent and uses the same
-    structured fields, so this helper is the single source of truth
-    for both paths.
+    This helper is the single source of truth for the structured review
+    context used by dispatch and result application.
     """
     pr = github.get_pull(pr_number)
     pr_files = list(pr.get_files())
@@ -1144,10 +1142,10 @@ def gather_review_context(
     )
     pr_diff_text = _format_pr_diff(pr_files)
     # Resolve the spec context entirely through the GitHub API. The
-    # legacy workspace-backed resolver shells out to the bundled
+    # workspace-backed resolver shells out to the bundled
     # ``resolve_spec_context.py`` script with ``cwd=workspace_path``,
-    # which on Vercel is ``/tmp`` (no consuming-repo checkout) and
-    # always returns empty. The API resolver finds the linked
+    # which on Vercel is ``/tmp`` (no consuming-repo checkout). The API
+    # resolver finds the linked
     # approved spec PR and falls back to ``specs/GH<N>/{product,tech}.md``
     # on the default branch when no approved spec PR exists.
     spec_context_text = _format_spec_context_text(
@@ -1261,17 +1259,15 @@ def apply_review_result(
 ) -> None:
     """Apply ``review.json`` back to the originating PR.
 
-    Mirrors the trailing branch of :func:`main` but takes the diff
-    line/content maps from the serialized context so the apply step
-    can run without a workspace checkout. Covers both the member-PR
-    ``COMMENT`` flow and the non-member reviewer-request flow.
+    Takes the diff line/content maps from the serialized context so the
+    apply step can run without a workspace checkout. Covers both the
+    member-PR ``COMMENT`` flow and the non-member reviewer-request flow.
 
     *progress* is the reconstructed :class:`WorkflowProgressComment` the
     Vercel cron handler hands in so the final ``complete`` /
     ``replace_body`` calls land on the comment posted at dispatch time.
     Callers that do not supply *progress* fall back to constructing a
-    fresh instance so the legacy GitHub Actions path keeps the same
-    runtime contract.
+    fresh instance.
     """
     owner = str(context["owner"])
     repo = str(context["repo"])

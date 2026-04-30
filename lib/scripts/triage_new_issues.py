@@ -405,10 +405,10 @@ def build_triage_prompt(
 ) -> str:
     """Return the triage prompt string for *issue_number*.
 
-    Pure function so the GitHub Actions entrypoint can be tested in
-    isolation. The companion-skill paths referenced in the prompt point
-    at the workspace checkout that the cloud agent inherits from the
-    workflow runner.
+    Pure function so prompt assembly can be tested in isolation. The
+    companion-skill paths referenced in the prompt point at the
+    workspace checkout that the cloud agent inherits from the workflow
+    runner.
 
     *triage_companion_override* / *dedupe_companion_override* let
     cloud-mode callers supply repo-relative paths resolved through
@@ -1005,10 +1005,8 @@ def format_issue_comments(
 # ---------------------------------------------------------------------------
 # Cloud-mode helpers (Vercel webhook + cron poller).
 #
-# The legacy GitHub Actions ``main()`` path above stays in place for backwards
-# compatibility (and so the module's public surface continues to satisfy the
-# pre-existing unit tests). The helpers below are the ones the Vercel control
-# plane uses: ``gather_triage_context`` is invoked at dispatch time inside
+# The helpers below are the ones the Vercel control plane uses:
+# ``gather_triage_context`` is invoked at dispatch time inside
 # ``api/webhook.py``, ``build_triage_prompt_for_dispatch`` produces the prompt
 # body the cloud agent consumes, and ``apply_triage_result_for_dispatch``
 # applies the resulting ``triage_result.json`` back onto the originating
@@ -1235,10 +1233,9 @@ def build_triage_prompt_for_dispatch(
 ) -> str:
     """Build the cloud-mode triage prompt from a serialized :class:`TriageContext`.
 
-    The prompt body is identical to the one produced by
-    :func:`build_triage_prompt` for the legacy GitHub Actions runner so
-    the security-rules block, output schema, and dedupe instructions
-    stay byte-for-byte aligned across delivery surfaces.
+    The prompt body is produced by :func:`build_triage_prompt` so the
+    security-rules block, output schema, and dedupe instructions stay
+    aligned across callers.
 
     *repo_handle* is the consuming repository handle the webhook
     builder hands in. When provided it lets the prompt resolve the
@@ -1287,11 +1284,11 @@ def build_triage_prompt_for_dispatch(
 class _CloudIssueLike:
     """Adapter used by the cron poller's apply step.
 
-    ``apply_triage_result`` (the legacy applier) takes an *issue*
+    ``apply_triage_result`` takes an *issue*
     object whose attributes match :class:`github.Issue.Issue`. The
     cron poller does not have a fresh issue handle and instead carries
     a :class:`TriageContext` payload. This adapter exposes the subset
-    of attributes the legacy applier reads and forwards label
+    of attributes the shared applier reads and forwards label
     mutations through to a freshly fetched :class:`github.Issue`
     instance.
     """
@@ -1326,7 +1323,7 @@ def apply_triage_result_for_dispatch(
 ) -> None:
     """Apply ``triage_result.json`` back onto the originating issue.
 
-    Mirrors the trailing branch of :func:`process_issue` for the
+    Applies the trailing branch of :func:`process_issue` for the
     cloud-mode delivery path. *github* is a PyGithub
     :class:`Repository` handle, *context* is a serialized
     :class:`TriageContext`, and *progress* is the reconstructed
