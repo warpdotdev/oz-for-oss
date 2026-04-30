@@ -216,11 +216,19 @@ class ApplyReviewResultVerdictTest(unittest.TestCase):
         github.get_pull.return_value = pr
         return github
 
-    def _make_review(self, *, state: str, body: str) -> MagicMock:
+    def _make_review(
+        self,
+        *,
+        state: str,
+        body: str,
+        is_bot: bool = True,
+    ) -> MagicMock:
         review = MagicMock()
         review.state = state
         review.body = body
         review.id = 123
+        review.user.login = "oz-for-oss[bot]" if is_bot else "human-reviewer"
+        review.user.type = "Bot" if is_bot else "User"
         return review
 
     def test_reject_member_pr_uses_comment_event_without_reviewer_request(self) -> None:
@@ -305,6 +313,7 @@ class ApplyReviewResultVerdictTest(unittest.TestCase):
         human_review = self._make_review(
             state="CHANGES_REQUESTED",
             body="Please address this human feedback.",
+            is_bot=False,
         )
         dismissed_review = self._make_review(
             state="DISMISSED",
