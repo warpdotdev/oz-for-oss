@@ -1008,11 +1008,15 @@ def apply_review_result(
         result, diff_line_map, diff_content_map
     )
     verdict = _parse_verdict(result)
-    # On REJECT we emit a real GitHub ``REQUEST_CHANGES`` review action;
-    # on APPROVE we keep the prior ``COMMENT``-only behavior. Reviewer
-    # requests are only issued on APPROVE — a REJECT already signals to
-    # the author that the PR needs changes, so we skip the human ping.
-    event = "REQUEST_CHANGES" if verdict == _VERDICT_REJECT else "COMMENT"
+    # On non-member REJECT we emit a real GitHub ``REQUEST_CHANGES``
+    # review action. Member/collaborator PRs always keep the
+    # ``COMMENT``-only behavior, ignoring the agent verdict so Oz never
+    # leaves blocking review feedback on organization-member PRs.
+    event = (
+        "REQUEST_CHANGES"
+        if is_non_member and verdict == _VERDICT_REJECT
+        else "COMMENT"
+    )
     if is_non_member and verdict == _VERDICT_APPROVE:
         recommended_reviewers = _resolve_recommended_reviewers(
             result,
@@ -1022,15 +1026,15 @@ def apply_review_result(
         )
     else:
         recommended_reviewers = []
-    # The empty-feedback short-circuit still applies only when the agent
-    # approved the PR, has nothing to say, and has no reviewer to ping.
-    # A REJECT must still post a ``REQUEST_CHANGES`` review even when
-    # the agent did not produce a summary or inline comments so the
-    # rejection action lands on GitHub.
+    # The empty-feedback short-circuit applies when there is no feedback
+    # and no reviewer to ping.
+    # A non-member REJECT must still post a ``REQUEST_CHANGES`` review
+    # even when the agent did not produce a summary or inline comments so
+    # the rejection action lands on GitHub.
     if (
         not summary
         and not comments
-        and verdict == _VERDICT_APPROVE
+        and event != "REQUEST_CHANGES"
         and not recommended_reviewers
     ):
         progress.complete(
@@ -1039,7 +1043,7 @@ def apply_review_result(
             )
         )
         return
-    if summary or comments or verdict == _VERDICT_REJECT:
+    if summary or comments or event == "REQUEST_CHANGES":
         review_body = (
             f"{summary or 'Automated review'}\n\n{RETRIGGER_HINT}\n\n{POWERED_BY_SUFFIX}"
         )

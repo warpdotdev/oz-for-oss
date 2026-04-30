@@ -214,7 +214,7 @@ class ApplyReviewResultVerdictTest(unittest.TestCase):
         github.get_pull.return_value = pr
         return github
 
-    def test_reject_member_pr_emits_request_changes_without_reviewer_request(self) -> None:
+    def test_reject_member_pr_uses_comment_event_without_reviewer_request(self) -> None:
         pr = MagicMock()
         github = self._make_github(pr)
         progress = MagicMock()
@@ -227,7 +227,7 @@ class ApplyReviewResultVerdictTest(unittest.TestCase):
         )
         pr.create_review.assert_called_once()
         kwargs = pr.create_review.call_args.kwargs
-        self.assertEqual(kwargs["event"], "REQUEST_CHANGES")
+        self.assertEqual(kwargs["event"], "COMMENT")
         self.assertIn("Needs work", kwargs["body"])
         pr.create_review_request.assert_not_called()
 
@@ -288,13 +288,28 @@ class ApplyReviewResultVerdictTest(unittest.TestCase):
         self.assertEqual(pr.create_review.call_args.kwargs["event"], "COMMENT")
         pr.create_review_request.assert_not_called()
 
-    def test_reject_with_no_summary_still_posts_request_changes(self) -> None:
+    def test_reject_member_pr_with_no_feedback_short_circuits(self) -> None:
         pr = MagicMock()
         github = self._make_github(pr)
         progress = MagicMock()
         apply_review_result(
             github,
             context=self._make_context(is_non_member=False),
+            run=MagicMock(),
+            result={"verdict": "REJECT", "summary": "", "comments": []},
+            progress=progress,
+        )
+        pr.create_review.assert_not_called()
+        pr.create_review_request.assert_not_called()
+        progress.complete.assert_called_once()
+
+    def test_reject_non_member_pr_with_no_summary_still_posts_request_changes(self) -> None:
+        pr = MagicMock()
+        github = self._make_github(pr)
+        progress = MagicMock()
+        apply_review_result(
+            github,
+            context=self._make_context(is_non_member=True),
             run=MagicMock(),
             result={"verdict": "REJECT", "summary": "", "comments": []},
             progress=progress,
@@ -320,7 +335,7 @@ class ApplyReviewResultVerdictTest(unittest.TestCase):
         pr.create_review_request.assert_not_called()
         progress.complete.assert_called_once()
 
-    def test_approve_and_reject_use_identical_review_body_text(self) -> None:
+    def test_member_approve_and_reject_use_identical_review_body_text(self) -> None:
         approve_pr = MagicMock()
         reject_pr = MagicMock()
         progress = MagicMock()
