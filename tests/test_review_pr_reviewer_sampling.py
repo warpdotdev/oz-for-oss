@@ -15,7 +15,9 @@ from workflows.review_pr import (  # type: ignore[import-not-found]
     _resolve_recommended_reviewers,
     _stakeholder_pattern_matches,
     apply_review_result,
+    RETRIGGER_HINT,
 )
+from oz.helpers import POWERED_BY_SUFFIX
 
 
 STAKEHOLDERS = [
@@ -214,6 +216,13 @@ class ApplyReviewResultVerdictTest(unittest.TestCase):
         github.get_pull.return_value = pr
         return github
 
+    def _make_review(self, *, state: str, body: str) -> MagicMock:
+        review = MagicMock()
+        review.state = state
+        review.body = body
+        review.id = 123
+        return review
+
     def test_reject_member_pr_uses_comment_event_without_reviewer_request(self) -> None:
         pr = MagicMock()
         github = self._make_github(pr)
@@ -287,6 +296,63 @@ class ApplyReviewResultVerdictTest(unittest.TestCase):
         pr.create_review.assert_called_once()
         self.assertEqual(pr.create_review.call_args.kwargs["event"], "COMMENT")
         pr.create_review_request.assert_not_called()
+
+    def test_approve_dismisses_previous_oz_request_changes_review(self) -> None:
+        stale_review = self._make_review(
+            state="CHANGES_REQUESTED",
+            body=f"Needs work\n\n{RETRIGGER_HINT}\n\n{POWERED_BY_SUFFIX}",
+        )
+        human_review = self._make_review(
+            state="CHANGES_REQUESTED",
+            body="Please address this human feedback.",
+        )
+        dismissed_review = self._make_review(
+            state="DISMISSED",
+            body=f"Outdated\n\n{RETRIGGER_HINT}",
+        )
+        pr = MagicMock()
+        pr.get_reviews.return_value = [
+            human_review,
+            stale_review,
+            dismissed_review,
+        ]
+        github = self._make_github(pr)
+        progress = MagicMock()
+        apply_review_result(
+            github,
+            context=self._make_context(is_non_member=True),
+            run=MagicMock(),
+            result={
+                "verdict": "APPROVE",
+                "summary": "Looks good",
+                "comments": [],
+                "recommended_reviewers": ["api-owner"],
+            },
+            progress=progress,
+        )
+        stale_review.dismiss.assert_called_once()
+        human_review.dismiss.assert_not_called()
+        dismissed_review.dismiss.assert_not_called()
+
+    def test_approve_without_feedback_still_dismisses_previous_oz_request_changes_review(self) -> None:
+        stale_review = self._make_review(
+            state="CHANGES_REQUESTED",
+            body=f"Needs work\n\n{RETRIGGER_HINT}",
+        )
+        pr = MagicMock()
+        pr.get_reviews.return_value = [stale_review]
+        github = self._make_github(pr)
+        progress = MagicMock()
+        apply_review_result(
+            github,
+            context=self._make_context(is_non_member=False),
+            run=MagicMock(),
+            result={"verdict": "APPROVE", "summary": "", "comments": []},
+            progress=progress,
+        )
+        stale_review.dismiss.assert_called_once()
+        pr.create_review.assert_not_called()
+        progress.complete.assert_called_once()
 
     def test_reject_member_pr_with_no_feedback_short_circuits(self) -> None:
         pr = MagicMock()

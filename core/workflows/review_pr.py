@@ -499,6 +499,10 @@ RETRIGGER_HINT = (
     "(up to 3 times on the same pull request)."
 )
 
+_STALE_REVIEW_DISMISSAL_MESSAGE = (
+    "Oz no longer requests changes for this pull request after the latest automated review."
+)
+
 
 def _with_retrigger_hint(message: str) -> str:
     """Append the ``/oz-review`` retrigger hint to a progress message."""
@@ -522,6 +526,59 @@ def _format_review_completion_message(
     else:
         base = "I completed the review and posted feedback on this pull request."
     return _with_retrigger_hint(base)
+
+
+def _is_stale_oz_changes_requested_review(review: Any) -> bool:
+    """Return whether *review* is an active Oz-authored request-changes review."""
+    state = str(getattr(review, "state", "") or "").strip().upper()
+    if state != "CHANGES_REQUESTED":
+        return False
+    body = str(getattr(review, "body", "") or "")
+    return POWERED_BY_SUFFIX in body or RETRIGGER_HINT in body
+
+
+def _dismiss_stale_oz_changes_requested_reviews(
+    pr: Any,
+    *,
+    owner: str,
+    repo: str,
+) -> int:
+    """Dismiss active Oz ``REQUEST_CHANGES`` reviews that are stale after approval.
+
+    Oz posts real ``REQUEST_CHANGES`` reviews for non-member PR rejections so
+    GitHub blocks merge until the requested changes are addressed. When a later
+    review verdict is ``APPROVE``, dismiss those older Oz-authored reviews so the
+    PR no longer remains blocked by obsolete automated feedback. Human reviews
+    and non-Oz reviews are intentionally left untouched.
+    """
+    try:
+        reviews = list(pr.get_reviews())
+    except Exception:
+        logger.exception(
+            "review-pr: failed to list reviews before dismissing stale Oz changes-requested reviews for %s/%s PR #%s",
+            owner,
+            repo,
+            getattr(pr, "number", "unknown"),
+        )
+        return 0
+
+    dismissed = 0
+    for review in reviews:
+        if not _is_stale_oz_changes_requested_review(review):
+            continue
+        review_id = getattr(review, "id", "unknown")
+        try:
+            review.dismiss(_STALE_REVIEW_DISMISSAL_MESSAGE)
+            dismissed += 1
+        except Exception:
+            logger.exception(
+                "review-pr: failed to dismiss stale Oz changes-requested review %s for %s/%s PR #%s",
+                review_id,
+                owner,
+                repo,
+                getattr(pr, "number", "unknown"),
+            )
+    return dismissed
 
 
 def _format_non_member_review_section(
@@ -1026,6 +1083,12 @@ def apply_review_result(
         )
     else:
         recommended_reviewers = []
+    if verdict == _VERDICT_APPROVE:
+        _dismiss_stale_oz_changes_requested_reviews(
+            pr,
+            owner=owner,
+            repo=repo,
+        )
     # The empty-feedback short-circuit applies when there is no feedback
     # and no reviewer to ping.
     # A non-member REJECT must still post a ``REQUEST_CHANGES`` review
