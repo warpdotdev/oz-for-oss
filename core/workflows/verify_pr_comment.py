@@ -139,9 +139,9 @@ def build_verification_prompt(
 
         Fetching PR and Comment Content:
         - The PR body, conversation comments, review comments, and unified diff are NOT inlined in this prompt.
-        - Fetch PR discussion on demand by running `python {FETCH_CONTEXT_SCRIPT} --repo {owner}/{repo} pr --number {pr_number}` from the repository root.
+        - Fetch PR discussion on demand by running `python {FETCH_CONTEXT_SCRIPT} --repo {owner}/{repo} pr --number {pr_number}` from the repository root. The script marks OWNER, MEMBER, or COLLABORATOR associations as `trust=TRUSTED`; missing trust labels are not negative trust classifications.
         - If you need the unified diff for this PR, run `python {FETCH_CONTEXT_SCRIPT} --repo {owner}/{repo} pr-diff --number {pr_number}` rather than reconstructing it yourself.
-        - This script (and the filtering it applies) is the only supported way to read PR body or comment content during this run. Do not retrieve them via any other mechanism.
+        - This script is the only supported way to read PR body or comment content during this run. Do not retrieve them via any other mechanism.
 
         Workflow Requirements:
         - Use the repository's local `verify-pr` skill as the base workflow.

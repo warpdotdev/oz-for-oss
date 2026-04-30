@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from github import Github
 from github.GithubException import GithubException, UnknownObjectException
@@ -31,7 +30,7 @@ def _github_actions_error(message: str) -> None:
     print(f"::error::{message}")
 
 
-# Author associations that indicate organization membership.
+# Author associations treated as trusted without org-membership probing.
 ORG_MEMBER_ASSOCIATIONS: set[str] = {"COLLABORATOR", "MEMBER", "OWNER"}
 
 _CLOSING_ISSUES_QUERY = (
@@ -109,26 +108,6 @@ def is_automation_user(user: Any) -> bool:
         or (bool(login) and login.endswith("[bot]"))
     )
 
-
-def is_trusted_commenter(client: Any, event_payload: dict[str, Any], *, org: str) -> bool:
-    """Return whether the triggering comment author is trusted."""
-    comment = event_payload.get("comment")
-    if not isinstance(comment, dict):
-        return False
-    association = str(comment.get("author_association") or "").upper()
-    if association in ORG_MEMBER_ASSOCIATIONS:
-        return True
-    login = get_login(comment.get("user"))
-    if not login:
-        return False
-    try:
-        status, _headers, _data = client.requester.requestJson(
-            "GET",
-            f"/orgs/{quote(str(org), safe='')}/members/{quote(login, safe='')}",
-        )
-    except Exception:
-        return False
-    return int(status) == 204
 
 
 def get_timestamp_text(value: Any) -> str:
