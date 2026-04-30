@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -47,7 +47,6 @@ class _BuilderTestBase(unittest.TestCase):
             "scripts.review_pr",
             "scripts.respond_to_pr_comment",
             "scripts.verify_pr_comment",
-            "scripts.enforce_pr_issue_state",
             "scripts.triage_new_issues",
             "scripts.create_spec_from_issue",
             "scripts.create_implementation_from_issue",
@@ -320,95 +319,6 @@ class BuildVerifyRequestTest(_BuilderTestBase):
         self.assert_deferred_progress(request)
 
 
-class BuildEnforceRequestTest(_BuilderTestBase):
-    def setUp(self) -> None:
-        super().setUp()
-        scripts = _ensure_module("scripts")
-        enforce_module = _ensure_module("scripts.enforce_pr_issue_state")
-        scripts.enforce_pr_issue_state = enforce_module  # type: ignore[attr-defined]
-
-        # ``EnforceContext`` is a TypedDict; stub it as plain ``dict``.
-        enforce_module.EnforceContext = dict  # type: ignore[attr-defined]
-
-        decision = SimpleNamespace(
-            action="need-cloud-match",
-            allow_review=False,
-            reason="need-cloud-match",
-            close_comment="",
-            context={
-                "owner": "acme",
-                "repo": "widgets",
-                "pr_number": 21,
-                "requester": "alice",
-                "change_kind": "implementation",
-                "required_label": "ready-to-implement",
-                "contribution_docs_url": "https://example.test/docs",
-            },
-        )
-        enforce_module.enforce_pr_state_synchronously = MagicMock(  # type: ignore[attr-defined]
-            return_value=decision
-        )
-        enforce_module.gather_enforce_context = MagicMock(  # type: ignore[attr-defined]
-            return_value=("ENFORCE_PROMPT_BODY", []),
-        )
-
-    def test_returns_dispatch_request_for_need_cloud_match(self) -> None:
-        from lib.builders import build_enforce_request
-        from lib.routing import WORKFLOW_ENFORCE_PR_ISSUE_STATE
-
-        github_client = MagicMock()
-        github_client.get_repo.return_value = MagicMock(name="repo")
-        payload = {
-            "repository": {"full_name": "acme/widgets"},
-            "installation": {"id": 9},
-            "pull_request": {"number": 21},
-            "sender": {"login": "alice"},
-        }
-
-        request = build_enforce_request(
-            payload,
-            github_client=github_client,
-            workspace_path=Path("/tmp/ws"),
-        )
-        self.assertEqual(request.workflow, WORKFLOW_ENFORCE_PR_ISSUE_STATE)
-        self.assertIsNone(request.skill_name)
-        self.assertEqual(request.prompt, "ENFORCE_PROMPT_BODY")
-        self.assertEqual(request.payload_subset["pr_number"], 21)
-        self.assertEqual(request.payload_subset["change_kind"], "implementation")
-        # ``enforce_pr_state_synchronously`` already owns the initial
-        # progress comment for this workflow; the deferred hook refreshes
-        # that comment's metadata once the Oz run id is known.
-        self.assertEqual(len(self.progress_instances), 1)
-        self.assertNotIn("progress_comment_id", request.payload_subset)
-        self.assert_deferred_progress(request, expect_existing_comment_update=True)
-
-    def test_raises_when_decision_is_not_need_cloud_match(self) -> None:
-        from lib.builders import build_enforce_request
-
-        # Override the helper to return an ``allow`` decision; the
-        # builder should refuse to dispatch in that case.
-        scripts = sys.modules["scripts"]
-        scripts.enforce_pr_issue_state.enforce_pr_state_synchronously.return_value = SimpleNamespace(  # type: ignore[attr-defined]
-            action="allow",
-            allow_review=True,
-            reason="markdown-only",
-            close_comment="",
-            context=None,
-        )
-
-        payload = {
-            "repository": {"full_name": "acme/widgets"},
-            "installation": {"id": 9},
-            "pull_request": {"number": 21},
-            "sender": {"login": "alice"},
-        }
-        with self.assertRaises(RuntimeError):
-            build_enforce_request(
-                payload,
-                github_client=MagicMock(),
-                workspace_path=Path("/tmp/ws"),
-            )
-
 
 class BuildTriageRequestTest(_BuilderTestBase):
     def setUp(self) -> None:
@@ -631,7 +541,6 @@ class BuildBuilderRegistryTest(_BuilderTestBase):
         from lib.routing import (
             WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
             WORKFLOW_CREATE_SPEC_FROM_ISSUE,
-            WORKFLOW_ENFORCE_PR_ISSUE_STATE,
             WORKFLOW_PLAN_APPROVED,
             WORKFLOW_RESPOND_TO_PR_COMMENT,
             WORKFLOW_REVIEW_PR,
@@ -646,7 +555,6 @@ class BuildBuilderRegistryTest(_BuilderTestBase):
                 WORKFLOW_REVIEW_PR,
                 WORKFLOW_RESPOND_TO_PR_COMMENT,
                 WORKFLOW_VERIFY_PR_COMMENT,
-                WORKFLOW_ENFORCE_PR_ISSUE_STATE,
                 WORKFLOW_TRIAGE_NEW_ISSUES,
                 WORKFLOW_CREATE_SPEC_FROM_ISSUE,
                 WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,

@@ -12,7 +12,6 @@ from ..oz_workflows.agent_workflow import (
 from lib.routing import (
     WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
     WORKFLOW_CREATE_SPEC_FROM_ISSUE,
-    WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_PLAN_APPROVED,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
@@ -587,93 +586,12 @@ class PlanApprovedWorkflow(CreateImplementationWorkflow):
         )
 
 
-class EnforceWorkflow(BaseWorkflow):
-    workflow = WORKFLOW_ENFORCE_PR_ISSUE_STATE
-    config_name = WORKFLOW_ENFORCE_PR_ISSUE_STATE
-
-    def build_dispatch(self, payload: Mapping[str, Any], *, github_client: Any, workspace_path: Path | None = None) -> WorkflowDispatch:
-        from oz_workflows.helpers import WorkflowProgressComment  # type: ignore[import-not-found]
-        from scripts.enforce_pr_issue_state import (
-            EnforceContext,
-            enforce_pr_state_synchronously,
-            gather_enforce_context,
-        )  # type: ignore[import-not-found]
-
-        owner, repo, full_name = _resolve_owner_repo(payload)
-        pr_number = _resolve_pr_number(payload)
-        requester = _resolve_requester(payload)
-        repo_handle = github_client.get_repo(full_name)
-        progress = WorkflowProgressComment(
-            repo_handle,
-            owner,
-            repo,
-            pr_number,
-            workflow=self.workflow,
-            event_payload=dict(payload),
-            requester_login=requester,
-        )
-        decision = enforce_pr_state_synchronously(
-            repo_handle,
-            owner=owner,
-            repo=repo,
-            pr_number=pr_number,
-            requester=requester,
-            progress=progress,
-        )
-        if decision.action != "need-cloud-match":
-            raise RuntimeError(
-                "build_enforce_request invoked for a non-need-cloud-match decision: "
-                f"{decision.action!r}"
-            )
-        enforce_context: EnforceContext = decision.context  # type: ignore[assignment]
-        if enforce_context is None:
-            raise RuntimeError("need-cloud-match decision missing EnforceContext")
-        prompt, _candidate_issues = gather_enforce_context(repo_handle, context=enforce_context)
-        return WorkflowDispatch(
-            workflow=self.workflow,
-            repo=full_name,
-            installation_id=_resolve_installation_id(payload),
-            config_name=self.config_name,
-            title=f"Associate PR #{pr_number} with ready issue",
-            skill_name=None,
-            prompt=prompt,
-            payload_subset=dict(enforce_context),
-            progress=ProgressCommentSpec(
-                repo_handle=repo_handle,
-                owner=owner,
-                repo=repo,
-                issue_number=pr_number,
-                workflow=self.workflow,
-                start_line="",
-                requester_login=requester,
-                event_payload=payload,
-                comment_id=int(getattr(progress, "comment_id", 0) or 0) or None,
-            ),
-        )
-
-    def load_artifact(self, run_id: str) -> dict[str, Any]:
-        from oz_workflows.artifacts import poll_for_artifact  # type: ignore[import-not-found]
-
-        return poll_for_artifact(run_id, filename="issue_association.json")
-
-    def apply_result(self, repo_handle: Any, *, context: Mapping[str, Any], run: Any, result: Mapping[str, Any], progress: Any, github_client: Any | None = None) -> None:
-        from scripts.enforce_pr_issue_state import apply_issue_association_result  # type: ignore[import-not-found]
-
-        apply_issue_association_result(
-            repo_handle,
-            context=context,
-            run=run,
-            result=dict(result),
-            progress=progress,
-        )
-
 
 def build_workflow_registry() -> dict[str, BaseWorkflow]:
     workflows: list[BaseWorkflow] = [
         ReviewWorkflow(),
         RespondWorkflow(),
         VerifyWorkflow(),
-        EnforceWorkflow(),
         TriageWorkflow(),
         CreateSpecWorkflow(),
         CreateImplementationWorkflow(),
@@ -686,7 +604,6 @@ __all__ = [
     "BaseWorkflow",
     "CreateImplementationWorkflow",
     "CreateSpecWorkflow",
-    "EnforceWorkflow",
     "PlanApprovedWorkflow",
     "RespondWorkflow",
     "ReviewWorkflow",

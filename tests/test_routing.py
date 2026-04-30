@@ -19,7 +19,6 @@ from lib.routing import (
     WORKFLOW_ANNOUNCE_READY_ISSUE,
     WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
     WORKFLOW_CREATE_SPEC_FROM_ISSUE,
-    WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_PLAN_APPROVED,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
@@ -570,7 +569,7 @@ class PullRequestEventTest(unittest.TestCase):
         )
         self.assertIsNone(decision.workflow)
 
-    def test_synchronize_routes_to_enforce(self) -> None:
+    def test_synchronize_is_dropped(self) -> None:
         decision = route_event(
             "pull_request",
             {
@@ -578,7 +577,19 @@ class PullRequestEventTest(unittest.TestCase):
                 "pull_request": {"state": "open"},
             },
         )
-        self.assertEqual(decision.workflow, WORKFLOW_ENFORCE_PR_ISSUE_STATE)
+        self.assertIsNone(decision.workflow)
+        self.assertIn("not handled", decision.reason)
+
+    def test_edited_is_dropped(self) -> None:
+        decision = route_event(
+            "pull_request",
+            {
+                "action": "edited",
+                "pull_request": {"state": "open"},
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("not handled", decision.reason)
 
     def test_closed_pr_skipped(self) -> None:
         decision = route_event(

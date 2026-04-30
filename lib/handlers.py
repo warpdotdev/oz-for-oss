@@ -8,7 +8,6 @@ from .poll_runs import WorkflowHandlers
 from .routing import (
     WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
     WORKFLOW_CREATE_SPEC_FROM_ISSUE,
-    WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_PLAN_APPROVED,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
@@ -19,7 +18,6 @@ from .workflow_adapters import GithubClientFactory, handlers_for_workflow
 from .workflows import (
     CreateImplementationWorkflow,
     CreateSpecWorkflow,
-    EnforceWorkflow,
     PlanApprovedWorkflow,
     RespondWorkflow,
     ReviewWorkflow,
@@ -46,11 +44,6 @@ def build_verify_handlers(github_client_factory: GithubClientFactory) -> Workflo
         VerifyWorkflow(), github_client_factory=github_client_factory
     )
 
-
-def build_enforce_handlers(github_client_factory: GithubClientFactory) -> WorkflowHandlers:
-    return handlers_for_workflow(
-        EnforceWorkflow(), github_client_factory=github_client_factory
-    )
 
 
 def build_triage_handlers(github_client_factory: GithubClientFactory) -> WorkflowHandlers:
@@ -95,7 +88,6 @@ __all__ = [
     "GithubClientFactory",
     "build_create_implementation_handlers",
     "build_create_spec_handlers",
-    "build_enforce_handlers",
     "build_handler_registry",
     "build_plan_approved_handlers",
     "build_respond_handlers",
@@ -104,7 +96,6 @@ __all__ = [
     "build_verify_handlers",
     "WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE",
     "WORKFLOW_CREATE_SPEC_FROM_ISSUE",
-    "WORKFLOW_ENFORCE_PR_ISSUE_STATE",
     "WORKFLOW_PLAN_APPROVED",
     "WORKFLOW_RESPOND_TO_PR_COMMENT",
     "WORKFLOW_REVIEW_PR",

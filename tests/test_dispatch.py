@@ -229,11 +229,11 @@ class CloudSkillSpecTest(unittest.TestCase):
         runner, calls = _runner_factory()
         store = InMemoryStateStore()
         request = DispatchRequest(
-            workflow="enforce-pr-issue-state",
+            workflow="verify-pr-comment",
             repo="acme/widgets",
             installation_id=1,
-            config_name="enforce-pr-issue-state",
-            title="Enforce PR association",
+            config_name="verify-pr-comment",
+            title="Verify PR comment",
             skill_name=None,
             prompt="prompt body",
             payload_subset={},

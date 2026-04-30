@@ -45,7 +45,6 @@ class _HandlerTestBase(unittest.TestCase):
             "scripts.review_pr",
             "scripts.respond_to_pr_comment",
             "scripts.verify_pr_comment",
-            "scripts.enforce_pr_issue_state",
             "scripts.triage_new_issues",
             "scripts.create_spec_from_issue",
             "scripts.create_implementation_from_issue",
@@ -62,7 +61,6 @@ class _HandlerTestBase(unittest.TestCase):
         review = _ensure_module("scripts.review_pr")
         respond = _ensure_module("scripts.respond_to_pr_comment")
         verify = _ensure_module("scripts.verify_pr_comment")
-        enforce = _ensure_module("scripts.enforce_pr_issue_state")
         triage = _ensure_module("scripts.triage_new_issues")
         create_spec = _ensure_module("scripts.create_spec_from_issue")
         create_implementation = _ensure_module(
@@ -71,7 +69,6 @@ class _HandlerTestBase(unittest.TestCase):
         scripts.review_pr = review  # type: ignore[attr-defined]
         scripts.respond_to_pr_comment = respond  # type: ignore[attr-defined]
         scripts.verify_pr_comment = verify  # type: ignore[attr-defined]
-        scripts.enforce_pr_issue_state = enforce  # type: ignore[attr-defined]
         scripts.triage_new_issues = triage  # type: ignore[attr-defined]
         scripts.create_spec_from_issue = create_spec  # type: ignore[attr-defined]
         scripts.create_implementation_from_issue = create_implementation  # type: ignore[attr-defined]
@@ -79,7 +76,6 @@ class _HandlerTestBase(unittest.TestCase):
         respond.apply_pr_comment_result = MagicMock()  # type: ignore[attr-defined]
         verify.apply_verification_result = MagicMock()  # type: ignore[attr-defined]
         verify.VERIFICATION_REPORT_FILENAME = "verification_report.json"  # type: ignore[attr-defined]
-        enforce.apply_issue_association_result = MagicMock()  # type: ignore[attr-defined]
         triage.apply_triage_result_for_dispatch = MagicMock()  # type: ignore[attr-defined]
         create_spec.apply_create_spec_result = MagicMock()  # type: ignore[attr-defined]
         create_implementation.apply_create_implementation_result = MagicMock()  # type: ignore[attr-defined]
@@ -93,7 +89,6 @@ class _HandlerTestBase(unittest.TestCase):
         artifacts.load_review_artifact = MagicMock(return_value={"summary": "ok"})  # type: ignore[attr-defined]
         artifacts.load_run_artifact = MagicMock(return_value={"overall_status": "passed"})  # type: ignore[attr-defined]
         artifacts.load_triage_artifact = MagicMock(return_value={"summary": "triage ok", "labels": []})  # type: ignore[attr-defined]
-        artifacts.poll_for_artifact = MagicMock(return_value={"matched": True, "issue_number": 1})  # type: ignore[attr-defined]
         # Track every reconstructed progress comment so individual
         # tests can assert ``complete`` / ``replace_body`` /
         # ``report_error`` were invoked on the right instance.
@@ -311,39 +306,6 @@ class VerifyHandlersTest(_HandlerTestBase):
         self.assertIs(kwargs["progress"], self.progress_instances[-1])
 
 
-class EnforceHandlersTest(_HandlerTestBase):
-    def test_artifact_loader_polls_issue_association_filename(self) -> None:
-        from lib.handlers import build_enforce_handlers
-
-        github_client = MagicMock()
-        github_client.get_repo.return_value = MagicMock(name="repo")
-        handlers = build_enforce_handlers(_factory(github_client))
-        handlers.artifact_loader("run-1")
-        from oz_workflows.artifacts import (  # type: ignore[import-not-found]
-            poll_for_artifact,
-        )
-
-        poll_for_artifact.assert_called_once_with(
-            "run-1", filename="issue_association.json"
-        )
-
-    def test_result_applier_invokes_apply_issue_association_result(self) -> None:
-        from lib.handlers import build_enforce_handlers
-
-        github_client = MagicMock()
-        github_client.get_repo.return_value = MagicMock(name="repo")
-        handlers = build_enforce_handlers(_factory(github_client))
-        state = _state("enforce-pr-issue-state")
-        handlers.result_applier(state=state, result={"matched": True, "issue_number": 1})
-        from scripts.enforce_pr_issue_state import (  # type: ignore[import-not-found]
-            apply_issue_association_result,
-        )
-
-        apply_issue_association_result.assert_called_once()
-        kwargs = apply_issue_association_result.call_args.kwargs
-        self.assertEqual(kwargs["result"], {"matched": True, "issue_number": 1})
-        self.assertIs(kwargs["progress"], self.progress_instances[-1])
-
 
 class TriageHandlersTest(_HandlerTestBase):
     def _state(self) -> RunState:
@@ -423,7 +385,6 @@ class HandlerRegistryTest(_HandlerTestBase):
         from lib.routing import (
             WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
             WORKFLOW_CREATE_SPEC_FROM_ISSUE,
-            WORKFLOW_ENFORCE_PR_ISSUE_STATE,
             WORKFLOW_PLAN_APPROVED,
             WORKFLOW_RESPOND_TO_PR_COMMENT,
             WORKFLOW_REVIEW_PR,
@@ -440,7 +401,6 @@ class HandlerRegistryTest(_HandlerTestBase):
                 WORKFLOW_REVIEW_PR,
                 WORKFLOW_RESPOND_TO_PR_COMMENT,
                 WORKFLOW_VERIFY_PR_COMMENT,
-                WORKFLOW_ENFORCE_PR_ISSUE_STATE,
                 WORKFLOW_TRIAGE_NEW_ISSUES,
                 WORKFLOW_CREATE_SPEC_FROM_ISSUE,
                 WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,

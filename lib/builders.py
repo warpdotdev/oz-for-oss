@@ -9,7 +9,6 @@ from .dispatch import DispatchRequest, PromptBuilder
 from .routing import (
     WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
     WORKFLOW_CREATE_SPEC_FROM_ISSUE,
-    WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_PLAN_APPROVED,
     WORKFLOW_RESPOND_TO_PR_COMMENT,
     WORKFLOW_REVIEW_PR,
@@ -20,7 +19,6 @@ from .workflow_adapters import dispatch_request_for_workflow, prompt_builder_for
 from .workflows import (
     CreateImplementationWorkflow,
     CreateSpecWorkflow,
-    EnforceWorkflow,
     PlanApprovedWorkflow,
     RespondWorkflow,
     ReviewWorkflow,
@@ -143,19 +141,6 @@ def build_plan_approved_request(
     )
 
 
-def build_enforce_request(
-    payload: Mapping[str, Any],
-    *,
-    github_client: Any,
-    workspace_path: Path | None = None,
-) -> DispatchRequest:
-    return _request_for(
-        EnforceWorkflow(),
-        payload,
-        github_client=github_client,
-        workspace_path=workspace_path,
-    )
-
 
 def build_builder_registry(
     *,
@@ -176,7 +161,6 @@ __all__ = [
     "build_builder_registry",
     "build_create_implementation_request",
     "build_create_spec_request",
-    "build_enforce_request",
     "build_plan_approved_request",
     "build_respond_request",
     "build_review_request",
@@ -184,7 +168,6 @@ __all__ = [
     "build_verify_request",
     "WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE",
     "WORKFLOW_CREATE_SPEC_FROM_ISSUE",
-    "WORKFLOW_ENFORCE_PR_ISSUE_STATE",
     "WORKFLOW_PLAN_APPROVED",
     "WORKFLOW_RESPOND_TO_PR_COMMENT",
     "WORKFLOW_REVIEW_PR",

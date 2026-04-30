@@ -23,7 +23,6 @@ from api.webhook import process_webhook_request
 from lib.dispatch import DispatchRequest
 from lib.routing import (
     WORKFLOW_ANNOUNCE_READY_ISSUE,
-    WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_PLAN_APPROVED,
     WORKFLOW_REVIEW_PR,
 )
@@ -170,102 +169,6 @@ class DispatchPathTest(unittest.TestCase):
         self.assertEqual(response.status, 500)
         self.assertIn("builder failed", response.body["error"])
 
-
-class SynchronousEnforcePathTest(unittest.TestCase):
-    def _payload(self) -> dict[str, Any]:
-        return {
-            "action": "synchronize",
-            "repository": {"full_name": "acme/widgets"},
-            "installation": {"id": 1234},
-            "pull_request": {
-                "number": 42,
-                "state": "open",
-                "draft": False,
-                "user": {"login": "carol", "type": "User"},
-                "author_association": "CONTRIBUTOR",
-                "head": {"ref": "feature"},
-                "base": {"ref": "main"},
-            },
-        }
-
-    def test_synchronous_path_short_circuits_dispatch(self) -> None:
-        body, signature = _signed_envelope(self._payload())
-
-        sync_calls: list[Mapping[str, Any]] = []
-
-        def sync_enforcer(payload: Mapping[str, Any]) -> dict[str, Any]:
-            sync_calls.append(payload)
-            return {
-                "action": "allow",
-                "reason": "associated-ready-issue",
-                "allow_review": True,
-            }
-
-        builder_called = MagicMock()
-        runner_called = MagicMock(side_effect=AssertionError("should not run"))
-
-        response = process_webhook_request(
-            body=body,
-            signature_header=signature,
-            event_header="pull_request",
-            delivery_id="delivery-1",
-            secret=_SECRET,
-            builder_registry={WORKFLOW_ENFORCE_PR_ISSUE_STATE: builder_called},
-            runner=runner_called,
-            config_factory=lambda name, role: {},
-            store=InMemoryStateStore(),
-            sync_enforcer=sync_enforcer,
-        )
-        self.assertEqual(response.status, 202)
-        self.assertEqual(response.body["workflow"], WORKFLOW_ENFORCE_PR_ISSUE_STATE)
-        self.assertEqual(
-            response.body["enforce"],
-            {
-                "action": "allow",
-                "reason": "associated-ready-issue",
-                "allow_review": True,
-            },
-        )
-        self.assertEqual(len(sync_calls), 1)
-        builder_called.assert_not_called()
-
-    def test_need_cloud_match_falls_through_to_dispatch(self) -> None:
-        body, signature = _signed_envelope(self._payload())
-
-        builder = MagicMock()
-        builder.return_value = DispatchRequest(
-            workflow=WORKFLOW_ENFORCE_PR_ISSUE_STATE,
-            repo="acme/widgets",
-            installation_id=1234,
-            config_name=WORKFLOW_ENFORCE_PR_ISSUE_STATE,
-            title="Associate PR #42 with ready issue",
-            skill_name=None,
-            prompt="prompt body",
-            payload_subset={"pr_number": 42},
-        )
-
-        runner = MagicMock(return_value=SimpleNamespace(run_id="oz-run-2"))
-
-        def sync_enforcer(_payload: Mapping[str, Any]) -> dict[str, Any] | None:
-            return None  # signals need-cloud-match
-
-        response = process_webhook_request(
-            body=body,
-            signature_header=signature,
-            event_header="pull_request",
-            delivery_id="delivery-1",
-            secret=_SECRET,
-            builder_registry={WORKFLOW_ENFORCE_PR_ISSUE_STATE: builder},
-            runner=runner,
-            config_factory=lambda name, role: {},
-            store=InMemoryStateStore(),
-            sync_enforcer=sync_enforcer,
-        )
-        self.assertEqual(response.status, 202)
-        self.assertTrue(response.body["dispatched"])
-        self.assertEqual(response.body["run_id"], "oz-run-2")
-        builder.assert_called_once()
-        runner.assert_called_once()
 
 
 class SynchronousPlanApprovedPathTest(unittest.TestCase):

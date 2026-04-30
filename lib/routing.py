@@ -21,8 +21,6 @@ Webhook coverage today:
     ``review-pull-request``.
   - ``review_requested`` routes to ``review-pull-request`` when
     the requested reviewer is ``oz-agent``.
-  - ``synchronize`` and ``edited`` route to
-    ``enforce-pr-issue-state``.
   - ``labeled`` routes to ``review-pull-request`` for the
     ``oz-review`` label and to ``plan-approved`` for the
     ``plan-approved`` label. The ``plan-approved`` workflow runs
@@ -77,7 +75,6 @@ from typing import Any
 WORKFLOW_REVIEW_PR = "review-pull-request"
 WORKFLOW_RESPOND_TO_PR_COMMENT = "respond-to-pr-comment"
 WORKFLOW_VERIFY_PR_COMMENT = "verify-pr-comment"
-WORKFLOW_ENFORCE_PR_ISSUE_STATE = "enforce-pr-issue-state"
 WORKFLOW_TRIAGE_NEW_ISSUES = "triage-new-issues"
 WORKFLOW_CREATE_SPEC_FROM_ISSUE = "create-spec-from-issue"
 WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE = "create-implementation-from-issue"
@@ -379,8 +376,6 @@ def _route_pull_request(payload: dict[str, Any]) -> RouteDecision:
                 WORKFLOW_PLAN_APPROVED, "plan-approved label applied"
             )
         return RouteDecision(None, f"unhandled label {label_name!r} on PR")
-    if action in {"synchronize", "edited"}:
-        return RouteDecision(WORKFLOW_ENFORCE_PR_ISSUE_STATE, f"pull_request {action}")
     return RouteDecision(None, f"pull_request action {action!r} not handled")
 
 
@@ -444,7 +439,6 @@ __all__ = [
     "WORKFLOW_ANNOUNCE_READY_ISSUE",
     "WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE",
     "WORKFLOW_CREATE_SPEC_FROM_ISSUE",
-    "WORKFLOW_ENFORCE_PR_ISSUE_STATE",
     "WORKFLOW_PLAN_APPROVED",
     "WORKFLOW_RESPOND_TO_PR_COMMENT",
     "WORKFLOW_REVIEW_PR",

@@ -477,21 +477,6 @@ def format_pr_comment_start_line(
         + spec_clause
     )
 
-
-def format_enforce_start_line(
-    *, explicit_issue: bool, change_kind: str
-) -> str:
-    """State-aware opening line for the enforce-pr-issue-state workflow."""
-    association = (
-        "an explicitly linked issue"
-        if explicit_issue
-        else "a likely matching ready issue"
-    )
-    return (
-        f"I'm checking this {change_kind} PR for association with {association}."
-    )
-
-
 def _workflow_run_url() -> str:
     """Build the workflow run URL from environment variables."""
     server_url = optional_env("GITHUB_SERVER_URL") or "https://github.com"

@@ -43,8 +43,8 @@ Every agent-backed flow follows the same sequence:
 
 1. **GitHub delivers a webhook** for `pull_request`, `pull_request_review_comment`, `issues`, or `issue_comment` events to `https://<vercel-project>.vercel.app/api/webhook`.
 2. **Signature verification.** [`../lib/signatures.py`](../lib/signatures.py) verifies the `X-Hub-Signature-256` header against `OZ_GITHUB_WEBHOOK_SECRET`.
-3. **Routing.** [`../lib/routing.py`](../lib/routing.py) maps the event to a workflow such as `review-pull-request`, `respond-to-pr-comment`, `verify-pr-comment`, `enforce-pr-issue-state`, `triage-new-issues`, `create-spec-from-issue`, `create-implementation-from-issue`, `plan-approved`, or `announce-ready-issue`.
-4. **Synchronous preflight where needed.** Hybrid workflows such as `enforce-pr-issue-state`, `plan-approved`, and `announce-ready-issue` run deterministic GitHub mutations inline when they do not need an agent.
+3. **Routing.** [`../lib/routing.py`](../lib/routing.py) maps the event to a workflow such as `review-pull-request`, `respond-to-pr-comment`, `verify-pr-comment`, `triage-new-issues`, `create-spec-from-issue`, `create-implementation-from-issue`, `plan-approved`, or `announce-ready-issue`.
+4. **Synchronous preflight where needed.** Hybrid workflows such as `plan-approved` and `announce-ready-issue` run deterministic GitHub mutations inline when they do not need an agent.
 5. **Prompt construction + dispatch.** The builder registry creates a `DispatchRequest`; [`../lib/dispatch.py`](../lib/dispatch.py) starts an Oz cloud run and saves a `RunState` record in Vercel KV.
 6. **Progress comment creation.** After the Oz run id is known, the dispatch hook creates or updates the workflow progress comment and persists `progress_comment_id` in the saved run state.
 7. **202 response.** The webhook returns `202 Accepted` quickly so GitHub delivery stays green.

@@ -40,7 +40,6 @@ from lib.dispatch import (
 from lib.routing import (
     RouteDecision,
     WORKFLOW_ANNOUNCE_READY_ISSUE,
-    WORKFLOW_ENFORCE_PR_ISSUE_STATE,
     WORKFLOW_PLAN_APPROVED,
     route_event,
 )
@@ -78,22 +77,6 @@ def _resolve_secret() -> str:
     return secret
 
 
-def _run_synchronous_enforce(
-    payload: Mapping[str, Any],
-    *,
-    sync_enforcer: Callable[[Mapping[str, Any]], dict[str, Any]] | None,
-) -> dict[str, Any] | None:
-    """Run the synchronous enforce-pr-issue-state path inside the webhook.
-
-    When the synchronous helper resolves the decision (allow / close)
-    inline, return its structured outcome so the webhook can surface
-    it in the 202 body. Returns ``None`` when the synchronous path
-    needs the cloud agent (``need-cloud-match``).
-    """
-    if sync_enforcer is None:
-        return None
-    return sync_enforcer(payload)
-
 
 def _run_synchronous_plan_approved(
     payload: Mapping[str, Any],
@@ -108,9 +91,7 @@ def _run_synchronous_plan_approved(
 
     Returns the synchronous outcome (``{"action": "synced" | "skipped", ...}``)
     when no cloud agent is needed, or ``None`` to let the webhook fall
-    through to the dispatch path. Mirrors
-    :func:`_run_synchronous_enforce` so the handler treats the two
-    sync paths uniformly.
+    through to the dispatch path.
     """
     if sync_plan_approved is None:
         return None
@@ -147,7 +128,6 @@ def process_webhook_request(
     runner: Callable[..., Any] | None = None,
     config_factory: Callable[[str, str], Mapping[str, Any]] | None = None,
     store: StateStore | None = None,
-    sync_enforcer: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     sync_plan_approved: Callable[[Mapping[str, Any]], dict[str, Any] | None] | None = None,
     sync_announce_ready_issue: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
 ) -> WebhookResponse:
@@ -201,25 +181,6 @@ def process_webhook_request(
     if decision.workflow is None:
         return WebhookResponse(status=202, body=base_body)
 
-    # ``enforce-pr-issue-state`` is special: the synchronous decision
-    # (allow / close) does not need the cloud agent. Run it inline so
-    # GitHub receives a fast decision. When the decision is
-    # ``need-cloud-match``, the synchronous helper returns ``None`` and
-    # the request falls through to the dispatch path.
-    if decision.workflow == WORKFLOW_ENFORCE_PR_ISSUE_STATE:
-        try:
-            outcome = _run_synchronous_enforce(payload, sync_enforcer=sync_enforcer)
-        except Exception as exc:
-            logger.exception("Synchronous enforce-pr-issue-state run failed")
-            return WebhookResponse(
-                status=500,
-                body={**base_body, "error": f"enforce path failed: {exc}"},
-            )
-        if outcome is not None:
-            return WebhookResponse(
-                status=202,
-                body={**base_body, "enforce": outcome},
-            )
 
     # ``plan-approved`` follows the same hybrid pattern: the
     # synchronous helper posts the spec-approved comment + removes
@@ -361,7 +322,6 @@ class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel requires this exac
             runner=wiring["runner"],
             config_factory=wiring["config_factory"],
             store=wiring["store"],
-            sync_enforcer=wiring["sync_enforcer"],
             sync_plan_approved=wiring["sync_plan_approved"],
             sync_announce_ready_issue=wiring["sync_announce_ready_issue"],
         )
@@ -397,9 +357,6 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
     from lib.github_app import fetch_installation_token
     from oz_workflows.oz_client import (  # type: ignore[import-not-found]
         build_agent_config,
-    )
-    from scripts.enforce_pr_issue_state import (  # type: ignore[import-not-found]
-        enforce_pr_state_synchronously,
     )
     from scripts.announce_ready_issue import (  # type: ignore[import-not-found]
         apply_announce_ready_issue_sync,
@@ -490,45 +447,6 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
             role=role,
         )
 
-    def sync_enforcer(payload: Mapping[str, Any]) -> dict[str, Any] | None:
-        installation_id = int((payload.get("installation") or {}).get("id") or 0)
-        full_name = str((payload.get("repository") or {}).get("full_name") or "")
-        pr = payload.get("pull_request") or {}
-        pr_number = int(pr.get("number") or 0)
-        if installation_id <= 0 or "/" not in full_name or pr_number <= 0:
-            return None
-        client = _mint_github_client(installation_id)
-        repo_handle = client.get_repo(full_name)
-        owner, repo = full_name.split("/", 1)
-        from oz_workflows.helpers import (  # type: ignore[import-not-found]
-            WorkflowProgressComment,
-        )
-
-        progress = WorkflowProgressComment(
-            repo_handle,
-            owner,
-            repo,
-            pr_number,
-            workflow=WORKFLOW_ENFORCE_PR_ISSUE_STATE,
-            requester_login=str(
-                ((payload.get("sender") or {}).get("login") or "")
-            ),
-        )
-        decision = enforce_pr_state_synchronously(
-            repo_handle,
-            owner=owner,
-            repo=repo,
-            pr_number=pr_number,
-            requester=str(((payload.get("sender") or {}).get("login") or "")),
-            progress=progress,
-        )
-        if decision.action == "need-cloud-match":
-            return None
-        return {
-            "action": decision.action,
-            "reason": decision.reason,
-            "allow_review": decision.allow_review,
-        }
 
     def sync_plan_approved(
         payload: Mapping[str, Any],
@@ -575,7 +493,6 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
         "runner": runner,
         "config_factory": config_factory,
         "store": build_state_store(),
-        "sync_enforcer": sync_enforcer,
         "sync_plan_approved": sync_plan_approved,
         "sync_announce_ready_issue": sync_announce_ready_issue,
     }

@@ -55,7 +55,6 @@ Each reusable role can have a repo-local companion skill, such as [`review-pr-lo
 Some routed webhook branches perform deterministic GitHub mutations without dispatching an Oz run:
 
 - `announce-ready-issue` posts fixed availability guidance when `ready-to-spec` or `ready-to-implement` is added without assigning `oz-agent`.
-- `enforce-pr-issue-state` can allow or close PRs synchronously before falling back to an agent only when it needs semantic matching.
 - `plan-approved` performs approval bookkeeping synchronously and only falls through to implementation dispatch when the linked issue is ready.
 
 ## In one sentence
