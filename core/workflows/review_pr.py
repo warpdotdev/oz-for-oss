@@ -534,6 +534,8 @@ def _is_stale_oz_changes_requested_review(review: Any) -> bool:
     if state != "CHANGES_REQUESTED":
         return False
     body = str(getattr(review, "body", "") or "")
+    if not is_automation_user(getattr(review, "user", None)):
+        return False
     return POWERED_BY_SUFFIX in body or RETRIGGER_HINT in body
 
 
