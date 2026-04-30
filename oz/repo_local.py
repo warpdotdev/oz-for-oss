@@ -84,7 +84,7 @@ def repo_local_skill_path_for_dispatch(
     :func:`resolve_repo_local_skill_path`. The Vercel webhook does not
     have the consuming repository checked out locally, so cloud-mode
     callers fetch ``.agents/skills/<core_skill_name>-local/SKILL.md``
-    via :func:`oz_workflows.triage.decode_repo_text_file` and return
+    via :func:`oz.triage.decode_repo_text_file` and return
     the *repository-relative* path string when the body is non-empty.
     The cloud agent's working directory is the consuming repo's
     checkout, so a relative path resolves correctly inside the run.
@@ -97,8 +97,8 @@ def repo_local_skill_path_for_dispatch(
     if not core_skill_name or not core_skill_name.strip():
         return None
 
-    # Imported lazily to avoid an import cycle: ``oz_workflows.triage``
-    # already imports from ``oz_workflows.helpers`` and we don't want
+    # Imported lazily to avoid an import cycle: ``oz.triage``
+    # already imports from ``oz.helpers`` and we don't want
     # ``repo_local`` (imported by ``helpers``-adjacent callers) to
     # pull ``triage`` at module-load time.
     from .triage import decode_repo_text_file
@@ -144,7 +144,7 @@ def format_repo_local_prompt_section(
 # <base>...<branch>`` before pushing and passes the result to
 # :func:`assert_write_surface` with the loop's allowed prefixes. Any file
 # outside those prefixes aborts the run so the loop cannot silently expand
-# its write surface into the core skill files or the workflow scripts.
+# its write surface into the core skill files or the workflow workflows.
 class WriteSurfaceViolation(RuntimeError):
     """Raised when a self-improvement loop touched disallowed files."""
 

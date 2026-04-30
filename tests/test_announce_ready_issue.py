@@ -1,4 +1,4 @@
-"""Tests for ``lib.scripts.announce_ready_issue.apply_announce_ready_issue_sync``.
+"""Tests for ``lib.workflows.announce_ready_issue.apply_announce_ready_issue_sync``.
 
 The webhook handler invokes ``apply_announce_ready_issue_sync``
 synchronously on every ``issues.labeled`` delivery for
@@ -6,7 +6,7 @@ synchronously on every ``issues.labeled`` delivery for
 already assigned. The helper posts a one-shot announcement comment on
 the issue and never falls through to a cloud-agent dispatch path.
 
-These tests stub ``oz_workflows.helpers`` so the assertions stay
+These tests stub ``oz.helpers`` so the assertions stay
 focused on the sync helper's branching (announced vs. noop vs.
 skipped).
 """
@@ -41,14 +41,14 @@ class _AnnounceReadyIssueTestBase(unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
         self._module_keys = [
-            "oz_workflows",
-            "oz_workflows.helpers",
+            "oz",
+            "oz.helpers",
         ]
         self._original_modules = {
             key: sys.modules.get(key) for key in self._module_keys
         }
-        oz = _ensure_module("oz_workflows")
-        helpers = _ensure_module("oz_workflows.helpers")
+        oz = _ensure_module("oz")
+        helpers = _ensure_module("oz.helpers")
         oz.helpers = helpers  # type: ignore[attr-defined]
 
         # Stub the helpers used by ``apply_announce_ready_issue_sync``.
@@ -66,7 +66,7 @@ class _AnnounceReadyIssueTestBase(unittest.TestCase):
 
         # Drop any cached import of announce_ready_issue so the test
         # picks up the helper stubs above.
-        sys.modules.pop("scripts.announce_ready_issue", None)
+        sys.modules.pop("workflows.announce_ready_issue", None)
         sys.modules.pop("announce_ready_issue", None)
 
     def tearDown(self) -> None:
@@ -75,7 +75,7 @@ class _AnnounceReadyIssueTestBase(unittest.TestCase):
                 sys.modules.pop(key, None)
             else:
                 sys.modules[key] = value
-        sys.modules.pop("scripts.announce_ready_issue", None)
+        sys.modules.pop("workflows.announce_ready_issue", None)
         sys.modules.pop("announce_ready_issue", None)
         super().tearDown()
 
@@ -121,7 +121,7 @@ def _repo_handle(*, issue: Any) -> Any:
 
 class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
     def test_announces_ready_to_implement_for_unassigned_issue(self) -> None:
-        from scripts.announce_ready_issue import apply_announce_ready_issue_sync
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
 
         issue = _issue_handle()
         repo_handle = _repo_handle(issue=issue)
@@ -142,7 +142,7 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         self.assertIn("pull request", body.lower())
 
     def test_announces_ready_to_spec_for_unassigned_issue(self) -> None:
-        from scripts.announce_ready_issue import apply_announce_ready_issue_sync
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
 
         issue = _issue_handle()
         repo_handle = _repo_handle(issue=issue)
@@ -164,7 +164,7 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
     def test_idempotent_when_announcement_already_posted(self) -> None:
         # A prior announcement (matching the workflow metadata prefix)
         # should suppress the second post when the webhook redelivers.
-        from scripts.announce_ready_issue import apply_announce_ready_issue_sync
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
 
         prior = _comment(
             "Already announced.\n\n"
@@ -187,7 +187,7 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         # safe in isolation. With ``oz-agent`` assigned, the helper
         # short-circuits without posting (the spec/implementation
         # flow handles the assignment case via a different route).
-        from scripts.announce_ready_issue import apply_announce_ready_issue_sync
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
 
         issue = _issue_handle()
         repo_handle = _repo_handle(issue=issue)
@@ -202,7 +202,7 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         issue.create_comment.assert_not_called()
 
     def test_skips_unsupported_label(self) -> None:
-        from scripts.announce_ready_issue import apply_announce_ready_issue_sync
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
 
         issue = _issue_handle()
         repo_handle = _repo_handle(issue=issue)
@@ -215,7 +215,7 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         issue.create_comment.assert_not_called()
 
     def test_skips_closed_issue(self) -> None:
-        from scripts.announce_ready_issue import apply_announce_ready_issue_sync
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
 
         issue = _issue_handle()
         repo_handle = _repo_handle(issue=issue)
@@ -228,7 +228,7 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         repo_handle.get_issue.assert_not_called()
 
     def test_skips_when_issue_payload_missing(self) -> None:
-        from scripts.announce_ready_issue import apply_announce_ready_issue_sync
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
 
         repo_handle = MagicMock(name="repo")
         result = apply_announce_ready_issue_sync(
@@ -244,7 +244,7 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         repo_handle.get_issue.assert_not_called()
 
     def test_skips_when_repository_full_name_missing(self) -> None:
-        from scripts.announce_ready_issue import apply_announce_ready_issue_sync
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
 
         repo_handle = MagicMock(name="repo")
         payload = _payload()
@@ -256,7 +256,7 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         self.assertIn("full_name", result["reason"])
 
     def test_returns_skipped_when_create_comment_raises(self) -> None:
-        from scripts.announce_ready_issue import apply_announce_ready_issue_sync
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
 
         issue = _issue_handle()
         issue.create_comment.side_effect = RuntimeError("github outage")

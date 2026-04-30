@@ -23,8 +23,8 @@ from typing import Any, Mapping, TypedDict
 
 from github.Repository import Repository
 
-from oz_workflows.artifacts import try_load_pr_metadata_artifact
-from oz_workflows.helpers import (
+from oz.artifacts import try_load_pr_metadata_artifact
+from oz.helpers import (
     branch_updated_since,
     build_next_steps_section,
     coauthor_prompt_lines,
@@ -36,7 +36,7 @@ from oz_workflows.helpers import (
     resolve_spec_context_for_issue_via_api,
     WorkflowProgressComment,
 )
-from oz_workflows.oz_client import skill_file_path
+from oz.oz_client import skill_file_path
 
 WORKFLOW_NAME = "create-implementation-from-issue"
 IMPLEMENT_SPECS_SKILL = "implement-specs"

@@ -10,7 +10,7 @@ This module intentionally keeps prompt construction abstract:
 plug in workflow-specific prompt builders without coupling the
 dispatcher to GitHub/PR/Issue specifics. The default builders live in
 ``lib/builders.py`` and delegate workflow-specific context gathering,
-prompt construction, and result application to ``lib/scripts``.
+prompt construction, and result application to ``lib/workflows``.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from .state import RunState, StateStore, save_run_state
 logger = logging.getLogger(__name__)
 
 
-# Workflow → role string accepted by ``oz_workflows.oz_client.build_agent_config``.
+# Workflow → role string accepted by ``oz.oz_client.build_agent_config``.
 # Triage and review runs use the dedicated ``review-triage`` environment when
 # the operator provides ``WARP_REVIEW_TRIAGE_ENVIRONMENT_ID``; the rest fall
 # back to the default environment.
@@ -72,7 +72,7 @@ def cloud_skill_spec(skill_name: str, *, workflow_repo: str | None = None) -> st
     ``invalid skill_spec format: missing ':' separator``; this helper
     exists so the dispatcher can produce valid specs from inside the
     Vercel runtime, which has no filesystem access to the skill files
-    that ``oz_workflows.oz_client.skill_spec`` checks against in
+    that ``oz.oz_client.skill_spec`` checks against in
     workspace-backed invocations.
     """
     if not skill_name:

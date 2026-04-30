@@ -10,12 +10,12 @@ The product spec requires: (1) a `report_error()` method on `WorkflowProgressCom
 
 ### Relevant code
 
-- `.github/scripts/oz_workflows/helpers.py (309-484)` — `WorkflowProgressComment` class with `start()`, `complete()`, `replace_body()`, `cleanup()`, and `_append_sections()`.
-- `.github/scripts/oz_workflows/helpers.py (345-379)` — `replace_body()` method, which the new `report_error()` will reuse internally.
-- `.github/scripts/oz_workflows/env.py (17-19)` — `optional_env()` used to read GitHub Actions environment variables.
-- `.github/scripts/oz_workflows/transport.py (14)` — `TRANSPORT_PATTERN` regex for identifying transport comments.
-- `.github/scripts/oz_workflows/transport.py (62-95)` — `poll_for_transport_payload()` that raises `RuntimeError` on timeout.
-- `.github/scripts/oz_workflows/oz_client.py (139-181)` — `run_agent()` that raises `RuntimeError` on non-SUCCEEDED states or timeout.
+- `.github/scripts/oz/helpers.py (309-484)` — `WorkflowProgressComment` class with `start()`, `complete()`, `replace_body()`, `cleanup()`, and `_append_sections()`.
+- `.github/scripts/oz/helpers.py (345-379)` — `replace_body()` method, which the new `report_error()` will reuse internally.
+- `.github/scripts/oz/env.py (17-19)` — `optional_env()` used to read GitHub Actions environment variables.
+- `.github/scripts/oz/transport.py (14)` — `TRANSPORT_PATTERN` regex for identifying transport comments.
+- `.github/scripts/oz/transport.py (62-95)` — `poll_for_transport_payload()` that raises `RuntimeError` on timeout.
+- `.github/scripts/oz/oz_client.py (139-181)` — `run_agent()` that raises `RuntimeError` on non-SUCCEEDED states or timeout.
 - `.github/scripts/triage_new_issues.py (118-139)` — existing try/except in `main()` that catches `process_issue()` failures but only emits a warning.
 - `.github/scripts/triage_new_issues.py (169-349)` — `process_issue()` where the progress comment is created, the agent is run, and the triage result is applied.
 - `.github/scripts/create_spec_from_issue.py (30-149)` — `main()` with no error handling around agent invocation.
@@ -83,7 +83,7 @@ def _workflow_run_url() -> str:
     return f"{server_url}/{repository}/actions/runs/{run_id}"
 ```
 
-This requires importing `optional_env` from `oz_workflows.env` in `helpers.py`. The `env` module is already a dependency of the workflow scripts but not currently imported by `helpers.py`. This is a new import — it creates a dependency from `helpers.py` → `env.py`, which is acceptable since `env.py` has no dependencies on `helpers.py` (no circular import risk).
+This requires importing `optional_env` from `oz.env` in `helpers.py`. The `env` module is already a dependency of the workflow scripts but not currently imported by `helpers.py`. This is a new import — it creates a dependency from `helpers.py` → `env.py`, which is acceptable since `env.py` has no dependencies on `helpers.py` (no circular import risk).
 
 If the URL cannot be constructed (e.g. missing env vars in a test environment), `_workflow_run_url()` returns an empty string. When the URL is empty, `report_error()` omits the workflow run link entirely and uses a plain error message without producing an empty or broken link.
 
@@ -215,7 +215,7 @@ Mitigation: The method is wrapped in a bare try/except and silently swallows err
 Mitigation: Transport comments are temporary by design and only relevant during the current workflow run. By the time `cleanup_transport_comments()` runs in the error path, the workflow has already failed and will not attempt to read the transport comment.
 
 **Risk: Circular import between `helpers.py` and `env.py`.**
-Mitigation: `env.py` has no imports from `helpers.py` or any other module in `oz_workflows` (only `os`, `json`, `pathlib`). Adding `from .env import optional_env` to `helpers.py` is safe.
+Mitigation: `env.py` has no imports from `helpers.py` or any other module in `oz` (only `os`, `json`, `pathlib`). Adding `from .env import optional_env` to `helpers.py` is safe.
 
 **Risk: Tests break because `GITHUB_SERVER_URL` / `GITHUB_RUN_ID` are not set in test environments.**
 Mitigation: `_workflow_run_url()` uses `optional_env()` and returns an empty string when the variables are absent. `report_error()` can handle an empty URL gracefully (the message still makes sense without the link, or the link can be omitted).

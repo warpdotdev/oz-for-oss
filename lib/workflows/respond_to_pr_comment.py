@@ -7,11 +7,11 @@ from github import Github
 from github.PullRequest import PullRequest
 from github.Repository import Repository
 
-from oz_workflows.artifacts import (
+from oz.artifacts import (
     try_load_pr_metadata_artifact,
     try_load_resolved_review_comments_artifact,
 )
-from oz_workflows.helpers import (
+from oz.helpers import (
     branch_updated_since,
     build_next_steps_section,
     coauthor_prompt_lines,

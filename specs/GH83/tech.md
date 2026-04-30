@@ -72,7 +72,7 @@ Replace `src/create_plan_from_issue.py` with `src/create_spec_from_issue.py`:
 - Pass both the product spec and the tech spec as context into the implementation agent prompt. The implementation workflow should read both `specs/GH{number}/product.md` and `specs/GH{number}/tech.md` and include their contents in `spec_context.md`.
 - Update progress messages from "plan" to "spec" where visible to users.
 
-#### 8. Update `src/oz_workflows/helpers.py`
+#### 8. Update `src/oz/helpers.py`
 
 Rename and update the following functions:
 

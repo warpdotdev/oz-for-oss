@@ -112,7 +112,7 @@ Writes outside that surface — in particular to `.agents/skills/<agent>/SKILL.m
 
 - The core `SKILL.md` of a shared agent is byte-for-byte identical across repos consuming `oz-for-oss` at the same ref, except for the repo-specific companion it references.
 - The companion skill never redefines the agent's output schema, severity labels, safety rules, or core evidence requirements.
-- The self-improvement loop is a pure function of signals-in → companion-skill-out; it never reaches into workflow scripts.
+- The self-improvement loop is a pure function of signals-in → companion-skill-out; it never reaches into workflow workflows.
 - An absent or empty companion file is a supported state, not an error.
 - Running `update-<agent>` when no repeated signal exists produces no branch and no PR.
 

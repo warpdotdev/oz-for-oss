@@ -82,7 +82,7 @@ class AgentWorkflow(Protocol):
 
 def create_progress_comment(spec: ProgressCommentSpec, *, run_id: str) -> Any:
     """Create the progress comment for a dispatched run using the Oz run id."""
-    from oz_workflows.helpers import WorkflowProgressComment  # type: ignore[import-not-found]
+    from oz.helpers import WorkflowProgressComment  # type: ignore[import-not-found]
 
     progress = WorkflowProgressComment(
         spec.repo_handle,

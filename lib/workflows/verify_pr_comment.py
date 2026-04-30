@@ -6,8 +6,8 @@ from typing import Any, Mapping, TypedDict
 
 from github.Repository import Repository
 
-from oz_workflows.helpers import WorkflowProgressComment
-from oz_workflows.verification import (
+from oz.helpers import WorkflowProgressComment
+from oz.verification import (
     discover_verification_skills,
     discover_verification_skills_from_repo,
     format_verification_skills_for_prompt,

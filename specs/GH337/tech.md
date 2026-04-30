@@ -7,15 +7,15 @@
 PR association in oz-for-oss is currently split across incompatible implementations:
 
 - `.github/workflows/remove-stale-issue-labels-on-plan-approved.yml` uses inline JavaScript and a raw `/#(\d+)/g` scan over the PR body, which is unsafe for any workflow that mutates issue state.
-- `.github/scripts/oz_workflows/helpers.py` uses `ISSUE_PATTERN` plus same-repo issue URLs, which still reparses PR-body text instead of using GitHub’s own linked-issue model.
+- `.github/scripts/oz/helpers.py` uses `ISSUE_PATTERN` plus same-repo issue URLs, which still reparses PR-body text instead of using GitHub’s own linked-issue model.
 - `resolve_issue_number_for_pr()` mixes branch and spec-path candidates with parsed-body candidates, which is acceptable for deterministic branch conventions but too weak as the canonical strategy for all PR association.
 
 The product spec requires one shared resolver that prefers deterministic Oz conventions and GitHub-native linked issue data only, and makes destructive workflows safe under ambiguity.
 
 ### Relevant code
 
-- `.github/scripts/oz_workflows/helpers.py:30` — current `ISSUE_PATTERN` definition.
-- `.github/scripts/oz_workflows/helpers.py (1468-1507)` — `extract_issue_numbers_from_text()` and `resolve_issue_number_for_pr()`, which are the closest thing to a shared resolver today.
+- `.github/scripts/oz/helpers.py:30` — current `ISSUE_PATTERN` definition.
+- `.github/scripts/oz/helpers.py (1468-1507)` — `extract_issue_numbers_from_text()` and `resolve_issue_number_for_pr()`, which are the closest thing to a shared resolver today.
 - `.github/scripts/enforce_pr_issue_state.py (1-98)` — uses `extract_issue_numbers_from_text()` to find an explicit associated issue before deciding whether to allow or close a contributor PR.
 - `.github/workflows/remove-stale-issue-labels-on-plan-approved.yml (27-83)` — inline `actions/github-script` logic that currently scans any `#123` token from the PR body.
 - `.github/scripts/trigger_implementation_on_plan_approved.py (1-62)` — another current consumer of `resolve_issue_number_for_pr()`, so any shared resolver change needs to preserve spec-PR behavior.
@@ -46,7 +46,7 @@ The repo already uses PyGithub and already performs one GraphQL mutation in `hel
 
 #### 1. Introduce a canonical PR-association helper in Python
 
-Add a richer helper layer in `.github/scripts/oz_workflows/helpers.py` that separates:
+Add a richer helper layer in `.github/scripts/oz/helpers.py` that separates:
 
 - **candidate collection** from
 - **primary issue selection** from

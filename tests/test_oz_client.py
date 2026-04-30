@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from . import conftest  # noqa: F401
 
-from oz_workflows.oz_client import skill_file_path, skill_spec
+from oz.oz_client import skill_file_path, skill_spec
 
 
 def _write_skill(root: Path, name: str) -> Path:
@@ -25,7 +25,7 @@ class SkillResolutionTest(unittest.TestCase):
             _write_skill(workflow_root, "implement-specs")
 
             with patch.dict(os.environ, {}, clear=True), patch(
-                "oz_workflows.oz_client._workflow_code_root",
+                "oz.oz_client._workflow_code_root",
                 return_value=workflow_root,
             ):
                 self.assertEqual(
@@ -52,7 +52,7 @@ class SkillResolutionTest(unittest.TestCase):
                 },
                 clear=True,
             ), patch(
-                "oz_workflows.oz_client._workflow_code_root",
+                "oz.oz_client._workflow_code_root",
                 return_value=workflow_root,
             ):
                 self.assertEqual(
@@ -74,7 +74,7 @@ class SkillResolutionTest(unittest.TestCase):
                 {"WORKFLOW_CODE_REPOSITORY": "forks/oz-for-oss"},
                 clear=True,
             ), patch(
-                "oz_workflows.oz_client._workflow_code_root",
+                "oz.oz_client._workflow_code_root",
                 return_value=workflow_root,
             ):
                 self.assertEqual(

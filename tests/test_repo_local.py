@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 
 from . import conftest  # noqa: F401
 
-from oz_workflows.repo_local import (
+from oz.repo_local import (
     format_repo_local_prompt_section,
     repo_local_skill_path_for_dispatch,
 )

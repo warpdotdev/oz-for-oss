@@ -11,7 +11,7 @@ The triggering comment also asks that repo docs be updated to explain how to use
 
 ## Current state
 - `config.json` (`/.github/issue-triage/config.json`) has three top-level keys: `labels` (dict of label specs), `stakeholders` (list of ownership entries with `path_prefixes`, `experts`, `default_labels`), and `default_experts` (list of fallback GitHub logins).
-- `load_triage_config()` in `src/oz_workflows/triage.py` validates that `labels` is a dict and `stakeholders` is a list.
+- `load_triage_config()` in `src/oz/triage.py` validates that `labels` is a dict and `stakeholders` is a list.
 - `src/triage_new_issues.py` loads the config, passes the full JSON into the agent prompt, and uses `configured_labels` to ensure labels exist in the repo (via `ensure_label_exists()`).
 - The `triage-issue` skill references stakeholder config and default experts in steps 5–6.
 - No skill currently exists for bootstrapping or syncing the config.
@@ -49,7 +49,7 @@ Create a `.github/STAKEHOLDERS` file using the same CODEOWNERS-style format as w
 ```
 
 #### Python changes to load STAKEHOLDERS
-Add a `load_stakeholders(path: Path) -> list[dict]` function in `src/oz_workflows/triage.py` that parses the CODEOWNERS-style file into a list of structured entries (path pattern → list of owners). Each non-comment, non-blank line becomes an entry with `pattern` and `owners` fields.
+Add a `load_stakeholders(path: Path) -> list[dict]` function in `src/oz/triage.py` that parses the CODEOWNERS-style file into a list of structured entries (path pattern → list of owners). Each non-comment, non-blank line becomes an entry with `pattern` and `owners` fields.
 
 #### Update `load_triage_config`
 - Remove the requirement that `stakeholders` exists in `config.json`.
@@ -91,7 +91,7 @@ New files:
 
 Modified files:
 - `.github/issue-triage/config.json` — remove `stakeholders` and `default_experts`
-- `src/oz_workflows/triage.py` — update `load_triage_config`, add `load_stakeholders`
+- `src/oz/triage.py` — update `load_triage_config`, add `load_stakeholders`
 - `src/triage_new_issues.py` — load STAKEHOLDERS, update prompt, remove default_experts
 - `.agents/skills/triage-issue/SKILL.md` — update stakeholder/expert references
 - `README.md` — document new bootstrapping skill and STAKEHOLDERS file

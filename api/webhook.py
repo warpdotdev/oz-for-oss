@@ -355,13 +355,13 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
     from api.cron import build_state_store
     from lib.builders import build_builder_registry
     from lib.github_app import fetch_installation_token
-    from oz_workflows.oz_client import (  # type: ignore[import-not-found]
+    from oz.oz_client import (  # type: ignore[import-not-found]
         build_agent_config,
     )
-    from scripts.announce_ready_issue import (  # type: ignore[import-not-found]
+    from workflows.announce_ready_issue import (  # type: ignore[import-not-found]
         apply_announce_ready_issue_sync,
     )
-    from scripts.plan_approved import (  # type: ignore[import-not-found]
+    from workflows.plan_approved import (  # type: ignore[import-not-found]
         apply_plan_approved_sync,
     )
 

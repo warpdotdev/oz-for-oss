@@ -88,7 +88,7 @@ Figma: none provided. This is a backend/workflow change with no UI beyond GitHub
 - **No-trigger test**: Add `plan-approved` to a spec PR whose associated issue does not have `ready-to-implement`. Confirm no implementation workflow runs.
 - **No-trigger for non-spec PR**: Add `plan-approved` to a non-spec PR. Confirm no implementation workflow runs.
 - **Regression test**: Confirm the standard happy path (`plan-approved` → `ready-to-implement`) still works correctly.
-- **Unit tests**: Add tests for the new issue-association and label-checking logic in the Python scripts.
+- **Unit tests**: Add tests for the new issue-association and label-checking logic in the Python workflows.
 
 ### Open questions
 

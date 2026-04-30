@@ -4,8 +4,8 @@ import unittest
 
 from . import conftest  # noqa: F401
 
-from scripts.respond_to_pr_comment import build_pr_comment_prompt
-from scripts.verify_pr_comment import build_verification_prompt
+from workflows.respond_to_pr_comment import build_pr_comment_prompt
+from workflows.verify_pr_comment import build_verification_prompt
 
 
 class FetchContextCommandPromptTest(unittest.TestCase):

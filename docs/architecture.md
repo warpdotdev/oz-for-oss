@@ -22,7 +22,7 @@ Triage label definitions live in [`../.github/issue-triage/config.json`](../.git
 │   ├── workflow_adapters.py      # AgentWorkflow → dispatch/handler adapters
 │   ├── workflows/                # Concrete workflow classes
 │   ├── scripts/                  # Workflow-specific gather/build/apply helpers
-│   └── oz_workflows/             # Shared Oz/GitHub helpers
+│   └── oz/             # Shared Oz/GitHub helpers
 ├── tests/                        # Webhook + dispatcher unit tests
 ├── vercel.json                   # Vercel function + cron config
 ├── requirements.txt              # Python deps for Vercel + tests

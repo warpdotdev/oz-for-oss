@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from .oz_workflows.agent_workflow import (
+from oz.agent_workflow import (
     AgentWorkflow,
     WorkflowDispatch,
     create_progress_comment,
@@ -57,7 +57,7 @@ def reconstruct_progress(
     workflow: str,
     review_reply_target: tuple[Any, int] | None = None,
 ) -> Any:
-    from oz_workflows.helpers import WorkflowProgressComment  # type: ignore[import-not-found]
+    from oz.helpers import WorkflowProgressComment  # type: ignore[import-not-found]
 
     payload = state.payload_subset or {}
     issue_number = progress_issue_number(payload, run_id=state.run_id)
@@ -77,7 +77,7 @@ def reconstruct_progress(
 
 
 def record_session_link_safely(progress: Any, run: Any) -> None:
-    from oz_workflows.helpers import record_run_session_link  # type: ignore[import-not-found]
+    from oz.helpers import record_run_session_link  # type: ignore[import-not-found]
 
     try:
         record_run_session_link(progress, run)

@@ -137,7 +137,7 @@ def _login(actor: Any) -> str:
 def _is_bot(actor: Any) -> bool:
     """Return True when *actor* is an automation account.
 
-    Mirrors ``oz_workflows.helpers.is_automation_user`` so the control
+    Mirrors ``oz.helpers.is_automation_user`` so the control
     plane silently drops bot-authored events without spending API quota
     on them.
     """

@@ -15,9 +15,9 @@ The triage workflow in `process_issue()` creates three independent comment strea
 - `.github/scripts/triage_new_issues.py:538-571` — `duplicate_comment_metadata()` and `build_duplicate_comment()` construct the standalone duplicate comment.
 - `.github/scripts/triage_new_issues.py:466-503` — `sync_follow_up_comment()` manages the follow-up comment lifecycle.
 - `.github/scripts/triage_new_issues.py:574-591` — `sync_duplicate_comment()` manages the duplicate comment lifecycle.
-- `.github/scripts/oz_workflows/helpers.py:303-441` — `WorkflowProgressComment` class manages the progress comment lifecycle.
-- `.github/scripts/oz_workflows/helpers.py:211-215` — `_format_progress_link_section()` formats session links as raw URLs.
-- `.github/scripts/oz_workflows/helpers.py:205-208` — `_PROGRESS_LINK_PREFIXES` tuple used for deduplicating link sections.
+- `.github/scripts/oz/helpers.py:303-441` — `WorkflowProgressComment` class manages the progress comment lifecycle.
+- `.github/scripts/oz/helpers.py:211-215` — `_format_progress_link_section()` formats session links as raw URLs.
+- `.github/scripts/oz/helpers.py:205-208` — `_PROGRESS_LINK_PREFIXES` tuple used for deduplicating link sections.
 - `.github/scripts/tests/test_triage.py` — existing tests for follow-up, duplicate, and triage result application.
 
 ### Current state

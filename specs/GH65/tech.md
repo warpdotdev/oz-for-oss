@@ -71,7 +71,7 @@ Determine the trigger type from `GITHUB_EVENT_NAME`:
 6. After completion, check if the branch was updated (via `branch_updated_since`).
 7. Update the progress comment accordingly.
 
-### 3. `GitHubClient` additions — `src/oz_workflows/github_api.py`
+### 3. `GitHubClient` additions — `src/oz/github_api.py`
 
 Add two new methods:
 
@@ -89,7 +89,7 @@ def create_reaction_for_pull_request_review_comment(
     )
 ```
 
-### 4. New helper — `src/oz_workflows/helpers.py`
+### 4. New helper — `src/oz/helpers.py`
 
 Add a helper function for formatting review comment threads:
 
@@ -111,8 +111,8 @@ Filters to MEMBER/OWNER and formats all review comments grouped by file path and
 
 - **New:** `.github/workflows/respond-to-pr-comment.yml`
 - **New:** `src/respond_to_pr_comment.py`
-- **Modified:** `src/oz_workflows/github_api.py` — add `list_pull_review_comments`, `create_reaction_for_pull_request_review_comment`
-- **Modified:** `src/oz_workflows/helpers.py` — add thread-formatting helpers
+- **Modified:** `src/oz/github_api.py` — add `list_pull_review_comments`, `create_reaction_for_pull_request_review_comment`
+- **Modified:** `src/oz/helpers.py` — add thread-formatting helpers
 
 ## Risks and open questions
 

@@ -19,7 +19,7 @@ This creates a confusing experience: users wait for a response that will never c
 - When a workflow fails, update the progress comment to indicate that an unexpected error occurred.
 - Include a link to the failed GitHub Actions workflow run in the error message so maintainers can debug.
 - Clean up any stale transport comments on the issue/PR when a workflow fails.
-- Apply this error handling consistently across all six workflow scripts.
+- Apply this error handling consistently across all six workflow workflows.
 
 ### Non-goals
 

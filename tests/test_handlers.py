@@ -2,11 +2,11 @@
 
 The handlers wire together:
 
-- The artifact loader (``oz_workflows.artifacts.load_*_artifact``).
-- The result applier (``scripts.<workflow>.apply_*_result``).
+- The artifact loader (``oz.artifacts.load_*_artifact``).
+- The result applier (``workflows.<workflow>.apply_*_result``).
 - The failure handler (``WorkflowProgressComment.report_error``).
 
-The tests stub the ``scripts.*`` and ``oz_workflows.*`` modules so the
+The tests stub the ``workflows.*`` and ``oz.*`` modules so the
 assertions stay focused on handler wiring (passing the right run state
 into apply, calling the right artifact loader, etc).
 """
@@ -42,37 +42,37 @@ class _HandlerTestBase(unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
         self._module_keys = [
-            "scripts",
-            "scripts.review_pr",
-            "scripts.respond_to_pr_comment",
-            "scripts.verify_pr_comment",
-            "scripts.triage_new_issues",
-            "scripts.create_spec_from_issue",
-            "scripts.create_implementation_from_issue",
-            "oz_workflows",
-            "oz_workflows.artifacts",
-            "oz_workflows.helpers",
-            "oz_workflows.verification",
+            "workflows",
+            "workflows.review_pr",
+            "workflows.respond_to_pr_comment",
+            "workflows.verify_pr_comment",
+            "workflows.triage_new_issues",
+            "workflows.create_spec_from_issue",
+            "workflows.create_implementation_from_issue",
+            "oz",
+            "oz.artifacts",
+            "oz.helpers",
+            "oz.verification",
         ]
         self._original_modules = {
             key: sys.modules.get(key) for key in self._module_keys
         }
         # Always create fresh stubs that the handlers import lazily.
-        scripts = _ensure_module("scripts")
-        review = _ensure_module("scripts.review_pr")
-        respond = _ensure_module("scripts.respond_to_pr_comment")
-        verify = _ensure_module("scripts.verify_pr_comment")
-        triage = _ensure_module("scripts.triage_new_issues")
-        create_spec = _ensure_module("scripts.create_spec_from_issue")
+        workflows = _ensure_module("workflows")
+        review = _ensure_module("workflows.review_pr")
+        respond = _ensure_module("workflows.respond_to_pr_comment")
+        verify = _ensure_module("workflows.verify_pr_comment")
+        triage = _ensure_module("workflows.triage_new_issues")
+        create_spec = _ensure_module("workflows.create_spec_from_issue")
         create_implementation = _ensure_module(
-            "scripts.create_implementation_from_issue"
+            "workflows.create_implementation_from_issue"
         )
-        scripts.review_pr = review  # type: ignore[attr-defined]
-        scripts.respond_to_pr_comment = respond  # type: ignore[attr-defined]
-        scripts.verify_pr_comment = verify  # type: ignore[attr-defined]
-        scripts.triage_new_issues = triage  # type: ignore[attr-defined]
-        scripts.create_spec_from_issue = create_spec  # type: ignore[attr-defined]
-        scripts.create_implementation_from_issue = create_implementation  # type: ignore[attr-defined]
+        workflows.review_pr = review  # type: ignore[attr-defined]
+        workflows.respond_to_pr_comment = respond  # type: ignore[attr-defined]
+        workflows.verify_pr_comment = verify  # type: ignore[attr-defined]
+        workflows.triage_new_issues = triage  # type: ignore[attr-defined]
+        workflows.create_spec_from_issue = create_spec  # type: ignore[attr-defined]
+        workflows.create_implementation_from_issue = create_implementation  # type: ignore[attr-defined]
         review.apply_review_result = MagicMock()  # type: ignore[attr-defined]
         respond.apply_pr_comment_result = MagicMock()  # type: ignore[attr-defined]
         verify.apply_verification_result = MagicMock()  # type: ignore[attr-defined]
@@ -80,10 +80,10 @@ class _HandlerTestBase(unittest.TestCase):
         triage.apply_triage_result_for_dispatch = MagicMock()  # type: ignore[attr-defined]
         create_spec.apply_create_spec_result = MagicMock()  # type: ignore[attr-defined]
         create_implementation.apply_create_implementation_result = MagicMock()  # type: ignore[attr-defined]
-        oz = _ensure_module("oz_workflows")
-        artifacts = _ensure_module("oz_workflows.artifacts")
-        helpers = _ensure_module("oz_workflows.helpers")
-        verification = _ensure_module("oz_workflows.verification")
+        oz = _ensure_module("oz")
+        artifacts = _ensure_module("oz.artifacts")
+        helpers = _ensure_module("oz.helpers")
+        verification = _ensure_module("oz.verification")
         oz.artifacts = artifacts  # type: ignore[attr-defined]
         oz.helpers = helpers  # type: ignore[attr-defined]
         oz.verification = verification  # type: ignore[attr-defined]
@@ -187,7 +187,7 @@ class ReviewHandlersTest(_HandlerTestBase):
             run=terminal_run,
         )
 
-        from scripts.review_pr import apply_review_result  # type: ignore[import-not-found]
+        from workflows.review_pr import apply_review_result  # type: ignore[import-not-found]
 
         apply_review_result.assert_called_once()
         kwargs = apply_review_result.call_args.kwargs
@@ -227,7 +227,7 @@ class ReviewHandlersTest(_HandlerTestBase):
         state = _state("review-pull-request")
         run = MagicMock(state="RUNNING", session_link="https://app.warp.dev/run/abc", run_id="oz-run-123")
         handlers.non_terminal_handler(state=state, run=run)
-        helpers = sys.modules["oz_workflows.helpers"]
+        helpers = sys.modules["oz.helpers"]
         helpers.record_run_session_link.assert_called_once_with(  # type: ignore[attr-defined]
             self.progress_instances[-1], run
         )
@@ -267,7 +267,7 @@ class RespondHandlersTest(_HandlerTestBase):
             },
         )
         handlers.result_applier(state=state, result={})
-        from scripts.respond_to_pr_comment import (  # type: ignore[import-not-found]
+        from workflows.respond_to_pr_comment import (  # type: ignore[import-not-found]
             apply_pr_comment_result,
         )
 
@@ -292,7 +292,7 @@ class VerifyHandlersTest(_HandlerTestBase):
         handlers = build_verify_handlers(_factory(github_client))
 
         handlers.artifact_loader("run-1")
-        from oz_workflows.artifacts import (  # type: ignore[import-not-found]
+        from oz.artifacts import (  # type: ignore[import-not-found]
             load_run_artifact,
         )
 
@@ -312,7 +312,7 @@ class VerifyHandlersTest(_HandlerTestBase):
             state="SUCCEEDED",
             artifacts=[SimpleNamespace(artifact_type="FILE")],
         )
-        verification = sys.modules["oz_workflows.verification"]
+        verification = sys.modules["oz.verification"]
         verification.list_downloadable_verification_artifacts.return_value = [  # type: ignore[attr-defined]
             {"title": "screenshot.png", "download_url": "https://example.test/a.png"}
         ]
@@ -321,7 +321,7 @@ class VerifyHandlersTest(_HandlerTestBase):
             result={"overall_status": "passed"},
             run=terminal_run,
         )
-        from scripts.verify_pr_comment import (  # type: ignore[import-not-found]
+        from workflows.verify_pr_comment import (  # type: ignore[import-not-found]
             apply_verification_result,
         )
 
@@ -371,7 +371,7 @@ class TriageHandlersTest(_HandlerTestBase):
         handlers = build_triage_handlers(_factory(github_client))
         state = self._state()
         handlers.result_applier(state=state, result={"summary": "ok", "labels": []})
-        from scripts.triage_new_issues import (  # type: ignore[import-not-found]
+        from workflows.triage_new_issues import (  # type: ignore[import-not-found]
             apply_triage_result_for_dispatch,
         )
 
@@ -404,7 +404,7 @@ class TriageHandlersTest(_HandlerTestBase):
             run_id="oz-run-321",
         )
         handlers.non_terminal_handler(state=self._state(), run=run)
-        helpers = sys.modules["oz_workflows.helpers"]
+        helpers = sys.modules["oz.helpers"]
         helpers.record_run_session_link.assert_called_once_with(  # type: ignore[attr-defined]
             self.progress_instances[-1], run
         )
@@ -465,7 +465,7 @@ class HandlerRegistryTest(_HandlerTestBase):
             },
         )
         handlers.result_applier(state=state, result={"summary": "impl ok"})
-        from scripts.create_implementation_from_issue import (  # type: ignore[import-not-found]
+        from workflows.create_implementation_from_issue import (  # type: ignore[import-not-found]
             apply_create_implementation_result,
         )
 

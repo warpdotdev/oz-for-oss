@@ -6,9 +6,9 @@ The test runner needs the same path on ``sys.path``; doing it here
 keeps the unittest invocation stdlib-only — no editable install or
 package metadata required.
 
-We also add ``lib/`` so the bundled ``oz_workflows`` package (and the
+We also add ``lib/`` so the bundled ``oz`` package (and the
 ``scripts`` package the cron handlers import lazily as
-``scripts.<workflow>``) resolves the same way the Vercel runtime
+``workflows.<workflow>``) resolves the same way the Vercel runtime
 resolves them at runtime via the ``PYTHONPATH=lib`` mirror in
 ``vercel.json``.
 """

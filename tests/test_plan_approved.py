@@ -1,4 +1,4 @@
-"""Tests for ``lib.scripts.plan_approved.apply_plan_approved_sync``.
+"""Tests for ``lib.workflows.plan_approved.apply_plan_approved_sync``.
 
 The webhook handler invokes ``apply_plan_approved_sync`` synchronously
 on every ``pull_request.labeled`` delivery for the ``plan-approved``
@@ -6,7 +6,7 @@ label. The helper short-circuits on PRs that aren't spec PRs, mutates
 the payload to stash the resolved issue number, and decides whether
 the cron-side cloud-agent dispatch path is needed.
 
-The tests stub ``oz_workflows.helpers`` so the assertions stay focused
+The tests stub ``oz.helpers`` so the assertions stay focused
 on the sync helper's branching (skip vs. synced vs. dispatch-needed).
 """
 
@@ -48,14 +48,14 @@ class _PlanApprovedTestBase(unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
         self._module_keys = [
-            "oz_workflows",
-            "oz_workflows.helpers",
+            "oz",
+            "oz.helpers",
         ]
         self._original_modules = {
             key: sys.modules.get(key) for key in self._module_keys
         }
-        oz = _ensure_module("oz_workflows")
-        helpers = _ensure_module("oz_workflows.helpers")
+        oz = _ensure_module("oz")
+        helpers = _ensure_module("oz.helpers")
         oz.helpers = helpers  # type: ignore[attr-defined]
 
         # Stub the helpers used by ``apply_plan_approved_sync``. The
@@ -82,7 +82,7 @@ class _PlanApprovedTestBase(unittest.TestCase):
 
         # Drop any cached import of plan_approved so the test gets a
         # fresh module bound to the helpers stubs above.
-        sys.modules.pop("scripts.plan_approved", None)
+        sys.modules.pop("workflows.plan_approved", None)
         sys.modules.pop("plan_approved", None)
 
     def tearDown(self) -> None:
@@ -91,7 +91,7 @@ class _PlanApprovedTestBase(unittest.TestCase):
                 sys.modules.pop(key, None)
             else:
                 sys.modules[key] = value
-        sys.modules.pop("scripts.plan_approved", None)
+        sys.modules.pop("workflows.plan_approved", None)
         sys.modules.pop("plan_approved", None)
         super().tearDown()
 
@@ -159,7 +159,7 @@ def _issue(
 
 class ApplyPlanApprovedSyncTest(_PlanApprovedTestBase):
     def test_skips_closed_pr(self) -> None:
-        from scripts.plan_approved import apply_plan_approved_sync
+        from workflows.plan_approved import apply_plan_approved_sync
 
         repo_handle = MagicMock(name="repo")
         result = apply_plan_approved_sync(
@@ -170,7 +170,7 @@ class ApplyPlanApprovedSyncTest(_PlanApprovedTestBase):
 
     def test_skips_non_spec_pr(self) -> None:
         # PR has neither a spec branch nor spec-only changed files.
-        from scripts.plan_approved import apply_plan_approved_sync
+        from workflows.plan_approved import apply_plan_approved_sync
 
         pr = _pr_obj(
             head_ref="feature/refactor",
@@ -189,13 +189,13 @@ class ApplyPlanApprovedSyncTest(_PlanApprovedTestBase):
 
     def test_skips_when_no_linked_issue(self) -> None:
         # Override the resolver BEFORE importing plan_approved so the
-        # ``from oz_workflows.helpers import resolve_issue_number_for_pr``
+        # ``from oz.helpers import resolve_issue_number_for_pr``
         # binding inside the module picks up the no-issue stub. Then
         # re-import the module fresh so the override is honored.
-        helpers = sys.modules["oz_workflows.helpers"]
+        helpers = sys.modules["oz.helpers"]
         helpers.resolve_issue_number_for_pr = MagicMock(return_value=None)  # type: ignore[attr-defined]
-        sys.modules.pop("scripts.plan_approved", None)
-        from scripts.plan_approved import apply_plan_approved_sync
+        sys.modules.pop("workflows.plan_approved", None)
+        from workflows.plan_approved import apply_plan_approved_sync
 
         # Use a non-spec-branch so the PR has to qualify via spec-only.
         pr = _pr_obj(head_ref="feature/spec-only", filenames=["specs/GH91/product.md"])
@@ -214,7 +214,7 @@ class ApplyPlanApprovedSyncTest(_PlanApprovedTestBase):
         # ``ready-to-spec`` is present and oz-agent is NOT assigned;
         # the helper should post the spec-approved comment, strip the
         # label, and return ``synced`` (no implementation dispatch).
-        from scripts.plan_approved import apply_plan_approved_sync
+        from workflows.plan_approved import apply_plan_approved_sync
 
         pr = _pr_obj()
         issue = _issue(labels=["ready-to-spec"], assignees=["alice"], comments=[])
@@ -241,7 +241,7 @@ class ApplyPlanApprovedSyncTest(_PlanApprovedTestBase):
     def test_existing_comment_is_not_re_posted(self) -> None:
         # Idempotency: a prior plan-approved comment on the issue
         # should suppress the second post when the webhook redelivers.
-        from scripts.plan_approved import apply_plan_approved_sync
+        from workflows.plan_approved import apply_plan_approved_sync
 
         prior_comment = _comment(
             'A spec for this issue has been approved.\n\n'
@@ -269,7 +269,7 @@ class ApplyPlanApprovedSyncTest(_PlanApprovedTestBase):
         # ``ready-to-implement`` + oz-agent assignee means implementation
         # is needed; the helper returns ``None`` so the webhook falls
         # through to the dispatch path. Comment + label removal still run.
-        from scripts.plan_approved import apply_plan_approved_sync
+        from workflows.plan_approved import apply_plan_approved_sync
 
         pr = _pr_obj()
         issue = _issue(
@@ -289,7 +289,7 @@ class ApplyPlanApprovedSyncTest(_PlanApprovedTestBase):
         # PR on an unusual branch still qualifies if every changed
         # file lives under ``specs/``. This mirrors the spec-only
         # heuristic used by the sync helper.
-        from scripts.plan_approved import apply_plan_approved_sync
+        from workflows.plan_approved import apply_plan_approved_sync
 
         pr = _pr_obj(
             head_ref="human/edit-spec",

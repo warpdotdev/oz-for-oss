@@ -8,7 +8,7 @@ from typing import Any, Mapping, TypedDict
 from github.File import File
 from github.GithubException import GithubException
 from github.Repository import Repository
-from oz_workflows.helpers import (
+from oz.helpers import (
     is_automation_user,
     is_spec_only_pr,
     ORG_MEMBER_ASSOCIATIONS,
@@ -17,11 +17,11 @@ from oz_workflows.helpers import (
     resolve_spec_context_for_pr_via_api,
     WorkflowProgressComment,
 )
-from oz_workflows.repo_local import (
+from oz.repo_local import (
     format_repo_local_prompt_section,
     repo_local_skill_path_for_dispatch,
 )
-from oz_workflows.triage import (
+from oz.triage import (
     format_stakeholders_for_prompt,
     load_stakeholders_from_repo,
 )

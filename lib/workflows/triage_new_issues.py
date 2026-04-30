@@ -9,8 +9,8 @@ from typing import Any, Mapping, TypedDict
 from github.GithubException import GithubException, UnknownObjectException
 from github.Repository import Repository
 
-from oz_workflows.env import workspace
-from oz_workflows.helpers import (
+from oz.env import workspace
+from oz.helpers import (
     get_field,
     _format_triage_session_link,
     format_triage_session_line,
@@ -19,12 +19,12 @@ from oz_workflows.helpers import (
     issue_has_prior_triage,
     WorkflowProgressComment,
 )
-from oz_workflows.repo_local import (
+from oz.repo_local import (
     format_repo_local_prompt_section,
     repo_local_skill_path_for_dispatch,
     resolve_repo_local_skill_path,
 )
-from oz_workflows.triage import (
+from oz.triage import (
     decode_repo_text_file,
     dedupe_strings,
     extract_original_issue_report,
@@ -764,11 +764,11 @@ _ISSUE_TEMPLATE_DIR = ".github/ISSUE_TEMPLATE"
 
 
 def _decode_repo_text_file(repo_handle: Any, path: str) -> str | None:
-    """Backward-compatible alias for :func:`oz_workflows.triage.decode_repo_text_file`.
+    """Backward-compatible alias for :func:`oz.triage.decode_repo_text_file`.
 
     Kept as a private name so existing test fixtures that patch
-    ``scripts.triage_new_issues._decode_repo_text_file`` continue to
-    work after the implementation moved into ``oz_workflows.triage``.
+    ``workflows.triage_new_issues._decode_repo_text_file`` continue to
+    work after the implementation moved into ``oz.triage``.
     """
     return decode_repo_text_file(repo_handle, path)
 
@@ -802,7 +802,7 @@ def _load_triage_config_from_repo(repo_handle: Any) -> dict[str, Any]:
 def _discover_issue_templates_from_repo(repo_handle: Any) -> dict[str, Any]:
     """Return the issue template context for the consuming repo.
 
-    Mirrors :func:`oz_workflows.triage.discover_issue_templates`,
+    Mirrors :func:`oz.triage.discover_issue_templates`,
     sourcing the templates from the GitHub API instead of a workspace
     checkout. Returns ``{"config": None, "templates": []}`` on any
     failure so the prompt's JSON serialization stays well-formed.

@@ -13,7 +13,7 @@ The new behavior should prefer authoritative GitHub-linked issue data, preserve 
 The repo currently has two related failure modes:
 
 1. **Too broad for destructive workflows.** The `remove-stale-issue-labels-on-plan-approved.yml` workflow scans the PR body with `/#(\d+)/g`, so any incidental `#123` mention can be treated as the associated issue. If the wrong issue happens to exist, the workflow may remove `ready-to-spec` from that unrelated issue.
-2. **Wrong source of truth for contribution gating.** `.github/scripts/oz_workflows/helpers.py` reparses PR body text instead of consulting GitHub-native linked issue data. That means repo automation can disagree with GitHub’s own PR-to-issue association model and can miss legitimate same-repo links that GitHub already knows about, such as manually linked issues from the PR sidebar.
+2. **Wrong source of truth for contribution gating.** `.github/scripts/oz/helpers.py` reparses PR body text instead of consulting GitHub-native linked issue data. That means repo automation can disagree with GitHub’s own PR-to-issue association model and can miss legitimate same-repo links that GitHub already knows about, such as manually linked issues from the PR sidebar.
 
 These failure modes are symptoms of the same product problem: the repo does not have a single, documented definition of what counts as an associated issue for a PR.
 

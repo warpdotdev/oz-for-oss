@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 
 from . import conftest  # noqa: F401
 
-from oz_workflows.helpers import (
+from oz.helpers import (
     read_repo_spec_files,
     resolve_spec_context_for_issue_via_api,
     resolve_spec_context_for_pr_via_api,
@@ -86,7 +86,7 @@ class ReadRepoSpecFilesTest(unittest.TestCase):
 
 class ResolveSpecContextForIssueViaApiTest(unittest.TestCase):
     def test_picks_approved_spec_pr_when_available(self) -> None:
-        from oz_workflows import helpers as helpers_mod
+        from oz import helpers as helpers_mod
 
         # Replace ``find_matching_spec_prs`` with a stub so we can
         # control the approved/unapproved tuple without touching the
@@ -124,7 +124,7 @@ class ResolveSpecContextForIssueViaApiTest(unittest.TestCase):
         )
 
     def test_falls_back_to_directory_specs_when_no_approved_pr(self) -> None:
-        from oz_workflows import helpers as helpers_mod
+        from oz import helpers as helpers_mod
         from github.GithubException import UnknownObjectException
 
         repo_handle = MagicMock()
@@ -160,7 +160,7 @@ class ResolveSpecContextForIssueViaApiTest(unittest.TestCase):
         )
 
     def test_returns_empty_source_when_no_spec_context(self) -> None:
-        from oz_workflows import helpers as helpers_mod
+        from oz import helpers as helpers_mod
         from github.GithubException import UnknownObjectException
 
         repo_handle = MagicMock()
@@ -187,7 +187,7 @@ class ResolveSpecContextForIssueViaApiTest(unittest.TestCase):
         # Spec PRs from forks cannot be pushed to via the bot's App
         # token, so ``resolve_spec_context_for_issue_via_api`` raises\
         # to surface the misconfiguration loudly.
-        from oz_workflows import helpers as helpers_mod
+        from oz import helpers as helpers_mod
 
         repo_handle = MagicMock()
         approved = [
@@ -214,7 +214,7 @@ class ResolveSpecContextForIssueViaApiTest(unittest.TestCase):
 
 class ResolveSpecContextForPrViaApiTest(unittest.TestCase):
     def test_returns_empty_when_pr_has_no_linked_issue(self) -> None:
-        from oz_workflows import helpers as helpers_mod
+        from oz import helpers as helpers_mod
 
         repo_handle = MagicMock()
         pr = MagicMock()
@@ -236,7 +236,7 @@ class ResolveSpecContextForPrViaApiTest(unittest.TestCase):
         self.assertEqual(result["spec_context_source"], "")
 
     def test_passes_resolved_issue_number_to_api_resolver(self) -> None:
-        from oz_workflows import helpers as helpers_mod
+        from oz import helpers as helpers_mod
 
         repo_handle = MagicMock()
         pr = MagicMock()

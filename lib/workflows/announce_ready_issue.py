@@ -30,7 +30,7 @@ from typing import Any, Mapping
 
 from github.Repository import Repository
 
-from oz_workflows.helpers import (
+from oz.helpers import (
     _workflow_metadata_prefix,
     comment_metadata,
 )
@@ -80,7 +80,7 @@ def _existing_announcement_comment(
     """Return a prior announcement comment on *issue_handle* if any.
 
     Idempotency is enforced via the same workflow-prefix metadata
-    marker pattern as :mod:`scripts.plan_approved`. GitHub retries
+    marker pattern as :mod:`workflows.plan_approved`. GitHub retries
     failed webhook deliveries, so the helper has to detect "we
     already announced this issue" without scanning every comment for
     the natural-language wording.

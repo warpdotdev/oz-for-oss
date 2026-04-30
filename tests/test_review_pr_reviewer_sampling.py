@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 from . import conftest  # noqa: F401
 
-from scripts.review_pr import (  # type: ignore[import-not-found]
+from workflows.review_pr import (  # type: ignore[import-not-found]
     _deterministic_reviewer_from_stakeholders,
     _format_non_member_review_section,
     _format_review_completion_message,

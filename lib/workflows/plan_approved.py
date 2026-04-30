@@ -32,7 +32,7 @@ from typing import Any, Mapping
 
 from github.Repository import Repository
 
-from oz_workflows.helpers import (
+from oz.helpers import (
     _workflow_metadata_prefix,
     comment_metadata,
     is_spec_only_pr,

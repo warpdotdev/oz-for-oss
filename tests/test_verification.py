@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from . import conftest  # noqa: F401
 
-from oz_workflows.verification import discover_verification_skills_from_repo
+from oz.verification import discover_verification_skills_from_repo
 
 
 class DiscoverVerificationSkillsFromRepoTest(unittest.TestCase):

@@ -19,7 +19,7 @@ The current knobs also live only in Python. OSS adopters cannot inspect or revie
 
 ### Goals
 
-- Remove all Warp-specific reviewer and branch-name assumptions from the shipped self-improvement scripts.
+- Remove all Warp-specific reviewer and branch-name assumptions from the shipped self-improvement workflows.
 - Introduce one committed, human-editable configuration file for workflow-level settings across Oz workflows, starting with self-improvement.
 - Make the config discovery order explicit: consuming repository first, bundled fallback second, with no cross-file merging.
 - Support strings, integers, lists, and nested maps so future settings can be added without inventing a new format.

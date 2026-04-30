@@ -13,8 +13,8 @@ This change needs more than a string replacement. The fix should introduce one r
 - `.github/scripts/update_pr_review.py:60` — passes `reviewer="captainsafia"` into `maybe_push_update_branch()`.
 - `.github/scripts/update_triage.py:54` — passes `reviewer="captainsafia"` into `maybe_push_update_branch()`.
 - `.github/scripts/update_dedupe.py:53` — passes `reviewer="captainsafia"` into `maybe_push_update_branch()`.
-- `.github/scripts/oz_workflows/repo_local.py:145-234` — contains `changed_files_since_origin_main()` and `maybe_push_update_branch()`, which currently hardcode `origin/main` for the diff and default `base_branch="main"` for PR creation.
-- `.github/scripts/oz_workflows/oz_client.py:125-196` — already implements the right lookup shape for skills: search the consuming repo workspace first, then the checked-out workflow code root.
+- `.github/scripts/oz/repo_local.py:145-234` — contains `changed_files_since_origin_main()` and `maybe_push_update_branch()`, which currently hardcode `origin/main` for the diff and default `base_branch="main"` for PR creation.
+- `.github/scripts/oz/oz_client.py:125-196` — already implements the right lookup shape for skills: search the consuming repo workspace first, then the checked-out workflow code root.
 - `.github/workflows/update-pr-review.yml`, `.github/workflows/update-triage.yml`, `.github/workflows/update-dedupe.yml` — check out the consuming repo and the workflow code separately, so the config resolver can mirror the same two-root search strategy.
 - `.github/STAKEHOLDERS:1-10` — repo-local owner map already checked into source control and using CODEOWNERS-style syntax.
 - `README.md:5-76` — current user-facing docs about reusable workflow setup; this is where the new config contract should be documented.
@@ -63,7 +63,7 @@ YAML is chosen over JSON and TOML here. JSON is less friendly for maintainers ed
 
 #### 2. Introduce shared config-resolution helpers
 
-Add a new helper module, for example `.github/scripts/oz_workflows/workflow_config.py`, with two responsibilities:
+Add a new helper module, for example `.github/scripts/oz/workflow_config.py`, with two responsibilities:
 
 - resolve `.github/oz/config.yml` using the same two-root strategy already used by `oz_client.py`
 - parse and validate the `self_improvement` section into a typed object while leaving room for other top-level workflow sections in the same file
@@ -82,7 +82,7 @@ def load_self_improvement_config(workspace_root: Path) -> SelfImprovementConfig:
 
 Implementation notes:
 
-- Extract the workflow-code-root logic from `.github/scripts/oz_workflows/oz_client.py:125-143` into a shared public helper so skills and config use the same path resolution rules.
+- Extract the workflow-code-root logic from `.github/scripts/oz/oz_client.py:125-143` into a shared public helper so skills and config use the same path resolution rules.
 - Search order should be:
   1. consuming repo workspace `.github/oz/config.yml`
   2. workflow code root `.github/oz/config.yml`
@@ -163,7 +163,7 @@ This removes both `origin/main` and `base_branch="main"` assumptions in one plac
 
 #### 5. Update `maybe_push_update_branch()` to own config loading
 
-Keep the self-improvement entrypoints simple by moving the new config logic into `.github/scripts/oz_workflows/repo_local.py`.
+Keep the self-improvement entrypoints simple by moving the new config logic into `.github/scripts/oz/repo_local.py`.
 
 `maybe_push_update_branch()` should:
 

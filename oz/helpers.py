@@ -1252,7 +1252,7 @@ def read_local_spec_files(workspace: Path, issue_number: int) -> list[tuple[str,
 def _read_repo_text_file(repo_handle: Any, path: str) -> str | None:
     """Return the UTF-8 text of *path* in the repo via the GitHub API.
 
-    Local mirror of :func:`oz_workflows.triage.decode_repo_text_file`
+    Local mirror of :func:`oz.triage.decode_repo_text_file`
     so spec-context helpers do not have to import the triage module
     (which would create a circular dependency at module-load time).
     Mirrors the same tolerance for missing files / directory paths /

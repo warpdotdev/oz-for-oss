@@ -90,7 +90,7 @@ Each core skill gets a short "Repository-specific overrides" section that explic
 
 #### 2. Shared helper for resolving the repo-local layer
 
-Add a new helper in `.github/scripts/oz_workflows/helpers.py` (or a new `repo_local.py` module next to it) with this shape:
+Add a new helper in `.github/scripts/oz/helpers.py` (or a new `repo_local.py` module next to it) with this shape:
 
 ```python
 def resolve_repo_local_skill_path(workspace: Path, core_skill_name: str) -> Path | None:
@@ -164,7 +164,7 @@ Update `.github/scripts/update_pr_review.py`:
 - Restructure the control flow so the Python entrypoint, not the agent, gates the push. Today the agent commits and pushes `oz-agent/update-pr-review`; that must change. Instruct the agent via its prompt to leave a local commit on `oz-agent/update-pr-review` without pushing and to exit once the commit is staged. Then run `git diff --name-only origin/main...oz-agent/update-pr-review` in `update_pr_review.py` and fail if any path is outside `.agents/skills/review-pr-local/` or `.agents/skills/review-spec-local/`. Only push the branch when the guard passes. `.github/issue-triage/` is intentionally excluded from this loop's write surface because the triage label taxonomy is a triage signal, not a review signal, and is owned by `update-triage`.
 - After the guard passes and the branch is pushed, the Python entrypoint opens a pull request itself (via `gh pr create`, tagging `@captainsafia`) rather than relying on the agent to open the PR. The agent's prompt no longer has an "open a pull request" instruction; removing that step without the entrypoint taking it over would leave the branch pushed silently with no reviewer notified.
 
-Factor the push/PR plumbing into `oz_workflows/repo_local.py` (or a new `oz_workflows/push_guard.py`) so `update_pr_review.py`, `update_triage.py`, and `update_dedupe.py` share one implementation of `branch_exists`, `changed_files_since_origin_main`, and `maybe_push_update_branch`. Each entrypoint then only declares its own `ALLOWED_PREFIXES`, PR title, and PR body; future guard-logic changes land in a single place.
+Factor the push/PR plumbing into `oz/repo_local.py` (or a new `oz/push_guard.py`) so `update_pr_review.py`, `update_triage.py`, and `update_dedupe.py` share one implementation of `branch_exists`, `changed_files_since_origin_main`, and `maybe_push_update_branch`. Each entrypoint then only declares its own `ALLOWED_PREFIXES`, PR title, and PR body; future guard-logic changes land in a single place.
 
 Add a new script `.github/scripts/update_triage.py` modeled on `update_pr_review.py`:
 

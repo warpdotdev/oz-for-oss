@@ -1,7 +1,7 @@
 """Tests for ``control_plane.lib.builders``.
 
 The builders are thin wrappers around the workflow-specific
-``gather_*_context`` / ``build_*_prompt`` helpers in ``lib/scripts``.
+``gather_*_context`` / ``build_*_prompt`` helpers in ``lib/workflows``.
 The tests stub each gather/build helper so the assertions stay focused
 on builder wiring (payload parsing, repo handle resolution,
 DispatchRequest shape).
@@ -43,15 +43,15 @@ class _BuilderTestBase(unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
         self._module_keys = [
-            "scripts",
-            "scripts.review_pr",
-            "scripts.respond_to_pr_comment",
-            "scripts.verify_pr_comment",
-            "scripts.triage_new_issues",
-            "scripts.create_spec_from_issue",
-            "scripts.create_implementation_from_issue",
-            "oz_workflows",
-            "oz_workflows.helpers",
+            "workflows",
+            "workflows.review_pr",
+            "workflows.respond_to_pr_comment",
+            "workflows.verify_pr_comment",
+            "workflows.triage_new_issues",
+            "workflows.create_spec_from_issue",
+            "workflows.create_implementation_from_issue",
+            "oz",
+            "oz.helpers",
         ]
         self._original_modules = {
             key: sys.modules.get(key) for key in self._module_keys
@@ -61,8 +61,8 @@ class _BuilderTestBase(unittest.TestCase):
         # avoid pulling PyGithub into the test path. Stub the helper
         # module so each test can drive the lifecycle without going
         # through the production helper.
-        oz = _ensure_module("oz_workflows")
-        helpers = _ensure_module("oz_workflows.helpers")
+        oz = _ensure_module("oz")
+        helpers = _ensure_module("oz.helpers")
         oz.helpers = helpers  # type: ignore[attr-defined]
         self.progress_instances: list[MagicMock] = []
 
@@ -124,9 +124,9 @@ class _BuilderTestBase(unittest.TestCase):
 class BuildReviewRequestTest(_BuilderTestBase):
     def setUp(self) -> None:
         super().setUp()
-        scripts = _ensure_module("scripts")
-        review_module = _ensure_module("scripts.review_pr")
-        scripts.review_pr = review_module  # type: ignore[attr-defined]
+        workflows = _ensure_module("workflows")
+        review_module = _ensure_module("workflows.review_pr")
+        workflows.review_pr = review_module  # type: ignore[attr-defined]
         review_module.gather_review_context = MagicMock(  # type: ignore[attr-defined]
             return_value={
                 "owner": "acme",
@@ -210,9 +210,9 @@ class BuildReviewRequestTest(_BuilderTestBase):
 class BuildRespondRequestTest(_BuilderTestBase):
     def setUp(self) -> None:
         super().setUp()
-        scripts = _ensure_module("scripts")
-        respond_module = _ensure_module("scripts.respond_to_pr_comment")
-        scripts.respond_to_pr_comment = respond_module  # type: ignore[attr-defined]
+        workflows = _ensure_module("workflows")
+        respond_module = _ensure_module("workflows.respond_to_pr_comment")
+        workflows.respond_to_pr_comment = respond_module  # type: ignore[attr-defined]
         respond_module.gather_pr_comment_context = MagicMock(  # type: ignore[attr-defined]
             return_value={
                 "owner": "acme",
@@ -291,7 +291,7 @@ class BuildRespondRequestTest(_BuilderTestBase):
         )
         self.assertEqual(request.workflow, WORKFLOW_RESPOND_TO_PR_COMMENT)
         self.assertEqual(request.payload_subset["trigger_comment_id"], 999)
-        respond_module = sys.modules["scripts.respond_to_pr_comment"]
+        respond_module = sys.modules["workflows.respond_to_pr_comment"]
         kwargs = respond_module.gather_pr_comment_context.call_args.kwargs  # type: ignore[attr-defined]
         self.assertEqual(kwargs["trigger_kind"], "review_body")
         self.assertEqual(kwargs["trigger_comment_id"], 1234)
@@ -300,9 +300,9 @@ class BuildRespondRequestTest(_BuilderTestBase):
 class BuildVerifyRequestTest(_BuilderTestBase):
     def setUp(self) -> None:
         super().setUp()
-        scripts = _ensure_module("scripts")
-        verify_module = _ensure_module("scripts.verify_pr_comment")
-        scripts.verify_pr_comment = verify_module  # type: ignore[attr-defined]
+        workflows = _ensure_module("workflows")
+        verify_module = _ensure_module("workflows.verify_pr_comment")
+        workflows.verify_pr_comment = verify_module  # type: ignore[attr-defined]
         verify_module.gather_verify_context = MagicMock(  # type: ignore[attr-defined]
             return_value={
                 "owner": "acme",
@@ -351,9 +351,9 @@ class BuildVerifyRequestTest(_BuilderTestBase):
 class BuildTriageRequestTest(_BuilderTestBase):
     def setUp(self) -> None:
         super().setUp()
-        scripts = _ensure_module("scripts")
-        triage_module = _ensure_module("scripts.triage_new_issues")
-        scripts.triage_new_issues = triage_module  # type: ignore[attr-defined]
+        workflows = _ensure_module("workflows")
+        triage_module = _ensure_module("workflows.triage_new_issues")
+        workflows.triage_new_issues = triage_module  # type: ignore[attr-defined]
         triage_module.gather_triage_context = MagicMock(  # type: ignore[attr-defined]
             return_value={
                 "owner": "acme",
@@ -427,9 +427,9 @@ class BuildTriageRequestTest(_BuilderTestBase):
 class BuildPlanApprovedRequestTest(_BuilderTestBase):
     def setUp(self) -> None:
         super().setUp()
-        scripts = _ensure_module("scripts")
-        impl_module = _ensure_module("scripts.create_implementation_from_issue")
-        scripts.create_implementation_from_issue = impl_module  # type: ignore[attr-defined]
+        workflows = _ensure_module("workflows")
+        impl_module = _ensure_module("workflows.create_implementation_from_issue")
+        workflows.create_implementation_from_issue = impl_module  # type: ignore[attr-defined]
         impl_module.IMPLEMENT_SPECS_SKILL = "implement-specs"  # type: ignore[attr-defined]
         impl_module.gather_create_implementation_context = MagicMock(  # type: ignore[attr-defined]
             return_value={
@@ -461,7 +461,7 @@ class BuildPlanApprovedRequestTest(_BuilderTestBase):
         impl_module.build_create_implementation_prompt_for_dispatch = MagicMock(  # type: ignore[attr-defined]
             return_value="PLAN_APPROVED_IMPL_PROMPT"
         )
-        helpers = sys.modules["oz_workflows.helpers"]
+        helpers = sys.modules["oz.helpers"]
         helpers.resolve_issue_number_for_pr = MagicMock(  # type: ignore[attr-defined]
             return_value=91
         )
@@ -519,7 +519,7 @@ class BuildPlanApprovedRequestTest(_BuilderTestBase):
         )
         # The builder reuses the stashed linked_issue_number rather
         # than re-resolving the PR association.
-        helpers = sys.modules["oz_workflows.helpers"]
+        helpers = sys.modules["oz.helpers"]
         helpers.resolve_issue_number_for_pr.assert_not_called()  # type: ignore[attr-defined]
 
     def test_falls_back_to_resolving_when_linked_issue_missing(self) -> None:
@@ -540,7 +540,7 @@ class BuildPlanApprovedRequestTest(_BuilderTestBase):
             workspace_path=Path("/tmp/ws"),
         )
         self.assertEqual(request.payload_subset["issue_number"], 91)
-        helpers = sys.modules["oz_workflows.helpers"]
+        helpers = sys.modules["oz.helpers"]
         helpers.resolve_issue_number_for_pr.assert_called_once()  # type: ignore[attr-defined]
 
     def test_raises_when_linked_issue_cannot_be_resolved(self) -> None:
@@ -552,7 +552,7 @@ class BuildPlanApprovedRequestTest(_BuilderTestBase):
         pr_obj = MagicMock(name="pr")
         pr_obj.get_files.return_value = []
         repo_handle.get_pull.return_value = pr_obj
-        helpers = sys.modules["oz_workflows.helpers"]
+        helpers = sys.modules["oz.helpers"]
         helpers.resolve_issue_number_for_pr = MagicMock(return_value=None)  # type: ignore[attr-defined]
 
         with self.assertRaises(ValueError):

@@ -6,11 +6,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock
 
-# Ensure the repo root is on ``sys.path`` so the ``lib.scripts`` /
-# ``lib.oz_workflows`` packages resolve when this test runs under
+# Ensure the repo root is on ``sys.path`` so the ``lib.workflows`` /
+# ``lib.oz`` packages resolve when this test runs under
 # ``python -m unittest discover -s tests``.
 from . import conftest  # noqa: F401
-from lib.scripts.triage_new_issues import (
+from lib.workflows.triage_new_issues import (
     COMMENT_TYPE_RESPONSE,
     COMMENT_TYPE_TRIAGE,
     RESPONSE_DETAILS_SUMMARY,
@@ -43,13 +43,13 @@ from lib.scripts.triage_new_issues import (
     _cleanup_legacy_triage_comments,
 )
 
-from oz_workflows.helpers import (
+from oz.helpers import (
     WorkflowProgressComment,
     _format_triage_session_link,
     build_comment_body,
 )
 
-from oz_workflows.triage import (
+from oz.triage import (
     ORIGINAL_REPORT_END,
     ORIGINAL_REPORT_START,
     STAKEHOLDERS_REPO_PATH,
@@ -1086,7 +1086,7 @@ class MutualExclusivityTest(unittest.TestCase):
 
     def _build_comment_parts(self, result: dict, issue: dict) -> str:
         """Simulate the comment assembly logic from the dispatch applier."""
-        from lib.scripts.triage_new_issues import _lowercase_first
+        from lib.workflows.triage_new_issues import _lowercase_first
         summary = _lowercase_first(str(result.get("summary") or "triage completed").strip())
         issue_body = str(result.get("issue_body") or "").strip()
         statements = extract_statements(result)

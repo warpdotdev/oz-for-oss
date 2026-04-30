@@ -13,10 +13,10 @@ The product spec requires: (1) a new GitHub Actions workflow trigger on `plan-ap
 - `.github/workflows/create-implementation-from-issue-local.yml (1-39)` — existing workflow that triggers on `ready-to-implement` label and `oz-agent` assignment. This is the workflow we want to re-dispatch.
 - `.github/workflows/create-implementation-from-issue.yml (1-76)` — reusable workflow that runs the implementation agent. Called by the local workflow.
 - `.github/scripts/create_implementation_from_issue.py (70-84)` — the no-op guard that blocks implementation when spec PRs exist but none are labeled `plan-approved`.
-- `.github/scripts/oz_workflows/helpers.py (759-791)` — `find_matching_spec_prs()` which separates spec PRs into approved and unapproved lists based on the `plan-approved` label.
-- `.github/scripts/oz_workflows/helpers.py (806-849)` — `resolve_spec_context_for_issue()` which builds the spec context used by the implementation workflow.
-- `.github/scripts/oz_workflows/helpers.py (926-950)` — `resolve_issue_number_for_pr()` which determines the associated issue number from a PR's branch name, changed files, and body references.
-- `.github/scripts/oz_workflows/helpers.py (953-957)` — `is_spec_only_pr()` which checks whether all changed files live under `specs/`.
+- `.github/scripts/oz/helpers.py (759-791)` — `find_matching_spec_prs()` which separates spec PRs into approved and unapproved lists based on the `plan-approved` label.
+- `.github/scripts/oz/helpers.py (806-849)` — `resolve_spec_context_for_issue()` which builds the spec context used by the implementation workflow.
+- `.github/scripts/oz/helpers.py (926-950)` — `resolve_issue_number_for_pr()` which determines the associated issue number from a PR's branch name, changed files, and body references.
+- `.github/scripts/oz/helpers.py (953-957)` — `is_spec_only_pr()` which checks whether all changed files live under `specs/`.
 
 ### Current state
 

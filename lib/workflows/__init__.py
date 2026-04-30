@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from ..oz_workflows.agent_workflow import (
+from oz.agent_workflow import (
     ProgressCommentSpec,
     WorkflowDispatch,
     make_run_adapter,
@@ -144,8 +144,8 @@ class ReviewWorkflow(BaseWorkflow):
     config_name = WORKFLOW_REVIEW_PR
 
     def build_dispatch(self, payload: Mapping[str, Any], *, github_client: Any, workspace_path: Path | None = None) -> WorkflowDispatch:
-        from oz_workflows.helpers import format_review_start_line  # type: ignore[import-not-found]
-        from scripts.review_pr import build_review_prompt_for_dispatch, gather_review_context  # type: ignore[import-not-found]
+        from oz.helpers import format_review_start_line  # type: ignore[import-not-found]
+        from workflows.review_pr import build_review_prompt_for_dispatch, gather_review_context  # type: ignore[import-not-found]
 
         owner, repo, full_name = _resolve_owner_repo(payload)
         pr_number = _resolve_pr_number(payload)
@@ -186,12 +186,12 @@ class ReviewWorkflow(BaseWorkflow):
         )
 
     def load_artifact(self, run_id: str) -> dict[str, Any]:
-        from oz_workflows.artifacts import load_review_artifact  # type: ignore[import-not-found]
+        from oz.artifacts import load_review_artifact  # type: ignore[import-not-found]
 
         return load_review_artifact(run_id)
 
     def apply_result(self, repo_handle: Any, *, context: Mapping[str, Any], run: Any, result: Mapping[str, Any], progress: Any, github_client: Any | None = None) -> None:
-        from scripts.review_pr import apply_review_result  # type: ignore[import-not-found]
+        from workflows.review_pr import apply_review_result  # type: ignore[import-not-found]
 
         apply_review_result(repo_handle, context=context, run=run, result=dict(result), progress=progress)
 
@@ -201,7 +201,7 @@ class RespondWorkflow(BaseWorkflow):
     config_name = WORKFLOW_RESPOND_TO_PR_COMMENT
 
     def build_dispatch(self, payload: Mapping[str, Any], *, github_client: Any, workspace_path: Path | None = None) -> WorkflowDispatch:
-        from scripts.respond_to_pr_comment import build_pr_comment_prompt, gather_pr_comment_context  # type: ignore[import-not-found]
+        from workflows.respond_to_pr_comment import build_pr_comment_prompt, gather_pr_comment_context  # type: ignore[import-not-found]
 
         owner, repo, full_name = _resolve_owner_repo(payload)
         pr_number = _resolve_pr_number(payload)
@@ -266,7 +266,7 @@ class RespondWorkflow(BaseWorkflow):
         )
 
     def apply_result(self, repo_handle: Any, *, context: Mapping[str, Any], run: Any, result: Mapping[str, Any], progress: Any, github_client: Any | None = None) -> None:
-        from scripts.respond_to_pr_comment import apply_pr_comment_result  # type: ignore[import-not-found]
+        from workflows.respond_to_pr_comment import apply_pr_comment_result  # type: ignore[import-not-found]
 
         apply_pr_comment_result(
             repo_handle,
@@ -282,7 +282,7 @@ class VerifyWorkflow(BaseWorkflow):
     config_name = WORKFLOW_VERIFY_PR_COMMENT
 
     def build_dispatch(self, payload: Mapping[str, Any], *, github_client: Any, workspace_path: Path | None = None) -> WorkflowDispatch:
-        from scripts.verify_pr_comment import build_verification_prompt, gather_verify_context  # type: ignore[import-not-found]
+        from workflows.verify_pr_comment import build_verification_prompt, gather_verify_context  # type: ignore[import-not-found]
 
         owner, repo, full_name = _resolve_owner_repo(payload)
         pr_number = _resolve_pr_number(payload)
@@ -330,14 +330,14 @@ class VerifyWorkflow(BaseWorkflow):
         )
 
     def load_artifact(self, run_id: str) -> dict[str, Any]:
-        from oz_workflows.artifacts import load_run_artifact  # type: ignore[import-not-found]
-        from scripts.verify_pr_comment import VERIFICATION_REPORT_FILENAME  # type: ignore[import-not-found]
+        from oz.artifacts import load_run_artifact  # type: ignore[import-not-found]
+        from workflows.verify_pr_comment import VERIFICATION_REPORT_FILENAME  # type: ignore[import-not-found]
 
         return load_run_artifact(run_id, filename=VERIFICATION_REPORT_FILENAME)
 
     def apply_result(self, repo_handle: Any, *, context: Mapping[str, Any], run: Any, result: Mapping[str, Any], progress: Any, github_client: Any | None = None) -> None:
-        from oz_workflows.verification import list_downloadable_verification_artifacts  # type: ignore[import-not-found]
-        from scripts.verify_pr_comment import VERIFICATION_REPORT_FILENAME, apply_verification_result  # type: ignore[import-not-found]
+        from oz.verification import list_downloadable_verification_artifacts  # type: ignore[import-not-found]
+        from workflows.verify_pr_comment import VERIFICATION_REPORT_FILENAME, apply_verification_result  # type: ignore[import-not-found]
 
         apply_verification_result(
             repo_handle,
@@ -357,8 +357,8 @@ class TriageWorkflow(BaseWorkflow):
     config_name = WORKFLOW_TRIAGE_NEW_ISSUES
 
     def build_dispatch(self, payload: Mapping[str, Any], *, github_client: Any, workspace_path: Path | None = None) -> WorkflowDispatch:
-        from oz_workflows.helpers import format_triage_start_line, triggering_comment_prompt_text  # type: ignore[import-not-found]
-        from scripts.triage_new_issues import build_triage_prompt_for_dispatch, gather_triage_context  # type: ignore[import-not-found]
+        from oz.helpers import format_triage_start_line, triggering_comment_prompt_text  # type: ignore[import-not-found]
+        from workflows.triage_new_issues import build_triage_prompt_for_dispatch, gather_triage_context  # type: ignore[import-not-found]
 
         owner, repo, full_name = _resolve_owner_repo(payload)
         issue_number = _resolve_issue_number(payload)
@@ -396,12 +396,12 @@ class TriageWorkflow(BaseWorkflow):
         )
 
     def load_artifact(self, run_id: str) -> dict[str, Any]:
-        from oz_workflows.artifacts import load_triage_artifact  # type: ignore[import-not-found]
+        from oz.artifacts import load_triage_artifact  # type: ignore[import-not-found]
 
         return load_triage_artifact(run_id)
 
     def apply_result(self, repo_handle: Any, *, context: Mapping[str, Any], run: Any, result: Mapping[str, Any], progress: Any, github_client: Any | None = None) -> None:
-        from scripts.triage_new_issues import apply_triage_result_for_dispatch  # type: ignore[import-not-found]
+        from workflows.triage_new_issues import apply_triage_result_for_dispatch  # type: ignore[import-not-found]
 
         apply_triage_result_for_dispatch(
             repo_handle,
@@ -417,8 +417,8 @@ class CreateSpecWorkflow(BaseWorkflow):
     config_name = WORKFLOW_CREATE_SPEC_FROM_ISSUE
 
     def build_dispatch(self, payload: Mapping[str, Any], *, github_client: Any, workspace_path: Path | None = None) -> WorkflowDispatch:
-        from oz_workflows.helpers import triggering_comment_prompt_text  # type: ignore[import-not-found]
-        from scripts.create_spec_from_issue import (
+        from oz.helpers import triggering_comment_prompt_text  # type: ignore[import-not-found]
+        from workflows.create_spec_from_issue import (
             SPEC_DRIVEN_IMPLEMENTATION_SKILL,
             build_create_spec_prompt_for_dispatch,
             gather_create_spec_context,
@@ -462,7 +462,7 @@ class CreateSpecWorkflow(BaseWorkflow):
         )
 
     def apply_result(self, repo_handle: Any, *, context: Mapping[str, Any], run: Any, result: Mapping[str, Any], progress: Any, github_client: Any | None = None) -> None:
-        from scripts.create_spec_from_issue import apply_create_spec_result  # type: ignore[import-not-found]
+        from workflows.create_spec_from_issue import apply_create_spec_result  # type: ignore[import-not-found]
 
         apply_create_spec_result(repo_handle, context=context, run=run, progress=progress)
 
@@ -472,8 +472,8 @@ class CreateImplementationWorkflow(BaseWorkflow):
     config_name = WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE
 
     def build_dispatch(self, payload: Mapping[str, Any], *, github_client: Any, workspace_path: Path | None = None) -> WorkflowDispatch:
-        from oz_workflows.helpers import triggering_comment_prompt_text  # type: ignore[import-not-found]
-        from scripts.create_implementation_from_issue import (
+        from oz.helpers import triggering_comment_prompt_text  # type: ignore[import-not-found]
+        from workflows.create_implementation_from_issue import (
             IMPLEMENT_SPECS_SKILL,
             build_create_implementation_prompt_for_dispatch,
             gather_create_implementation_context,
@@ -516,7 +516,7 @@ class CreateImplementationWorkflow(BaseWorkflow):
         )
 
     def apply_result(self, repo_handle: Any, *, context: Mapping[str, Any], run: Any, result: Mapping[str, Any], progress: Any, github_client: Any | None = None) -> None:
-        from scripts.create_implementation_from_issue import apply_create_implementation_result  # type: ignore[import-not-found]
+        from workflows.create_implementation_from_issue import apply_create_implementation_result  # type: ignore[import-not-found]
 
         apply_create_implementation_result(repo_handle, context=context, run=run, progress=progress)
 
@@ -526,8 +526,8 @@ class PlanApprovedWorkflow(CreateImplementationWorkflow):
     config_name = WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE
 
     def build_dispatch(self, payload: Mapping[str, Any], *, github_client: Any, workspace_path: Path | None = None) -> WorkflowDispatch:
-        from oz_workflows.helpers import resolve_issue_number_for_pr  # type: ignore[import-not-found]
-        from scripts.create_implementation_from_issue import (
+        from oz.helpers import resolve_issue_number_for_pr  # type: ignore[import-not-found]
+        from workflows.create_implementation_from_issue import (
             IMPLEMENT_SPECS_SKILL,
             build_create_implementation_prompt_for_dispatch,
             gather_create_implementation_context,
