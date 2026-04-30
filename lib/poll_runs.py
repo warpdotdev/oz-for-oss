@@ -45,8 +45,13 @@ class ArtifactLoader(Protocol):
 
 class ResultApplier(Protocol):
     """Applies a successful run result back to GitHub."""
-
-    def __call__(self, *, state: RunState, result: Mapping[str, Any]) -> None: ...
+    def __call__(
+        self,
+        *,
+        state: RunState,
+        result: Mapping[str, Any],
+        run: Any | None = None,
+    ) -> None: ...
 
 
 class FailureHandler(Protocol):
@@ -162,7 +167,7 @@ def _process_one(
     try:
         if current_state == "SUCCEEDED":
             result = handler.artifact_loader(state.run_id)
-            handler.result_applier(state=state, result=result)
+            handler.result_applier(state=state, result=result, run=run)
             applied = True
             error_message = ""
         else:

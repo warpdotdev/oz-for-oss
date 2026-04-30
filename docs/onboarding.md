@@ -14,7 +14,7 @@ Create the App (organization-owned or user-owned), grant it these permissions, a
 
 **Webhook events**
 
-- `issues`, `issue_comment`, `pull_request`, `pull_request_review_comment`
+- `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment`
 
 Note the **App ID** and a generated **private key**. The Vercel webhook uses them to mint installation tokens for repository operations.
 
@@ -37,7 +37,7 @@ vercel deploy
 | `WARP_API_BASE_URL` | Defaults to `https://app.warp.dev/api/v1`. Override for staging. |
 | `WARP_ENVIRONMENT_ID` | Default Oz cloud environment UID. |
 | `WARP_REVIEW_TRIAGE_ENVIRONMENT_ID` | Optional override used by review/triage runs. Falls back to `WARP_ENVIRONMENT_ID` when empty. |
-| `CRON_SECRET` | Random secret used to authenticate Vercel cron requests. |
+| `CRON_SECRET` | Required random secret used to authenticate Vercel cron requests. Local development can opt out with `OZ_ALLOW_UNAUTHENTICATED_CRON=true`. |
 | `GITHUB_API_BASE_URL` | Optional. Defaults to `https://api.github.com`. Override for GitHub Enterprise. |
 
 Provision a Vercel KV resource on the project. Vercel injects `KV_REST_API_URL` / `KV_REST_API_TOKEN` automatically; the cron handler reads them at runtime through `upstash-redis`.

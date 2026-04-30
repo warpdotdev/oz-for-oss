@@ -487,6 +487,16 @@ class PullRequestEventTest(unittest.TestCase):
         )
         self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
 
+    def test_reopened_non_draft_pr_routes_to_review(self) -> None:
+        decision = route_event(
+            "pull_request",
+            {
+                "action": "reopened",
+                "pull_request": {"state": "open", "draft": False},
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
+
     def test_opened_draft_pr_skipped(self) -> None:
         decision = route_event(
             "pull_request",
@@ -569,16 +579,25 @@ class PullRequestEventTest(unittest.TestCase):
         )
         self.assertIsNone(decision.workflow)
 
-    def test_synchronize_is_dropped(self) -> None:
+    def test_synchronize_non_draft_pr_routes_to_review(self) -> None:
         decision = route_event(
             "pull_request",
             {
                 "action": "synchronize",
-                "pull_request": {"state": "open"},
+                "pull_request": {"state": "open", "draft": False},
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
+
+    def test_synchronize_draft_pr_is_dropped(self) -> None:
+        decision = route_event(
+            "pull_request",
+            {
+                "action": "synchronize",
+                "pull_request": {"state": "open", "draft": True},
             },
         )
         self.assertIsNone(decision.workflow)
-        self.assertIn("not handled", decision.reason)
 
     def test_edited_is_dropped(self) -> None:
         decision = route_event(
@@ -639,6 +658,60 @@ class PullRequestReviewCommentTest(unittest.TestCase):
             {
                 "action": "created",
                 "comment": _comment(body="@oz-agent", login="oz-agent[bot]", user_type="Bot"),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+
+
+class PullRequestReviewTest(unittest.TestCase):
+    def test_mention_in_review_body_routes_to_respond_to_pr_comment(self) -> None:
+        decision = route_event(
+            "pull_request_review",
+            {
+                "action": "submitted",
+                "review": _comment(body="@oz-agent please update this"),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_RESPOND_TO_PR_COMMENT)
+
+    def test_edited_review_body_mention_routes_to_respond_to_pr_comment(self) -> None:
+        decision = route_event(
+            "pull_request_review",
+            {
+                "action": "edited",
+                "review": _comment(body="Follow-up for @oz-agent"),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_RESPOND_TO_PR_COMMENT)
+
+    def test_review_body_without_mention_is_dropped(self) -> None:
+        decision = route_event(
+            "pull_request_review",
+            {
+                "action": "submitted",
+                "review": _comment(body="LGTM"),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+
+    def test_bot_review_body_is_dropped(self) -> None:
+        decision = route_event(
+            "pull_request_review",
+            {
+                "action": "submitted",
+                "review": _comment(
+                    body="@oz-agent", login="oz-agent[bot]", user_type="Bot"
+                ),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+
+    def test_unhandled_review_action_is_dropped(self) -> None:
+        decision = route_event(
+            "pull_request_review",
+            {
+                "action": "dismissed",
+                "review": _comment(body="@oz-agent"),
             },
         )
         self.assertIsNone(decision.workflow)

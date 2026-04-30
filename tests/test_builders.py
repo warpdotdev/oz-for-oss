@@ -267,6 +267,34 @@ class BuildRespondRequestTest(_BuilderTestBase):
         # Progress lifecycle is deferred until the Oz run id is known.
         self.assertEqual(len(self.progress_instances), 0)
         self.assert_deferred_progress(request, start_line="I'm starting")
+    def test_returns_dispatch_request_for_review_body(self) -> None:
+        from lib.builders import build_respond_request
+        from lib.routing import WORKFLOW_RESPOND_TO_PR_COMMENT
+
+        github_client = MagicMock()
+        repo = MagicMock(name="repo")
+        github_client.get_repo.return_value = repo
+        pr = MagicMock(name="pr")
+        repo.get_pull.return_value = pr
+
+        payload = {
+            "repository": {"full_name": "acme/widgets"},
+            "installation": {"id": 1},
+            "pull_request": {"number": 7},
+            "review": {"id": 1234, "user": {"login": "alice"}},
+        }
+
+        request = build_respond_request(
+            payload,
+            github_client=github_client,
+            workspace_path=Path("/tmp/ws"),
+        )
+        self.assertEqual(request.workflow, WORKFLOW_RESPOND_TO_PR_COMMENT)
+        self.assertEqual(request.payload_subset["trigger_comment_id"], 999)
+        respond_module = sys.modules["scripts.respond_to_pr_comment"]
+        kwargs = respond_module.gather_pr_comment_context.call_args.kwargs  # type: ignore[attr-defined]
+        self.assertEqual(kwargs["trigger_kind"], "review_body")
+        self.assertEqual(kwargs["trigger_comment_id"], 1234)
 
 
 class BuildVerifyRequestTest(_BuilderTestBase):

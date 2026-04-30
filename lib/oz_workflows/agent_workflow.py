@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Mapping, Protocol
 
@@ -104,9 +105,15 @@ def create_progress_comment(spec: ProgressCommentSpec, *, run_id: str) -> Any:
 
 def make_run_adapter(*, state: Any, progress: Any, run: Any | None = None) -> Any:
     """Return the minimal run object shape consumed by apply helpers."""
+    created_at = getattr(run, "created_at", None) if run is not None else None
+    if not isinstance(created_at, datetime):
+        try:
+            created_at = datetime.fromtimestamp(float(state.dispatched_at), timezone.utc)
+        except (AttributeError, TypeError, ValueError, OSError):
+            created_at = None
     return SimpleNamespace(
         run_id=state.run_id,
         session_link=getattr(progress, "session_link", ""),
-        created_at=getattr(run, "created_at", None) if run is not None else None,
+        created_at=created_at,
         artifacts=getattr(run, "artifacts", None) if run is not None else None,
     )

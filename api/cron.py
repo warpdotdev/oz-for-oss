@@ -26,16 +26,29 @@ from lib.state import StateStore
 logger = logging.getLogger(__name__)
 
 
+def _allow_unauthenticated_cron() -> bool:
+    raw = os.environ.get("OZ_ALLOW_UNAUTHENTICATED_CRON", "").strip().lower()
+    return raw in {"1", "true", "yes", "local"}
+
+
 def _resolve_cron_secret() -> str | None:
     """Return the configured cron-secret, when set.
 
     Vercel cron requests include the ``Authorization: Bearer <secret>``
-    header that matches the project's ``CRON_SECRET`` env var. The
-    handler treats the secret as optional during local ``vercel dev``
-    so test traffic does not require the production secret.
+    header that matches the project's ``CRON_SECRET`` env var. The secret
+    is required by default so a misconfigured production deployment does
+    not expose the run-draining endpoint. Local development can opt out
+    explicitly with ``OZ_ALLOW_UNAUTHENTICATED_CRON=true``.
     """
     secret = os.environ.get("CRON_SECRET", "").strip()
-    return secret or None
+    if secret:
+        return secret
+    if _allow_unauthenticated_cron():
+        return None
+    raise RuntimeError(
+        "CRON_SECRET is required for /api/cron. Set "
+        "OZ_ALLOW_UNAUTHENTICATED_CRON=true only for local development."
+    )
 
 
 def build_state_store() -> StateStore:
@@ -169,7 +182,12 @@ class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel requires this exac
     server_version = "OzForOSSCron/1.0"
 
     def do_GET(self) -> None:  # noqa: N802 - signature comes from BaseHTTPRequestHandler.
-        secret = _resolve_cron_secret()
+        try:
+            secret = _resolve_cron_secret()
+        except RuntimeError as exc:
+            logger.error("%s", exc)
+            self._respond(500, {"error": str(exc)})
+            return
         if secret is not None:
             auth_header = self.headers.get("authorization", "")
             if auth_header != f"Bearer {secret}":

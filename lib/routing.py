@@ -17,7 +17,8 @@ Webhook coverage today:
 
 - ``pull_request`` events route as follows:
 
-  - ``opened`` (non-draft) and ``ready_for_review`` route to
+  - ``opened`` / ``reopened`` / ``synchronize`` (non-draft) and
+    ``ready_for_review`` route to
     ``review-pull-request``.
   - ``review_requested`` routes to ``review-pull-request`` when
     the requested reviewer is ``oz-agent``.
@@ -32,6 +33,8 @@ Webhook coverage today:
 - ``pull_request_review_comment`` events route to
   ``review-pull-request`` (``/oz-review``), ``verify-pr-comment``
   (``/oz-verify``), or ``respond-to-pr-comment`` (``@oz-agent``).
+- ``pull_request_review`` events route to ``respond-to-pr-comment``
+  when the review body mentions ``@oz-agent``.
 - ``issue_comment`` events on a pull request route to the same set as
   ``pull_request_review_comment`` (GitHub delivers PR conversation
   comments under the ``issue_comment`` event).
@@ -352,8 +355,11 @@ def _route_pull_request(payload: dict[str, Any]) -> RouteDecision:
         return RouteDecision(None, "missing pull_request payload")
     if pr.get("state") != "open":
         return RouteDecision(None, "pull_request is not open")
-    if action == "opened" and not pr.get("draft", False):
-        return RouteDecision(WORKFLOW_REVIEW_PR, "pull_request opened (non-draft)")
+    if action in {"opened", "reopened", "synchronize"} and not pr.get("draft", False):
+        return RouteDecision(
+            WORKFLOW_REVIEW_PR,
+            f"pull_request {action} (non-draft)",
+        )
     if action == "ready_for_review":
         return RouteDecision(WORKFLOW_REVIEW_PR, "pull_request ready_for_review")
     if action == "review_requested":
@@ -401,10 +407,26 @@ def _route_pull_request_review_comment(payload: dict[str, Any]) -> RouteDecision
     return RouteDecision(None, "review comment without Oz command or mention")
 
 
+def _route_pull_request_review(payload: dict[str, Any]) -> RouteDecision:
+    action = str(payload.get("action") or "").strip()
+    if action not in {"submitted", "edited"}:
+        return RouteDecision(None, f"pull_request_review action {action!r} not handled")
+    review = payload.get("review") or {}
+    if not isinstance(review, dict):
+        return RouteDecision(None, "missing review payload")
+    if _is_bot(review.get("user")):
+        return RouteDecision(None, "review authored by automation user")
+    body = str(review.get("body") or "")
+    if OZ_AGENT_MENTION in body:
+        return RouteDecision(WORKFLOW_RESPOND_TO_PR_COMMENT, "@oz-agent mention in PR review body")
+    return RouteDecision(None, "review body without Oz mention")
+
+
 _EVENT_HANDLERS = {
     "issue_comment": _route_issue_comment,
     "issues": _route_issues,
     "pull_request": _route_pull_request,
+    "pull_request_review": _route_pull_request_review,
     "pull_request_review_comment": _route_pull_request_review_comment,
 }
 

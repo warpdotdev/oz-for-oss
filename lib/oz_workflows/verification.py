@@ -53,6 +53,10 @@ def _load_frontmatter(path: Path) -> dict[str, Any]:
         raw_text = path.read_text(encoding="utf-8")
     except OSError:
         return {}
+    return _parse_frontmatter(raw_text)
+
+
+def _parse_frontmatter(raw_text: str) -> dict[str, Any]:
     match = _FRONTMATTER_PATTERN.match(raw_text)
     if match is None:
         return {}
@@ -94,6 +98,58 @@ def discover_verification_skills(workspace_root: Path) -> list[VerificationSkill
             VerificationSkill(
                 name=name,
                 path=skill_path.resolve(),
+                description=description,
+            )
+        )
+    return discovered
+
+
+def _decode_repo_content_file(content_file: Any) -> str | None:
+    raw = getattr(content_file, "decoded_content", None)
+    if raw is None:
+        return None
+    try:
+        return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+    except UnicodeDecodeError:
+        return None
+
+
+def discover_verification_skills_from_repo(repo_handle: Any) -> list[VerificationSkill]:
+    """Discover verification-enabled skills from a repository via the GitHub API."""
+    try:
+        entries = repo_handle.get_contents(".agents/skills")
+    except Exception:
+        return []
+    if not isinstance(entries, list):
+        return []
+    discovered: list[VerificationSkill] = []
+    for entry in sorted(entries, key=lambda item: str(getattr(item, "path", ""))):
+        entry_type = str(getattr(entry, "type", "") or "")
+        entry_path = str(getattr(entry, "path", "") or "")
+        if entry_type and entry_type != "dir":
+            continue
+        if not entry_path:
+            continue
+        try:
+            skill_file = repo_handle.get_contents(f"{entry_path}/SKILL.md")
+        except Exception:
+            continue
+        if isinstance(skill_file, list):
+            continue
+        raw_text = _decode_repo_content_file(skill_file)
+        if raw_text is None:
+            continue
+        frontmatter = _parse_frontmatter(raw_text)
+        if not _frontmatter_metadata_flag(frontmatter, "verification"):
+            continue
+        name = str(frontmatter.get("name") or Path(entry_path).name).strip()
+        if not name:
+            name = Path(entry_path).name
+        description = str(frontmatter.get("description") or "").strip()
+        discovered.append(
+            VerificationSkill(
+                name=name,
+                path=Path(f"{entry_path}/SKILL.md"),
                 description=description,
             )
         )

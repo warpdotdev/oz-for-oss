@@ -231,7 +231,7 @@ def load_run_artifact(
     run_id: str,
     *,
     filename: str,
-    timeout_seconds: int = 120,
+    timeout_seconds: int = 30,
     poll_interval_seconds: int = 5,
 ) -> dict[str, Any]:
     """Load a named JSON artifact from a completed Oz run.

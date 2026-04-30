@@ -94,6 +94,7 @@ def _resolve_session_sharing_public_access() -> str | None:
 ROLE_REVIEW_TRIAGE = "review-triage"
 ROLE_DEFAULT = "default"
 _KNOWN_ROLES = {ROLE_DEFAULT, ROLE_REVIEW_TRIAGE}
+_DEFAULT_WORKFLOW_CODE_REPOSITORY = "warpdotdev/oz-for-oss"
 
 
 def _resolve_environment_id(role: str) -> str:
@@ -197,13 +198,18 @@ def _resolve_skill_location(skill_name: str) -> tuple[str, str, Path]:
         return repo, skill_path, Path(skill_path)
 
     skill_path = _normalize_skill_path(skill_name)
-    consumer_repo_slug = repo_slug()
-    consumer_repo_root = workspace()
     workflow_repo_root = _workflow_code_root()
-    workflow_repo_slug = optional_env("WORKFLOW_CODE_REPOSITORY") or consumer_repo_slug
+    consumer_repo_slug = optional_env("GITHUB_REPOSITORY")
+    workflow_repo_slug = (
+        optional_env("WORKFLOW_CODE_REPOSITORY")
+        or consumer_repo_slug
+        or _DEFAULT_WORKFLOW_CODE_REPOSITORY
+    )
 
-    candidates = [(consumer_repo_slug, consumer_repo_root)]
-    if (workflow_repo_slug, workflow_repo_root) != (consumer_repo_slug, consumer_repo_root):
+    candidates: list[tuple[str, Path]] = []
+    if consumer_repo_slug:
+        candidates.append((consumer_repo_slug, workspace()))
+    if (workflow_repo_slug, workflow_repo_root) not in candidates:
         candidates.append((workflow_repo_slug, workflow_repo_root))
 
     for candidate_repo_slug, candidate_root in candidates:

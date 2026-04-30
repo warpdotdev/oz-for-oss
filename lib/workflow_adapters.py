@@ -158,11 +158,11 @@ def handlers_for_workflow(
     def loader(run_id: str) -> dict[str, Any]:
         return workflow.load_artifact(run_id)
 
-    def applier(*, state: RunState, result: Mapping[str, Any]) -> None:
+    def applier(*, state: RunState, result: Mapping[str, Any], run: Any | None = None) -> None:
         client = _client_factory(state.installation_id, github_client_factory)
         repo_handle = client.get_repo(state.repo)
         progress = workflow.progress_for_state(repo_handle, state=state)
-        run_adapter = workflow.run_adapter_for_state(state=state, progress=progress)
+        run_adapter = workflow.run_adapter_for_state(state=state, progress=progress, run=run)
         try:
             workflow.apply_result(
                 repo_handle,

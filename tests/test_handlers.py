@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import sys
 import unittest
-from types import ModuleType
+from datetime import datetime, timezone
+from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -174,7 +175,17 @@ class ReviewHandlersTest(_HandlerTestBase):
                 "progress_comment_id": 8888,
             },
         )
-        handlers.result_applier(state=state, result={"summary": "looks good"})
+        created_at = datetime(2026, 4, 30, 12, 0, tzinfo=timezone.utc)
+        terminal_run = SimpleNamespace(
+            state="SUCCEEDED",
+            created_at=created_at,
+            artifacts=[SimpleNamespace(artifact_type="FILE")],
+        )
+        handlers.result_applier(
+            state=state,
+            result={"summary": "looks good"},
+            run=terminal_run,
+        )
 
         from scripts.review_pr import apply_review_result  # type: ignore[import-not-found]
 
@@ -188,6 +199,8 @@ class ReviewHandlersTest(_HandlerTestBase):
         self.assertIs(kwargs["progress"], self.progress_instances[-1])
         self.assertEqual(self.progress_instances[-1].comment_id, 8888)
         self.assertEqual(self.progress_instances[-1].run_id, "run-1")
+        self.assertEqual(kwargs["run"].created_at, created_at)
+        self.assertIs(kwargs["run"].artifacts, terminal_run.artifacts)
 
     def test_failure_handler_posts_workflow_error(self) -> None:
         from lib.handlers import build_review_handlers
@@ -295,7 +308,19 @@ class VerifyHandlersTest(_HandlerTestBase):
         handlers = build_verify_handlers(_factory(github_client))
 
         state = _state("verify-pr-comment")
-        handlers.result_applier(state=state, result={"overall_status": "passed"})
+        terminal_run = SimpleNamespace(
+            state="SUCCEEDED",
+            artifacts=[SimpleNamespace(artifact_type="FILE")],
+        )
+        verification = sys.modules["oz_workflows.verification"]
+        verification.list_downloadable_verification_artifacts.return_value = [  # type: ignore[attr-defined]
+            {"title": "screenshot.png", "download_url": "https://example.test/a.png"}
+        ]
+        handlers.result_applier(
+            state=state,
+            result={"overall_status": "passed"},
+            run=terminal_run,
+        )
         from scripts.verify_pr_comment import (  # type: ignore[import-not-found]
             apply_verification_result,
         )
@@ -304,6 +329,12 @@ class VerifyHandlersTest(_HandlerTestBase):
         kwargs = apply_verification_result.call_args.kwargs
         self.assertEqual(kwargs["result"], {"overall_status": "passed"})
         self.assertIs(kwargs["progress"], self.progress_instances[-1])
+        self.assertEqual(
+            kwargs["artifacts"],
+            [{"title": "screenshot.png", "download_url": "https://example.test/a.png"}],
+        )
+        artifacts_run = verification.list_downloadable_verification_artifacts.call_args.args[0]  # type: ignore[attr-defined]
+        self.assertIs(artifacts_run.artifacts, terminal_run.artifacts)
 
 
 

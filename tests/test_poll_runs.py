@@ -58,7 +58,7 @@ def _make_handlers(
     return {
         "review-pull-request": WorkflowHandlers(
             artifact_loader=artifact_loader or (lambda run_id: {"summary": "ok"}),
-            result_applier=result_applier or (lambda *, state, result: None),
+            result_applier=result_applier or (lambda *, state, result, run=None: None),
             failure_handler=failure_handler,
             non_terminal_handler=non_terminal_handler,
         )
@@ -138,12 +138,15 @@ class DrainInFlightRunsTest(unittest.TestCase):
     def test_succeeded_run_invokes_applier_and_drains_record(self) -> None:
         store = InMemoryStateStore()
         _seed(store, _state())
-        retriever = _FakeRetriever({"run-1": SimpleNamespace(state="SUCCEEDED")})
+        run = SimpleNamespace(state="SUCCEEDED", run_id="run-1")
+        retriever = _FakeRetriever({"run-1": run})
 
         applied: list[dict[str, Any]] = []
 
-        def applier(*, state: RunState, result: Mapping[str, Any]) -> None:
-            applied.append({"state": state, "result": dict(result)})
+        def applier(
+            *, state: RunState, result: Mapping[str, Any], run: Any | None = None
+        ) -> None:
+            applied.append({"state": state, "result": dict(result), "run": run})
 
         outcomes = drain_in_flight_runs(
             store=store,
@@ -159,6 +162,7 @@ class DrainInFlightRunsTest(unittest.TestCase):
         self.assertEqual(len(applied), 1)
         self.assertEqual(applied[0]["result"], {"summary": "looks good"})
         self.assertEqual(applied[0]["state"].run_id, "run-1")
+        self.assertIs(applied[0]["run"], run)
         # The KV record should be removed after a successful apply.
         self.assertEqual(store.keys(RUN_STATE_KEY_PREFIX), [])
 
@@ -221,7 +225,9 @@ class DrainInFlightRunsTest(unittest.TestCase):
         _seed(store, _state())
         retriever = _FakeRetriever({"run-1": SimpleNamespace(state="SUCCEEDED")})
 
-        def exploding_applier(*, state: RunState, result: Mapping[str, Any]) -> None:
+        def exploding_applier(
+            *, state: RunState, result: Mapping[str, Any], run: Any | None = None
+        ) -> None:
             raise RuntimeError("github down")
 
         outcomes = drain_in_flight_runs(

@@ -336,14 +336,18 @@ class VerifyWorkflow(BaseWorkflow):
         return load_run_artifact(run_id, filename=VERIFICATION_REPORT_FILENAME)
 
     def apply_result(self, repo_handle: Any, *, context: Mapping[str, Any], run: Any, result: Mapping[str, Any], progress: Any, github_client: Any | None = None) -> None:
-        from scripts.verify_pr_comment import apply_verification_result  # type: ignore[import-not-found]
+        from oz_workflows.verification import list_downloadable_verification_artifacts  # type: ignore[import-not-found]
+        from scripts.verify_pr_comment import VERIFICATION_REPORT_FILENAME, apply_verification_result  # type: ignore[import-not-found]
 
         apply_verification_result(
             repo_handle,
             context=context,
             run=run,
             result=dict(result),
-            artifacts=[],
+            artifacts=list_downloadable_verification_artifacts(
+                run,
+                exclude_filenames={VERIFICATION_REPORT_FILENAME},
+            ),
             progress=progress,
         )
 

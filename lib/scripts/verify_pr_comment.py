@@ -18,6 +18,7 @@ from oz_workflows.helpers import (
 from oz_workflows.oz_client import build_agent_config, run_agent
 from oz_workflows.verification import (
     discover_verification_skills,
+    discover_verification_skills_from_repo,
     format_verification_skills_for_prompt,
     list_downloadable_verification_artifacts,
     render_verification_comment,
@@ -64,7 +65,9 @@ def gather_verify_context(
     applies the result without re-fetching from GitHub.
     """
     pr = github.get_pull(pr_number)
-    verification_skills = discover_verification_skills(workspace_path)
+    verification_skills = discover_verification_skills_from_repo(github)
+    if not verification_skills:
+        verification_skills = discover_verification_skills(workspace_path)
     verification_skills_text = format_verification_skills_for_prompt(
         verification_skills,
         workspace_root=workspace_path,
