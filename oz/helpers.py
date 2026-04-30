@@ -847,24 +847,11 @@ class WorkflowProgressComment:
         if self._workflow_prefix not in body:
             return False
         metadata = _parse_workflow_metadata(body, self._workflow_prefix) or {}
-        current_github_run_id = self.github_run_id.strip()
-        if current_github_run_id:
-            return str(metadata.get("github_run_id") or "").strip() == current_github_run_id
-        current_run_ids = {
-            value
-            for value in (self.run_id.strip(), self.oz_run_id.strip())
-            if value
-        }
-        if not current_run_ids:
-            return False
-        metadata_run_ids = {
-            str(metadata.get("run_id") or "").strip(),
-            str(metadata.get("oz_run_id") or "").strip(),
-        }
-        return bool(current_run_ids.intersection(metadata_run_ids))
+        current_run_id = self.run_id.strip()
+        return bool(current_run_id) and str(metadata.get("run_id") or "").strip() == current_run_id
 
     def _dedupe_duplicate_created_comments(self, *, created_id: int) -> int:
-        """Consolidate progress comments for this workflow+issue and GitHub run.
+        """Consolidate progress comments for this workflow+issue and run id.
 
         Two situations can leave duplicate progress comments behind:
 
@@ -872,16 +859,16 @@ class WorkflowProgressComment:
           responses. When GitHub returns a 5xx but actually processed the
           create-comment request server-side, those retries produce
           duplicates that all share this run's unique ``run_id`` marker.
-        - Multiple ``WorkflowProgressComment`` instances created during
-          the same hosting workflow run can both list comments, see no
-          existing same-run match, and create their own comment before
-          either learns of the other. The resulting comments share the
-          stable workflow+issue prefix and the same ``github_run_id``.
+        - Multiple ``WorkflowProgressComment`` instances created for the
+          same dispatched Oz run can both list comments, see no existing
+          same-run match, and create their own comment before either
+          learns of the other. The resulting comments share the stable
+          workflow+issue prefix and the same generated ``run_id``.
 
         In both cases, gather every progress comment for this
-        workflow+issue that belongs to the current hosting workflow run,
-        keep the oldest (lowest-numbered) as the canonical entry, and
-        delete the rest. Return the id of the canonical comment so the
+        workflow+issue that belongs to the current run id, keep the
+        oldest (lowest-numbered) as the canonical entry, and delete the
+        rest. Return the id of the canonical comment so the
         caller can adopt it as its own ``comment_id``. Best-effort: if
         listing the comments fails, fall back to the just-created id.
         """

@@ -104,6 +104,11 @@ class _BuilderTestBase(unittest.TestCase):
         updates = request.on_dispatched("oz-run-123")
         self.assertEqual(updates, {"progress_comment_id": 4242})
         self.assertEqual(len(self.progress_instances), before_count + 1)
+        helpers = sys.modules["oz.helpers"]
+        self.assertEqual(
+            helpers.WorkflowProgressComment.call_args.kwargs["run_id"],  # type: ignore[attr-defined]
+            "oz-run-123",
+        )
         progress = self.progress_instances[-1]
         if expect_existing_comment_update:
             progress.start.assert_not_called()
