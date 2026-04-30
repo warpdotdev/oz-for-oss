@@ -16,7 +16,7 @@ This module is used directly by the webhook builder and cron handler.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import dedent
 from typing import Any, Mapping, TypedDict
@@ -383,6 +383,8 @@ def apply_create_spec_result(
         # made between dispatch and apply.
         created_at = datetime.now(timezone.utc)
 
+    created_after = created_at.replace(tzinfo=timezone.utc) if created_at.tzinfo is None else created_at
+    created_after = created_after - timedelta(minutes=1)
     if not branch_updated_since(
         github,
         owner,
@@ -391,7 +393,7 @@ def apply_create_spec_result(
         # Subtract one minute so a push that landed slightly before
         # the current ``created_at`` (cron-fallback case) still
         # registers as "the agent did push".
-        created_after=created_at.replace(tzinfo=timezone.utc) if created_at.tzinfo is None else created_at,
+        created_after=created_after,
     ):
         progress.complete("I analyzed this issue but did not produce a spec diff.")
         return

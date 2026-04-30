@@ -16,7 +16,7 @@ This module is used directly by the webhook builder and cron handler.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import dedent
 from typing import Any, Mapping, TypedDict
@@ -396,16 +396,21 @@ def apply_create_implementation_result(
         if (
             not selected_spec_pr_number
             and agent_branch
-            and agent_branch.startswith(target_branch)
+            and (
+                agent_branch == target_branch
+                or agent_branch.startswith(f"{target_branch}-")
+            )
         ):
             target_branch = agent_branch
+    created_after = created_at.replace(tzinfo=timezone.utc) if created_at.tzinfo is None else created_at
+    created_after = created_after - timedelta(minutes=1)
 
     if not branch_updated_since(
         github,
         owner,
         repo,
         target_branch,
-        created_after=created_at,
+        created_after=created_after,
     ):
         progress.complete(
             "I analyzed this issue but did not produce an implementation diff."
