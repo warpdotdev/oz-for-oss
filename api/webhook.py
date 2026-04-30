@@ -5,10 +5,10 @@ Vercel's Python runtime invokes ``handler`` for each request to
 
 1. Verifies the ``X-Hub-Signature-256`` header against the shared
    webhook secret using
-   :mod:`control_plane.lib.signatures`.
+   :mod:`control_plane.core.signatures`.
 2. Decodes the JSON body and the GitHub event name from
    ``X-GitHub-Event``.
-3. Asks :func:`control_plane.lib.routing.route_event` which workflow
+3. Asks :func:`control_plane.core.routing.route_event` which workflow
    should handle it.
 4. Dispatches the cloud agent run, persists the in-flight run state,
    and returns 202 with the run identifier. GitHub state mutations are
@@ -30,25 +30,25 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler
 from typing import Any, Callable, Mapping
 
-from lib.dispatch import (
+from core.dispatch import (
     DispatchRequest,
     DispatchResult,
     PromptBuilder,
     dispatch_run,
     evaluate_route,
 )
-from lib.routing import (
+from core.routing import (
     RouteDecision,
     WORKFLOW_ANNOUNCE_READY_ISSUE,
     WORKFLOW_PLAN_APPROVED,
     route_event,
 )
-from lib.signatures import (
+from core.signatures import (
     SIGNATURE_HEADER,
     SignatureVerificationError,
     verify_signature,
 )
-from lib.state import StateStore
+from core.state import StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -353,8 +353,8 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
     from oz_agent_sdk import OzAPI  # type: ignore[import-not-found]
 
     from api.cron import build_state_store
-    from lib.builders import build_builder_registry
-    from lib.github_app import fetch_installation_token
+    from core.builders import build_builder_registry
+    from core.github_app import fetch_installation_token
     from oz.oz_client import (  # type: ignore[import-not-found]
         build_agent_config,
     )

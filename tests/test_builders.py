@@ -1,7 +1,7 @@
-"""Tests for ``control_plane.lib.builders``.
+"""Tests for ``control_plane.core.builders``.
 
 The builders are thin wrappers around the workflow-specific
-``gather_*_context`` / ``build_*_prompt`` helpers in ``lib/workflows``.
+``gather_*_context`` / ``build_*_prompt`` helpers in ``core/workflows``.
 The tests stub each gather/build helper so the assertions stay focused
 on builder wiring (payload parsing, repo handle resolution,
 DispatchRequest shape).
@@ -33,6 +33,8 @@ def _ensure_module(name: str) -> ModuleType:
         if sub not in sys.modules:
             sys.modules[sub] = ModuleType(sub)
     module = ModuleType(name)
+    if name == "oz":
+        module.__path__ = [str(Path(__file__).resolve().parent.parent / "oz")]  # type: ignore[attr-defined]
     sys.modules[name] = module
     return module
 
@@ -51,6 +53,7 @@ class _BuilderTestBase(unittest.TestCase):
             "workflows.create_spec_from_issue",
             "workflows.create_implementation_from_issue",
             "oz",
+            "oz.agent_workflow",
             "oz.helpers",
         ]
         self._original_modules = {
@@ -169,8 +172,8 @@ class BuildReviewRequestTest(_BuilderTestBase):
         }
 
     def test_returns_dispatch_request_with_inlined_prompt(self) -> None:
-        from lib.builders import build_review_request
-        from lib.routing import WORKFLOW_REVIEW_PR
+        from core.builders import build_review_request
+        from core.routing import WORKFLOW_REVIEW_PR
 
         github_client = MagicMock()
         github_client.get_repo.return_value = MagicMock(name="repo")
@@ -195,7 +198,7 @@ class BuildReviewRequestTest(_BuilderTestBase):
         self.assert_deferred_progress(request)
 
     def test_raises_when_payload_missing_installation_id(self) -> None:
-        from lib.builders import build_review_request
+        from core.builders import build_review_request
 
         payload = self._payload()
         payload.pop("installation")
@@ -237,8 +240,8 @@ class BuildRespondRequestTest(_BuilderTestBase):
         )
 
     def test_returns_dispatch_request_for_review_comment(self) -> None:
-        from lib.builders import build_respond_request
-        from lib.routing import WORKFLOW_RESPOND_TO_PR_COMMENT
+        from core.builders import build_respond_request
+        from core.routing import WORKFLOW_RESPOND_TO_PR_COMMENT
 
         github_client = MagicMock()
         repo = MagicMock(name="repo")
@@ -268,8 +271,8 @@ class BuildRespondRequestTest(_BuilderTestBase):
         self.assertEqual(len(self.progress_instances), 0)
         self.assert_deferred_progress(request, start_line="I'm starting")
     def test_returns_dispatch_request_for_review_body(self) -> None:
-        from lib.builders import build_respond_request
-        from lib.routing import WORKFLOW_RESPOND_TO_PR_COMMENT
+        from core.builders import build_respond_request
+        from core.routing import WORKFLOW_RESPOND_TO_PR_COMMENT
 
         github_client = MagicMock()
         repo = MagicMock(name="repo")
@@ -320,8 +323,8 @@ class BuildVerifyRequestTest(_BuilderTestBase):
         )
 
     def test_returns_dispatch_request_with_verify_prompt(self) -> None:
-        from lib.builders import build_verify_request
-        from lib.routing import WORKFLOW_VERIFY_PR_COMMENT
+        from core.builders import build_verify_request
+        from core.routing import WORKFLOW_VERIFY_PR_COMMENT
 
         github_client = MagicMock()
         repo = MagicMock(name="repo")
@@ -390,8 +393,8 @@ class BuildTriageRequestTest(_BuilderTestBase):
         }
 
     def test_returns_dispatch_request_with_triage_prompt(self) -> None:
-        from lib.builders import build_triage_request
-        from lib.routing import WORKFLOW_TRIAGE_NEW_ISSUES
+        from core.builders import build_triage_request
+        from core.routing import WORKFLOW_TRIAGE_NEW_ISSUES
 
         github_client = MagicMock()
         github_client.get_repo.return_value = MagicMock(name="repo")
@@ -412,7 +415,7 @@ class BuildTriageRequestTest(_BuilderTestBase):
         self.assert_deferred_progress(request)
 
     def test_raises_when_payload_is_missing_issue_number(self) -> None:
-        from lib.builders import build_triage_request
+        from core.builders import build_triage_request
 
         payload = self._payload()
         payload.pop("issue")
@@ -486,8 +489,8 @@ class BuildPlanApprovedRequestTest(_BuilderTestBase):
         return payload
 
     def test_returns_dispatch_request_using_stashed_issue_number(self) -> None:
-        from lib.builders import build_plan_approved_request
-        from lib.routing import WORKFLOW_PLAN_APPROVED
+        from core.builders import build_plan_approved_request
+        from core.routing import WORKFLOW_PLAN_APPROVED
 
         github_client = MagicMock()
         github_client.get_repo.return_value = MagicMock(name="repo")
@@ -523,7 +526,7 @@ class BuildPlanApprovedRequestTest(_BuilderTestBase):
         helpers.resolve_issue_number_for_pr.assert_not_called()  # type: ignore[attr-defined]
 
     def test_falls_back_to_resolving_when_linked_issue_missing(self) -> None:
-        from lib.builders import build_plan_approved_request
+        from core.builders import build_plan_approved_request
 
         github_client = MagicMock()
         repo_handle = MagicMock(name="repo")
@@ -544,7 +547,7 @@ class BuildPlanApprovedRequestTest(_BuilderTestBase):
         helpers.resolve_issue_number_for_pr.assert_called_once()  # type: ignore[attr-defined]
 
     def test_raises_when_linked_issue_cannot_be_resolved(self) -> None:
-        from lib.builders import build_plan_approved_request
+        from core.builders import build_plan_approved_request
 
         github_client = MagicMock()
         repo_handle = MagicMock(name="repo")
@@ -565,8 +568,8 @@ class BuildPlanApprovedRequestTest(_BuilderTestBase):
 
 class BuildBuilderRegistryTest(_BuilderTestBase):
     def test_registry_keys_match_workflow_constants(self) -> None:
-        from lib.builders import build_builder_registry
-        from lib.routing import (
+        from core.builders import build_builder_registry
+        from core.routing import (
             WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
             WORKFLOW_CREATE_SPEC_FROM_ISSUE,
             WORKFLOW_PLAN_APPROVED,

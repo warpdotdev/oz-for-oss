@@ -1,4 +1,4 @@
-"""Tests for ``lib.workflows.announce_ready_issue.apply_announce_ready_issue_sync``.
+"""Tests for ``core.workflows.announce_ready_issue.apply_announce_ready_issue_sync``.
 
 The webhook handler invokes ``apply_announce_ready_issue_sync``
 synchronously on every ``issues.labeled`` delivery for

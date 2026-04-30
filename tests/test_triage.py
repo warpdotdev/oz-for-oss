@@ -6,11 +6,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock
 
-# Ensure the repo root is on ``sys.path`` so the ``lib.workflows`` /
-# ``lib.oz`` packages resolve when this test runs under
+# Ensure the repo root is on ``sys.path`` so the ``core.workflows`` /
+# ``core.oz`` packages resolve when this test runs under
 # ``python -m unittest discover -s tests``.
 from . import conftest  # noqa: F401
-from lib.workflows.triage_new_issues import (
+from core.workflows.triage_new_issues import (
     COMMENT_TYPE_RESPONSE,
     COMMENT_TYPE_TRIAGE,
     RESPONSE_DETAILS_SUMMARY,
@@ -1086,7 +1086,7 @@ class MutualExclusivityTest(unittest.TestCase):
 
     def _build_comment_parts(self, result: dict, issue: dict) -> str:
         """Simulate the comment assembly logic from the dispatch applier."""
-        from lib.workflows.triage_new_issues import _lowercase_first
+        from core.workflows.triage_new_issues import _lowercase_first
         summary = _lowercase_first(str(result.get("summary") or "triage completed").strip())
         issue_body = str(result.get("issue_body") or "").strip()
         statements = extract_statements(result)
@@ -1455,7 +1455,7 @@ class ExtractResponseFieldsTest(unittest.TestCase):
 
     def test_response_details_extraction_table(self) -> None:
         cases = [
-            ("trims_string", {"details": "  See `lib/foo.py`.  "}, "See `lib/foo.py`."),
+            ("trims_string", {"details": "  See `core/foo.py`.  "}, "See `core/foo.py`."),
             ("missing_field", {}, ""),
             ("none", {"details": None}, ""),
             ("non_string", {"details": {"x": 1}}, ""),
@@ -1489,12 +1489,12 @@ class BuildResponseCommentBodyTest(unittest.TestCase):
     def test_renders_reasoning_expando_when_details_present(self) -> None:
         body = build_response_comment_body(
             response_body="Yes — supported since v2.0.",
-            details="See `lib/foo.py:42` and the v2.0 changelog entry.",
+            details="See `core/foo.py:42` and the v2.0 changelog entry.",
         )
         # The reasoning expando wraps the maintainer-only details.
         self.assertIn("<details>", body)
         self.assertIn(f"<summary>{RESPONSE_DETAILS_SUMMARY}</summary>", body)
-        self.assertIn("`lib/foo.py:42`", body)
+        self.assertIn("`core/foo.py:42`", body)
         # The user-facing reply still lands above the fold (before the
         # reasoning expando).
         self.assertLess(
@@ -1567,7 +1567,7 @@ class ApplyTriageResultForDispatchResponseModeTest(unittest.TestCase):
         result = {
             "comment_type": "response",
             "response_body": "Yes — the helper has accepted keyword args since v2.0.",
-            "details": "See `lib/foo.py:42` and the v2.0 changelog entry.",
+            "details": "See `core/foo.py:42` and the v2.0 changelog entry.",
         }
         apply_triage_result_for_dispatch(
             github,
@@ -1586,7 +1586,7 @@ class ApplyTriageResultForDispatchResponseModeTest(unittest.TestCase):
             "Yes — the helper has accepted keyword args since v2.0.",
             rendered,
         )
-        self.assertIn("`lib/foo.py:42`", rendered)
+        self.assertIn("`core/foo.py:42`", rendered)
         self.assertIn(f"<summary>{RESPONSE_DETAILS_SUMMARY}</summary>", rendered)
         self.assertIn(TRIAGE_DISCLAIMER, rendered)
         # Triage shape markers must not leak into the response comment.

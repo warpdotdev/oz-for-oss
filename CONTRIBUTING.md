@@ -48,7 +48,7 @@ Marking an issue as ready is not meant to lock it. It just means the repo is ope
 
 ## Local development
 
-The Vercel webhook control plane (`api/`, `lib/`, `tests/`, `vercel.json`) is the delivery surface for agent-backed flows. GitHub Actions is used only for repository CI.
+The Vercel webhook control plane (`api/`, `core/`, `tests/`, `vercel.json`) is the delivery surface for agent-backed flows. GitHub Actions is used only for repository CI.
 
 ### Set up the Python env
 

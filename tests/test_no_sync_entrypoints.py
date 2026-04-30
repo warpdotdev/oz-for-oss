@@ -6,10 +6,10 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _AGENT_WORKFLOW_SCRIPTS = [
-    "lib/workflows/review_pr.py",
-    "lib/workflows/respond_to_pr_comment.py",
-    "lib/workflows/verify_pr_comment.py",
-    "lib/workflows/triage_new_issues.py",
+    "core/workflows/review_pr.py",
+    "core/workflows/respond_to_pr_comment.py",
+    "core/workflows/verify_pr_comment.py",
+    "core/workflows/triage_new_issues.py",
 ]
 
 

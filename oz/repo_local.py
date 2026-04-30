@@ -123,7 +123,7 @@ def format_repo_local_prompt_section(
     string; the agent is instructed to read the referenced file via its
     usual skill-read path.
 
-    *companion_path* accepts either an absolute :class:`pathlib.Path`
+    *companion_path* accepts either an absolute :class:`pathcore.Path`
     (workspace-backed path) or a repo-relative string (Vercel cloud-mode
     path returned by
     :func:`repo_local_skill_path_for_dispatch`). The agent reads the

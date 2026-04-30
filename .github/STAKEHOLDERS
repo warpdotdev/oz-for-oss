@@ -6,7 +6,7 @@
 /.github/workflows/ @captainsafia
 /.github/issue-triage/ @captainsafia
 /api/ @captainsafia
-/lib/ @captainsafia
+/core/ @captainsafia
 /requirements.txt @captainsafia
 /vercel.json @captainsafia
 

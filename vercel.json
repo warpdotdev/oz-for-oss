@@ -19,6 +19,6 @@
     }
   ],
   "env": {
-    "PYTHONPATH": ".:lib"
+    "PYTHONPATH": ".:core"
   }
 }

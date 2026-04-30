@@ -8,7 +8,7 @@ applies the result back to GitHub.
 A run-state record carries:
 
 - ``run_id``: Oz run identifier returned by ``client.agent.run``.
-- ``workflow``: name from :mod:`control_plane.lib.routing`.
+- ``workflow``: name from :mod:`control_plane.core.routing`.
 - ``repo``: ``owner/name`` slug.
 - ``payload_subset``: the small slice of the webhook payload the cron
   poller needs to apply the result (issue/PR number, head/base refs,

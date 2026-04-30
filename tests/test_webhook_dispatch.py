@@ -20,14 +20,14 @@ from unittest.mock import MagicMock
 from . import conftest  # noqa: F401
 
 from api.webhook import process_webhook_request
-from lib.dispatch import DispatchRequest
-from lib.routing import (
+from core.dispatch import DispatchRequest
+from core.routing import (
     WORKFLOW_ANNOUNCE_READY_ISSUE,
     WORKFLOW_PLAN_APPROVED,
     WORKFLOW_REVIEW_PR,
 )
-from lib.signatures import expected_signature
-from lib.state import InMemoryStateStore
+from core.signatures import expected_signature
+from core.state import InMemoryStateStore
 
 
 _SECRET = "shared-test-secret"

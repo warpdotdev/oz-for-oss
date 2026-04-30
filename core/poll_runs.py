@@ -66,7 +66,7 @@ class NonTerminalHandler(Protocol):
     The cron poller invokes this hook on every poll where the Oz run
     has not yet reached a terminal state. It is the cron-side equivalent
     of the ``on_poll`` callback synchronous callers pass to
-    :func:`run_agent` and is wired by :mod:`lib.handlers` to call
+    :func:`run_agent` and is wired by :mod:`core.handlers` to call
     :func:`oz.helpers.record_run_session_link`. Implementations
     must absorb their own exceptions so a transient GitHub API failure
     cannot abort the cron tick.

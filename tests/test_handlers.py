@@ -1,4 +1,4 @@
-"""Tests for ``control_plane.lib.handlers``.
+"""Tests for ``control_plane.core.handlers``.
 
 The handlers wire together:
 
@@ -16,13 +16,14 @@ from __future__ import annotations
 import sys
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 from . import conftest  # noqa: F401
 
-from lib.state import RunState
+from core.state import RunState
 
 
 def _ensure_module(name: str) -> ModuleType:
@@ -32,6 +33,8 @@ def _ensure_module(name: str) -> ModuleType:
         if sub not in sys.modules:
             sys.modules[sub] = ModuleType(sub)
     module = ModuleType(name)
+    if name == "oz":
+        module.__path__ = [str(Path(__file__).resolve().parent.parent / "oz")]  # type: ignore[attr-defined]
     sys.modules[name] = module
     return module
 
@@ -50,6 +53,7 @@ class _HandlerTestBase(unittest.TestCase):
             "workflows.create_spec_from_issue",
             "workflows.create_implementation_from_issue",
             "oz",
+            "oz.agent_workflow",
             "oz.artifacts",
             "oz.helpers",
             "oz.verification",
@@ -149,7 +153,7 @@ def _factory(github_client: Any) -> Any:
 
 class ReviewHandlersTest(_HandlerTestBase):
     def test_artifact_loader_calls_load_review_artifact(self) -> None:
-        from lib.handlers import build_review_handlers
+        from core.handlers import build_review_handlers
 
         github_client = MagicMock()
         github_client.get_repo.return_value = MagicMock(name="repo")
@@ -158,7 +162,7 @@ class ReviewHandlersTest(_HandlerTestBase):
         self.assertEqual(result, {"summary": "ok"})
 
     def test_result_applier_invokes_apply_review_result(self) -> None:
-        from lib.handlers import build_review_handlers
+        from core.handlers import build_review_handlers
 
         github_client = MagicMock()
         repo_handle = MagicMock(name="repo")
@@ -203,7 +207,7 @@ class ReviewHandlersTest(_HandlerTestBase):
         self.assertIs(kwargs["run"].artifacts, terminal_run.artifacts)
 
     def test_failure_handler_posts_workflow_error(self) -> None:
-        from lib.handlers import build_review_handlers
+        from core.handlers import build_review_handlers
 
         github_client = MagicMock()
         repo_handle = MagicMock(name="repo")
@@ -218,7 +222,7 @@ class ReviewHandlersTest(_HandlerTestBase):
         self.progress_instances[0].report_error.assert_called_once()
 
     def test_non_terminal_handler_records_session_link(self) -> None:
-        from lib.handlers import build_review_handlers
+        from core.handlers import build_review_handlers
 
         github_client = MagicMock()
         github_client.get_repo.return_value = MagicMock(name="repo")
@@ -235,7 +239,7 @@ class ReviewHandlersTest(_HandlerTestBase):
 
 class RespondHandlersTest(_HandlerTestBase):
     def test_artifact_loader_returns_empty_dict(self) -> None:
-        from lib.handlers import build_respond_handlers
+        from core.handlers import build_respond_handlers
 
         github_client = MagicMock()
         github_client.get_repo.return_value = MagicMock(name="repo")
@@ -246,7 +250,7 @@ class RespondHandlersTest(_HandlerTestBase):
         self.assertEqual(handlers.artifact_loader("run-1"), {})
 
     def test_result_applier_invokes_apply_pr_comment_result(self) -> None:
-        from lib.handlers import build_respond_handlers
+        from core.handlers import build_respond_handlers
 
         github_client = MagicMock()
         repo_handle = MagicMock(name="repo")
@@ -285,7 +289,7 @@ class RespondHandlersTest(_HandlerTestBase):
 
 class VerifyHandlersTest(_HandlerTestBase):
     def test_artifact_loader_calls_load_run_artifact_with_report_filename(self) -> None:
-        from lib.handlers import build_verify_handlers
+        from core.handlers import build_verify_handlers
 
         github_client = MagicMock()
         github_client.get_repo.return_value = MagicMock(name="repo")
@@ -301,7 +305,7 @@ class VerifyHandlersTest(_HandlerTestBase):
         )
 
     def test_result_applier_invokes_apply_verification_result(self) -> None:
-        from lib.handlers import build_verify_handlers
+        from core.handlers import build_verify_handlers
 
         github_client = MagicMock()
         github_client.get_repo.return_value = MagicMock(name="repo")
@@ -354,7 +358,7 @@ class TriageHandlersTest(_HandlerTestBase):
         )
 
     def test_artifact_loader_calls_load_triage_artifact(self) -> None:
-        from lib.handlers import build_triage_handlers
+        from core.handlers import build_triage_handlers
 
         github_client = MagicMock()
         github_client.get_repo.return_value = MagicMock(name="repo")
@@ -363,7 +367,7 @@ class TriageHandlersTest(_HandlerTestBase):
         self.assertEqual(result, {"summary": "triage ok", "labels": []})
 
     def test_result_applier_invokes_apply_triage_result_for_dispatch(self) -> None:
-        from lib.handlers import build_triage_handlers
+        from core.handlers import build_triage_handlers
 
         github_client = MagicMock()
         repo_handle = MagicMock(name="repo")
@@ -383,7 +387,7 @@ class TriageHandlersTest(_HandlerTestBase):
         self.assertEqual(self.progress_instances[-1].run_id, "run-1")
 
     def test_failure_handler_posts_workflow_error(self) -> None:
-        from lib.handlers import build_triage_handlers
+        from core.handlers import build_triage_handlers
 
         github_client = MagicMock()
         github_client.get_repo.return_value = MagicMock(name="repo")
@@ -393,7 +397,7 @@ class TriageHandlersTest(_HandlerTestBase):
         self.progress_instances[0].report_error.assert_called_once()
 
     def test_non_terminal_handler_records_session_link(self) -> None:
-        from lib.handlers import build_triage_handlers
+        from core.handlers import build_triage_handlers
 
         github_client = MagicMock()
         github_client.get_repo.return_value = MagicMock(name="repo")
@@ -412,8 +416,8 @@ class TriageHandlersTest(_HandlerTestBase):
 
 class HandlerRegistryTest(_HandlerTestBase):
     def test_registry_includes_all_pr_workflows(self) -> None:
-        from lib.handlers import build_handler_registry
-        from lib.routing import (
+        from core.handlers import build_handler_registry
+        from core.routing import (
             WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
             WORKFLOW_CREATE_SPEC_FROM_ISSUE,
             WORKFLOW_PLAN_APPROVED,
@@ -443,8 +447,8 @@ class HandlerRegistryTest(_HandlerTestBase):
         # ``plan-approved`` cloud runs land on the same
         # ``apply_create_implementation_result`` so the alias keeps
         # the cron poller's apply path uniform across both triggers.
-        from lib.handlers import build_plan_approved_handlers
-        from lib.state import RunState
+        from core.handlers import build_plan_approved_handlers
+        from core.state import RunState
 
         github_client = MagicMock()
         repo_handle = MagicMock(name="repo")

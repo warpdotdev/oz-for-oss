@@ -3,7 +3,7 @@
 Vercel cron triggers hit ``/api/cron`` on the schedule defined in
 ``vercel.json``. The handler reads in-flight run state from KV, polls
 the Oz API for terminal status, and applies the result back to GitHub
-via the registered :class:`~control_plane.lib.poll_runs.WorkflowHandlers`.
+via the registered :class:`~control_plane.core.poll_runs.WorkflowHandlers`.
 
 The handler registers concrete result appliers for the live
 webhook-served workflows: PR review, respond-to-PR-comment,
@@ -20,8 +20,8 @@ from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler
 from typing import Any, Mapping
 
-from lib.poll_runs import DrainOutcome, WorkflowHandlers, drain_in_flight_runs
-from lib.state import StateStore
+from core.poll_runs import DrainOutcome, WorkflowHandlers, drain_in_flight_runs
+from core.state import StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -111,14 +111,14 @@ def build_state_store() -> StateStore:
 def build_workflow_handlers() -> Mapping[str, WorkflowHandlers]:
     """Return the workflow-handler registry used by the cron poller.
 
-    The handlers in :mod:`lib.handlers` mint a fresh GitHub App
+    The handlers in :mod:`core.handlers` mint a fresh GitHub App
     installation token per drain so a stale token does not poison
     multiple ticks. Imported lazily so the unit-test path (which
     exercises :func:`run_cron_tick` with stubbed handlers) does not
     need the GitHub or oz-agent SDK on PYTHONPATH.
     """
-    from lib.github_app import fetch_installation_token  # type: ignore[import-not-found]
-    from lib.handlers import build_handler_registry  # type: ignore[import-not-found]
+    from core.github_app import fetch_installation_token  # type: ignore[import-not-found]
+    from core.handlers import build_handler_registry  # type: ignore[import-not-found]
 
     import httpx
     from github import Auth, Github

@@ -1,4 +1,4 @@
-"""Tests for ``lib.routing``.
+"""Tests for ``core.routing``.
 
 The webhook router owns every issue-driven and PR-driven Oz workflow
 that the deleted ``.github/workflows/`` adapters used to host. These
@@ -13,7 +13,7 @@ import unittest
 
 from . import conftest  # noqa: F401
 
-from lib.routing import (
+from core.routing import (
     OZ_AGENT_LOGIN,
     RouteDecision,
     WORKFLOW_ANNOUNCE_READY_ISSUE,

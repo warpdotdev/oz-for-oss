@@ -5,7 +5,7 @@ filesystem checkout), so the cloud-mode prompt builders use
 :func:`repo_local_skill_path_for_dispatch` to resolve the consuming
 repository's ``.agents/skills/<name>-local/SKILL.md`` companion via
 the GitHub API. Returning a repo-relative path string (rather than a
-filesystem :class:`pathlib.Path`) lets the cloud agent read the file
+filesystem :class:`pathcore.Path`) lets the cloud agent read the file
 through its inherited working directory.
 """
 
@@ -94,7 +94,7 @@ class FormatRepoLocalPromptSectionTest(unittest.TestCase):
 
     def test_renders_section_with_path_object(self) -> None:
         # Workspace-backed callers can hand in an absolute
-        # :class:`pathlib.Path`; the formatter must also accept it so
+        # :class:`pathcore.Path`; the formatter must also accept it so
         # both path-resolution modes share the same helper.
         from pathlib import Path
 

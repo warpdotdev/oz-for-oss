@@ -1,4 +1,4 @@
-"""Tests for ``control_plane.lib.dispatch``."""
+"""Tests for ``control_plane.core.dispatch``."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any, Mapping
 
 from . import conftest  # noqa: F401
 
-from lib.dispatch import (
+from core.dispatch import (
     DispatchRequest,
     WORKFLOW_ROLES,
     cloud_skill_spec,
@@ -16,8 +16,8 @@ from lib.dispatch import (
     evaluate_route,
     role_for_workflow,
 )
-from lib.routing import RouteDecision
-from lib.state import InMemoryStateStore, RUN_STATE_KEY_PREFIX
+from core.routing import RouteDecision
+from core.state import InMemoryStateStore, RUN_STATE_KEY_PREFIX
 
 
 def _request(workflow: str = "review-pull-request", repo: str = "acme/widgets") -> DispatchRequest:

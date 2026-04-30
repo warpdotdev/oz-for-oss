@@ -1,6 +1,6 @@
 """Dispatch a cloud agent run for a routed webhook event.
 
-The dispatcher takes a :class:`~control_plane.lib.routing.RouteDecision`
+The dispatcher takes a :class:`~control_plane.core.routing.RouteDecision`
 plus the webhook payload, builds the agent prompt + config, calls the
 Oz API to start the run, and persists in-flight state for the cron
 poller to drain.
@@ -9,8 +9,8 @@ This module intentionally keeps prompt construction abstract:
 ``PromptBuilder`` is a callable contract so the webhook handler can
 plug in workflow-specific prompt builders without coupling the
 dispatcher to GitHub/PR/Issue specifics. The default builders live in
-``lib/builders.py`` and delegate workflow-specific context gathering,
-prompt construction, and result application to ``lib/workflows``.
+``core/builders.py`` and delegate workflow-specific context gathering,
+prompt construction, and result application to ``core/workflows``.
 """
 
 from __future__ import annotations

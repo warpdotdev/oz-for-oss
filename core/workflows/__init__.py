@@ -9,7 +9,7 @@ from oz.agent_workflow import (
     make_run_adapter,
 )
 
-from lib.routing import (
+from core.routing import (
     WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
     WORKFLOW_CREATE_SPEC_FROM_ISSUE,
     WORKFLOW_PLAN_APPROVED,
@@ -18,8 +18,8 @@ from lib.routing import (
     WORKFLOW_TRIAGE_NEW_ISSUES,
     WORKFLOW_VERIFY_PR_COMMENT,
 )
-from lib.state import RunState
-from lib.workflow_adapters import reconstruct_progress
+from core.state import RunState
+from core.workflow_adapters import reconstruct_progress
 
 
 def _resolve_owner_repo(payload: Mapping[str, Any]) -> tuple[str, str, str]:

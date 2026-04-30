@@ -1,4 +1,4 @@
-"""Tests for ``lib.workflows.plan_approved.apply_plan_approved_sync``.
+"""Tests for ``core.workflows.plan_approved.apply_plan_approved_sync``.
 
 The webhook handler invokes ``apply_plan_approved_sync`` synchronously
 on every ``pull_request.labeled`` delivery for the ``plan-approved``

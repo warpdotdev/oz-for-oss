@@ -1,4 +1,4 @@
-"""Tests for ``control_plane.lib.poll_runs``."""
+"""Tests for ``control_plane.core.poll_runs``."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ from typing import Any, Mapping
 
 from . import conftest  # noqa: F401
 
-from lib.poll_runs import (
+from core.poll_runs import (
     DrainOutcome,
     WorkflowHandlers,
     drain_in_flight_runs,
 )
-from lib.state import (
+from core.state import (
     InMemoryStateStore,
     RUN_STATE_KEY_PREFIX,
     RunState,

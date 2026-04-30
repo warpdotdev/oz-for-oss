@@ -5,8 +5,8 @@ The repository is organized around a small set of skill-backed agent roles, all 
 The behavior lives in three layers:
 
 - skills in [`../.agents/skills/`](../.agents/skills/)
-- workflow-specific context, prompt, and apply helpers in [`../lib/workflows/`](../lib/workflows/)
-- shared Oz and GitHub helpers in [`../lib/oz/`](../lib/oz/)
+- workflow-specific context, prompt, and apply helpers in [`../core/workflows/`](../core/workflows/)
+- shared Oz and GitHub helpers in [`../core/oz/`](../core/oz/)
 
 The `.github` directory is now configuration and CI only: [`STAKEHOLDERS`](../.github/STAKEHOLDERS), [`issue-triage/config.json`](../.github/issue-triage/config.json), [`oz/config.yml`](../.github/oz/config.yml), and [`workflows/run-tests.yml`](../.github/workflows/run-tests.yml).
 
@@ -14,9 +14,9 @@ The `.github` directory is now configuration and CI only: [`STAKEHOLDERS`](../.g
 
 Agent-backed workflows follow the same lifecycle:
 
-1. `lib/routing.py` maps a GitHub webhook delivery to a workflow.
-2. A concrete workflow class in `lib/workflows/` gathers GitHub context and builds a prompt using helpers from `lib/workflows/`.
-3. `lib/dispatch.py` starts an Oz cloud run and persists `RunState` in Vercel KV.
+1. `core/routing.py` maps a GitHub webhook delivery to a workflow.
+2. A concrete workflow class in `core/workflows/` gathers GitHub context and builds a prompt using helpers from `core/workflows/`.
+3. `core/dispatch.py` starts an Oz cloud run and persists `RunState` in Vercel KV.
 4. A post-dispatch hook creates or updates the progress comment with the Oz run id as the canonical metadata identity.
 5. `api/cron.py` polls the Oz run, records session links while it runs, loads artifacts on success, and invokes the workflow-specific result applier.
 
@@ -38,7 +38,7 @@ The implementation role uses [`implement-issue`](../.agents/skills/implement-iss
 
 ### Review and verification
 
-The review role uses [`review-pr`](../.agents/skills/review-pr/SKILL.md), [`review-spec`](../.agents/skills/review-spec/SKILL.md), and spec consistency checks via [`check-impl-against-spec`](../.agents/skills/check-impl-against-spec/SKILL.md). PR review results are uploaded as `review.json` and applied by `lib/workflows/review_pr.py`.
+The review role uses [`review-pr`](../.agents/skills/review-pr/SKILL.md), [`review-spec`](../.agents/skills/review-spec/SKILL.md), and spec consistency checks via [`check-impl-against-spec`](../.agents/skills/check-impl-against-spec/SKILL.md). PR review results are uploaded as `review.json` and applied by `core/workflows/review_pr.py`.
 
 The verification role uses [`verify-pr`](../.agents/skills/verify-pr/SKILL.md) and runs from the `/oz-verify` slash command on PR comments.
 

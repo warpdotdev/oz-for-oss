@@ -1,4 +1,4 @@
-"""Tests for ``control_plane.lib.signatures``."""
+"""Tests for ``control_plane.core.signatures``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import unittest
 # the suite is run with ``python -m unittest discover``).
 from . import conftest  # noqa: F401
 
-from lib.signatures import (
+from core.signatures import (
     SIGNATURE_HEADER,
     SignatureVerificationError,
     expected_signature,
