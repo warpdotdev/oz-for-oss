@@ -17,8 +17,7 @@ Webhook coverage today:
 
 - ``pull_request`` events route as follows:
 
-  - ``opened`` / ``reopened`` / ``synchronize`` (non-draft) and
-    ``ready_for_review`` route to
+  - ``opened`` / ``reopened`` (non-draft) and ``ready_for_review`` route to
     ``review-pull-request``.
   - ``review_requested`` routes to ``review-pull-request`` when
     the requested reviewer is ``oz-agent``.
@@ -355,7 +354,7 @@ def _route_pull_request(payload: dict[str, Any]) -> RouteDecision:
         return RouteDecision(None, "missing pull_request payload")
     if pr.get("state") != "open":
         return RouteDecision(None, "pull_request is not open")
-    if action in {"opened", "reopened", "synchronize"} and not pr.get("draft", False):
+    if action in {"opened", "reopened"} and not pr.get("draft", False):
         return RouteDecision(
             WORKFLOW_REVIEW_PR,
             f"pull_request {action} (non-draft)",
