@@ -373,7 +373,6 @@ class BuildTriageRequestTest(_BuilderTestBase):
                 "triggering_comment_text": "",
                 "comments_text": "- none",
                 "original_report": "",
-                "recent_issues_text": "No recent issues.",
                 "triage_config": {"labels": {}},
                 "template_context": {},
                 "configured_labels": {},

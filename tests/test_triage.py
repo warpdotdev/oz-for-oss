@@ -35,9 +35,7 @@ from core.workflows.triage_new_issues import (
     _follow_up_comment_metadata,
     _duplicate_comment_metadata,
     extract_requested_labels,
-    format_recent_issues_for_dedupe,
     format_issue_comments,
-    load_recent_issues_for_dedupe,
     triage_heuristics_prompt,
     _triage_summary_comment_metadata,
     _cleanup_legacy_triage_comments,
@@ -412,43 +410,6 @@ class FormatIssueCommentsTest(unittest.TestCase):
         self.assertIn("Human context", rendered)
         self.assertIn("oz-agent-metadata", rendered)
 
-
-class LoadRecentIssuesForDedupeTest(unittest.TestCase):
-    def test_returns_prefetched_issue_batch(self) -> None:
-        github = FakeRecentIssuesGitHubClient(
-            [
-                {"number": 1, "title": "One"},
-                {"number": 2, "title": "Two"},
-            ]
-        )
-        issues = load_recent_issues_for_dedupe(github)
-        self.assertEqual([issue["number"] for issue in issues or []], [1, 2])
-        self.assertEqual(github.calls, 1)
-
-    def test_returns_none_when_fetch_fails(self) -> None:
-        github = FakeRecentIssuesGitHubClient([], should_fail=True)
-        self.assertIsNone(load_recent_issues_for_dedupe(github))
-
-
-class FormatRecentIssuesForDedupeTest(unittest.TestCase):
-    def test_formats_prefetched_issues_and_excludes_current_issue(self) -> None:
-        rendered = format_recent_issues_for_dedupe(
-            [
-                {"number": 10, "title": "Current", "body": "skip me"},
-                {"number": 11, "title": "Neighbor", "body": "has details"},
-                {"number": 12, "title": "Pull request", "body": "skip", "pull_request": {"url": "https://example.test/pr/12"}},
-            ],
-            current_issue_number=10,
-        )
-        self.assertIn("#11: Neighbor", rendered)
-        self.assertNotIn("#10: Current", rendered)
-        self.assertNotIn("#12: Pull request", rendered)
-
-    def test_reports_fetch_failure(self) -> None:
-        self.assertEqual(
-            format_recent_issues_for_dedupe(None, current_issue_number=10),
-            "Unable to fetch recent issues for duplicate detection.",
-        )
 
 
 class ExtractRequestedLabelsTest(unittest.TestCase):
@@ -876,7 +837,6 @@ class BuildTriagePromptTest(unittest.TestCase):
             "triggering_comment_text": "- none",
             "triage_config": {"labels": {}},
             "template_context": {},
-            "recent_issues_text": "No recent issues.",
             "host_workspace": Path("/workspace/oz-for-oss"),
         }
         kwargs.update(overrides)
@@ -920,6 +880,15 @@ class BuildTriagePromptTest(unittest.TestCase):
             "Use the repository's local `dedupe-issue` skill to check whether the incoming issue is a duplicate.",
             prompt,
         )
+
+    def test_cloud_prompt_delegates_full_issue_dedupe_search_to_agent(self) -> None:
+        prompt = self._prompt_with_defaults()
+        self.assertNotIn("provided candidate list", prompt)
+        self.assertNotIn("Issues for Duplicate Detection", prompt)
+        self.assertIn("Do not rely on a prefetched issue list", prompt)
+        self.assertIn("gh api --paginate", prompt)
+        self.assertIn("Search all open issues", prompt)
+        self.assertIn("Do not cap the search to the newest issues", prompt)
 
 
 class CleanupLegacyTriageCommentsTest(unittest.TestCase):
@@ -1749,18 +1718,6 @@ class FakeTriageGitHubClient:
         self.comments.append(comment)
         return comment
 
-
-class FakeRecentIssuesGitHubClient:
-    def __init__(self, issues: list[dict[str, object]], *, should_fail: bool = False) -> None:
-        self.issues = issues
-        self.should_fail = should_fail
-        self.calls = 0
-
-    def get_issues(self, **_: object) -> list[dict[str, object]]:
-        self.calls += 1
-        if self.should_fail:
-            raise RuntimeError("boom")
-        return list(self.issues)
 
 
 if __name__ == "__main__":
