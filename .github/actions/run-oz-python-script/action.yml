@@ -1,0 +1,47 @@
+name: Run Oz Python workflow script
+description: >-
+  Install the shared Oz workflow Python dependencies and run a script from
+  warpdotdev/oz-for-oss/.github/scripts at the same revision this composite
+  action was loaded at. The repository is laid down on disk by GitHub when the
+  action is referenced via `uses:`, so no additional checkout is needed.
+inputs:
+  script-path:
+    description: Path to the Python entrypoint relative to .github/scripts.
+    required: true
+outputs:
+  allow_review:
+    description: Optional pass-through output for scripts that set allow_review.
+    value: ${{ steps.run-script.outputs.allow_review }}
+runs:
+  using: composite
+  steps:
+    - name: Install uv and activate virtual environment
+      uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      with:
+        enable-cache: true
+        # github.action_path points at .github/actions/run-oz-python-script
+        # inside the oz-for-oss checkout GitHub created for this action; the
+        # repository root is three directories above it.
+        working-directory: ${{ github.action_path }}/../../..
+        cache-dependency-glob: ${{ github.action_path }}/../../scripts/requirements.txt
+        activate-environment: true
+        python-version: "3.12"
+    - name: Install Python workflow dependencies
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        uv pip install -r "$ACTION_PATH/../../scripts/requirements.txt"
+    - name: Run Oz Python workflow script
+      id: run-script
+      shell: bash
+      env:
+        OZ_SCRIPT_PATH: ${{ inputs.script-path }}
+        ACTION_PATH: ${{ github.action_path }}
+        WORKFLOW_CODE_REPOSITORY: warpdotdev/oz-for-oss
+      run: |
+        set -euo pipefail
+        script_root="$(cd "$ACTION_PATH/../../scripts" && pwd)"
+        export PYTHONPATH="${script_root}${PYTHONPATH:+:${PYTHONPATH}}"
+        python "${script_root}/${OZ_SCRIPT_PATH}"

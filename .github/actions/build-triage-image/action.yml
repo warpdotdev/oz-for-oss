@@ -1,0 +1,29 @@
+name: Build Oz triage image
+description: >-
+  Build the Oz triage Docker image from the same warpdotdev/oz-for-oss revision
+  this composite action was loaded at. The repository is laid down on disk by
+  GitHub when the action is referenced via `uses:`, so no additional checkout
+  is needed.
+inputs:
+  image-name:
+    description: Local Docker image name to build.
+    required: false
+    default: oz-for-oss-triage
+runs:
+  using: composite
+  steps:
+    - name: Build triage Docker image
+      shell: bash
+      env:
+        TRIAGE_IMAGE_NAME: ${{ inputs.image-name }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        # ACTION_PATH points at .github/actions/build-triage-image inside the
+        # oz-for-oss checkout GitHub created for this action; the repo root is
+        # three directories above it.
+        repo_root="$(cd "$ACTION_PATH/../../.." && pwd)"
+        docker build \
+          -f "$repo_root/docker/triage/Dockerfile" \
+          -t "$TRIAGE_IMAGE_NAME" \
+          "$repo_root"

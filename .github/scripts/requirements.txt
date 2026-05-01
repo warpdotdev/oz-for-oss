@@ -1,0 +1,4 @@
+oz-agent-sdk>=0.11.0
+httpx>=0.24
+PyGithub>=2.9.0,<3
+PyYAML>=6.0,<7
