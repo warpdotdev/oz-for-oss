@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 from .routing import RouteDecision
 from .state import RunState, StateStore, save_run_state
@@ -148,7 +148,7 @@ class AgentRunner(Protocol):
     ) -> Any: ...
 
 
-PromptBuilder = Callable[[Mapping[str, Any]], DispatchRequest]
+PromptBuilder = Callable[[Mapping[str, Any]], Optional[DispatchRequest]]
 """A function that turns a webhook payload into a :class:`DispatchRequest`.
 
 The webhook handler maintains a registry of prompt builders keyed by
@@ -232,6 +232,8 @@ def evaluate_route(
     if builder is None:
         return None
     request = builder(payload)
+    if request is None:
+        return None
     if request.workflow != decision.workflow:
         raise RuntimeError(
             f"prompt builder for {decision.workflow!r} returned mismatched "

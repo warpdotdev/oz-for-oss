@@ -304,6 +304,53 @@ class BuildRespondRequestTest(_BuilderTestBase):
         self.assertEqual(kwargs["trigger_kind"], "review_body")
         self.assertEqual(kwargs["trigger_comment_id"], 1234)
 
+    def test_skips_dispatch_when_head_branch_is_not_safe_to_push(self) -> None:
+        from core.builders import build_respond_request
+
+        respond_module = sys.modules["workflows.respond_to_pr_comment"]
+        respond_module.gather_pr_comment_context.return_value = {  # type: ignore[attr-defined]
+            "owner": "acme",
+            "repo": "widgets",
+            "pr_number": 7,
+            "head_branch": "harsh_poc",
+            "head_repo_full_name": "contributor/widgets",
+            "base_branch": "main",
+            "base_repo_full_name": "acme/widgets",
+            "is_cross_repository": True,
+            "head_branch_exists_in_base": False,
+            "can_push_to_head_branch": False,
+            "pr_title": "feat: add",
+            "requester": "alice",
+            "trigger_kind": "review",
+            "trigger_comment_id": 999,
+            "review_reply_target_id": 999,
+            "has_spec_context": False,
+            "spec_context_text": "No spec context.",
+            "coauthor_line": "",
+            "coauthor_directives": "- foo",
+            "progress_start_line": "I'm starting",
+        }
+        github_client = MagicMock()
+        repo = MagicMock(name="repo")
+        github_client.get_repo.return_value = repo
+        repo.get_pull.return_value = MagicMock(name="pr")
+
+        payload = {
+            "repository": {"full_name": "acme/widgets"},
+            "installation": {"id": 1},
+            "pull_request": {"number": 7},
+            "comment": {"id": 999, "user": {"login": "alice"}},
+        }
+
+        request = build_respond_request(
+            payload,
+            github_client=github_client,
+            workspace_path=Path("/tmp/ws"),
+        )
+
+        self.assertIsNone(request)
+        respond_module.build_pr_comment_prompt.assert_not_called()  # type: ignore[attr-defined]
+
 
 class BuildVerifyRequestTest(_BuilderTestBase):
     def setUp(self) -> None:

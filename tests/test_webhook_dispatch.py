@@ -117,6 +117,26 @@ class DispatchPathTest(unittest.TestCase):
         self.assertEqual(response.status, 202)
         self.assertFalse(response.body.get("dispatched", True))
 
+    def test_returns_202_dispatched_false_when_builder_skips(self) -> None:
+        body, signature = _signed_envelope(self._payload())
+        runner = MagicMock(side_effect=AssertionError("should not dispatch"))
+
+        response = process_webhook_request(
+            body=body,
+            signature_header=signature,
+            event_header="pull_request",
+            delivery_id="delivery-2b",
+            secret=_SECRET,
+            builder_registry={WORKFLOW_REVIEW_PR: lambda payload: None},
+            runner=runner,
+            config_factory=lambda name, role: {},
+            store=InMemoryStateStore(),
+        )
+
+        self.assertEqual(response.status, 202)
+        self.assertFalse(response.body.get("dispatched", True))
+        runner.assert_not_called()
+
     def test_returns_500_when_dispatch_run_raises(self) -> None:
         body, signature = _signed_envelope(self._payload())
 

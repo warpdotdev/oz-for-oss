@@ -109,12 +109,14 @@ def dispatch_request_for_workflow(
     *,
     github_client: Any,
     workspace_path: Path | None = None,
-) -> DispatchRequest:
+) -> DispatchRequest | None:
     dispatch: WorkflowDispatch = workflow.build_dispatch(
         payload,
         github_client=github_client,
         workspace_path=workspace_path,
     )
+    if dispatch is None:
+        return None
 
     def on_dispatched(run_id: str) -> dict[str, Any]:
         progress = create_progress_comment(dispatch.progress, run_id=run_id)
@@ -139,7 +141,7 @@ def prompt_builder_for_workflow(
     github_client_factory: Callable[[], Any],
     workspace_path: Path | None = None,
 ) -> PromptBuilder:
-    def _adapter(payload: Mapping[str, Any]) -> DispatchRequest:
+    def _adapter(payload: Mapping[str, Any]) -> DispatchRequest | None:
         return dispatch_request_for_workflow(
             workflow,
             payload,

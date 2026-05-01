@@ -143,7 +143,7 @@ class ReviewWorkflow(BaseWorkflow):
     workflow = WORKFLOW_REVIEW_PR
     config_name = WORKFLOW_REVIEW_PR
 
-    def build_dispatch(self, payload: Mapping[str, Any], *, github_client: Any, workspace_path: Path | None = None) -> WorkflowDispatch:
+    def build_dispatch(self, payload: Mapping[str, Any], *, github_client: Any, workspace_path: Path | None = None) -> WorkflowDispatch | None:
         from oz.helpers import format_review_start_line  # type: ignore[import-not-found]
         from workflows.review_pr import build_review_prompt_for_dispatch, gather_review_context  # type: ignore[import-not-found]
 
@@ -200,7 +200,7 @@ class RespondWorkflow(BaseWorkflow):
     workflow = WORKFLOW_RESPOND_TO_PR_COMMENT
     config_name = WORKFLOW_RESPOND_TO_PR_COMMENT
 
-    def build_dispatch(self, payload: Mapping[str, Any], *, github_client: Any, workspace_path: Path | None = None) -> WorkflowDispatch:
+    def build_dispatch(self, payload: Mapping[str, Any], *, github_client: Any, workspace_path: Path | None = None) -> WorkflowDispatch | None:
         from workflows.respond_to_pr_comment import build_pr_comment_prompt, gather_pr_comment_context  # type: ignore[import-not-found]
 
         owner, repo, full_name = _resolve_owner_repo(payload)
@@ -225,6 +225,8 @@ class RespondWorkflow(BaseWorkflow):
             client=github_client,
             pr=pr,
         )
+        if context.get("can_push_to_head_branch") is False:
+            return None
         return WorkflowDispatch(
             workflow=self.workflow,
             repo=full_name,

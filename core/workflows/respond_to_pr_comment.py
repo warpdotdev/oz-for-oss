@@ -12,6 +12,7 @@ from oz.artifacts import (
     try_load_resolved_review_comments_artifact,
 )
 from oz.helpers import (
+    branch_exists,
     branch_updated_since,
     build_next_steps_section,
     coauthor_prompt_lines,
@@ -39,7 +40,12 @@ class PrCommentContext(TypedDict):
     repo: str
     pr_number: int
     head_branch: str
+    head_repo_full_name: str
     base_branch: str
+    base_repo_full_name: str
+    is_cross_repository: bool
+    head_branch_exists_in_base: bool
+    can_push_to_head_branch: bool
     pr_title: str
     requester: str
     trigger_kind: str  # one of: "review", "review_body", "conversation"
@@ -80,7 +86,21 @@ def gather_pr_comment_context(
     if pr is None:
         pr = github.get_pull(pr_number)
     head_branch = str(pr.head.ref)
+    head_repo_full_name = str(getattr(getattr(pr.head, "repo", None), "full_name", "") or "")
     base_branch = str(pr.base.ref)
+    base_repo_full_name = (
+        str(getattr(getattr(pr.base, "repo", None), "full_name", "") or "")
+        or f"{owner}/{repo}"
+    )
+    is_cross_repository = (
+        not head_repo_full_name
+        or head_repo_full_name.lower() != base_repo_full_name.lower()
+    )
+    head_branch_exists_in_base = branch_exists(github, owner, repo, head_branch)
+    can_push_to_head_branch = (
+        not is_cross_repository
+        and head_branch_exists_in_base
+    )
     pr_title = str(pr.title or "")
     coauthor_line = resolve_coauthor_line(client or github, dict(event))
     coauthor_directives = coauthor_prompt_lines(coauthor_line)
@@ -124,7 +144,12 @@ def gather_pr_comment_context(
         repo=repo,
         pr_number=int(pr_number),
         head_branch=head_branch,
+        head_repo_full_name=head_repo_full_name,
         base_branch=base_branch,
+        base_repo_full_name=base_repo_full_name,
+        is_cross_repository=is_cross_repository,
+        head_branch_exists_in_base=head_branch_exists_in_base,
+        can_push_to_head_branch=can_push_to_head_branch,
         pr_title=pr_title,
         requester=str(requester or ""),
         trigger_kind=str(trigger_kind),
@@ -210,7 +235,6 @@ def build_pr_comment_prompt(context: Mapping[str, Any]) -> str:
         """
     ).strip()
 
-
 def apply_pr_comment_result(
     github: Repository,
     *,
@@ -244,6 +268,7 @@ def apply_pr_comment_result(
     repo = str(context["repo"])
     pr_number = int(context["pr_number"])
     head_branch = str(context["head_branch"])
+    can_push_to_head_branch = bool(context.get("can_push_to_head_branch", True))
     requester = str(context.get("requester") or "")
     trigger_kind = str(context.get("trigger_kind") or "conversation")
     review_reply_target_id = int(context.get("review_reply_target_id") or 0)
@@ -271,6 +296,12 @@ def apply_pr_comment_result(
     created_at = getattr(run, "created_at", None)
     if not isinstance(created_at, datetime):
         created_at = datetime.now(timezone.utc)
+    if not can_push_to_head_branch:
+        progress.complete(
+            "I analyzed the request but did not push changes because this PR head "
+            "is not allowed to publish back to the base repository."
+        )
+        return
     if not branch_updated_since(
         github,
         owner,
