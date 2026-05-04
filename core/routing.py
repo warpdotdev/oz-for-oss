@@ -34,9 +34,11 @@ Webhook coverage today:
   (``/oz-verify``), or ``respond-to-pr-comment`` (``@oz-agent``).
 - ``pull_request_review`` events route to ``respond-to-pr-comment``
   when the review body mentions ``@oz-agent``.
-- ``issue_comment`` events on a pull request route to the same set as
-  ``pull_request_review_comment`` (GitHub delivers PR conversation
-  comments under the ``issue_comment`` event).
+- ``issue_comment`` ``created`` events on a pull request route to the same
+  set as ``pull_request_review_comment`` (GitHub delivers PR conversation
+  comments under the ``issue_comment`` event). Edited issue comments are
+  ignored so an edit to a triggering comment does not start a concurrent
+  workflow for stale content.
 - ``issues`` events:
 
   - ``opened`` routes to ``triage-new-issues`` regardless of the
@@ -57,7 +59,7 @@ Webhook coverage today:
     contribution and that maintainers can tag ``@oz-agent`` to start
     automated work.
 
-- ``issue_comment`` events on a plain (non-PR) issue route to
+- ``issue_comment`` ``created`` events on a plain (non-PR) issue route to
   ``triage-new-issues`` when the comment carries an ``@oz-agent``
   mention and the issue is not already ready for spec or implementation.
   Mentions on ``ready-to-spec`` or ``ready-to-implement`` issues route
@@ -155,7 +157,7 @@ def _is_bot(actor: Any) -> bool:
 
 def _route_issue_comment(payload: dict[str, Any]) -> RouteDecision:
     action = str(payload.get("action") or "").strip()
-    if action not in {"created", "edited"}:
+    if action != "created":
         return RouteDecision(None, f"issue_comment action {action!r} not handled")
     comment = payload.get("comment") or {}
     if not isinstance(comment, dict):

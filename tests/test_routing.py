@@ -504,6 +504,33 @@ class IssueCommentEventTest(unittest.TestCase):
         )
         self.assertIsNone(decision.workflow)
 
+    def test_edited_plain_issue_comment_with_oz_agent_mention_is_dropped(self) -> None:
+        # Edited comments can arrive while a run triggered by the
+        # previous comment body is still in flight. Do not dispatch a
+        # second workflow for the same comment edit.
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "edited",
+                "issue": _issue(labels=["triaged"]),
+                "comment": _comment(body="@oz-agent updated context"),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("not handled", decision.reason)
+
+    def test_edited_pr_issue_comment_with_oz_agent_mention_is_dropped(self) -> None:
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "edited",
+                "issue": _issue(pull_request={"url": "..."}),
+                "comment": _comment(body="@oz-agent updated PR context"),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("not handled", decision.reason)
+
     def test_unhandled_action_skipped(self) -> None:
         decision = route_event(
             "issue_comment",
