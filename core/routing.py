@@ -99,7 +99,7 @@ OZ_REVIEW_COMMAND = "/oz-review"
 OZ_VERIFY_COMMAND = "/oz-verify"
 MAX_EXPLICIT_REVIEW_INVOCATIONS_PER_PR = 3
 OZ_REVIEW_COMMAND_PATTERN = re.compile(
-    r"(?:^|\s)(?:/oz-review|@oz-agent\s+/review)\b", re.IGNORECASE
+    r"(?:^|\s)(?:/oz-review|@oz-agent\s+/review)(?![-\w])", re.IGNORECASE
 )
 
 
