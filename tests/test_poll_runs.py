@@ -33,14 +33,24 @@ class _FakeRetriever:
         return self._runs[run_id]
 
 
-def _state(run_id: str = "run-1", workflow: str = "review-pull-request") -> RunState:
-    return RunState(
+def _state(
+    run_id: str = "run-1",
+    workflow: str = "review-pull-request",
+    *,
+    attempts: int = 0,
+    dispatched_at: float | None = None,
+) -> RunState:
+    state = RunState(
         run_id=run_id,
         workflow=workflow,
         repo="acme/widgets",
         installation_id=42,
         payload_subset={"pr_number": 1},
+        attempts=attempts,
     )
+    if dispatched_at is not None:
+        state.dispatched_at = dispatched_at
+    return state
 
 
 def _seed(store: InMemoryStateStore, *states: RunState) -> None:
@@ -218,6 +228,97 @@ class DrainInFlightRunsTest(unittest.TestCase):
         self.assertEqual(outcomes[0].state, "RETRIEVE_FAILED")
         self.assertEqual(outcomes[0].error, "network down")
         # The record stays in KV so the next cron tick can retry.
+        self.assertEqual(len(store.keys(RUN_STATE_KEY_PREFIX)), 1)
+
+    def test_max_attempts_expiration_invokes_failure_handler_and_drains_record(self) -> None:
+        store = InMemoryStateStore()
+        _seed(store, _state(attempts=3))
+        retriever = _FakeRetriever({})
+
+        failures: list[dict[str, Any]] = []
+
+        def failure_handler(*, state: RunState, run: Any) -> None:
+            failures.append({"state": state, "run": run})
+
+        outcomes = drain_in_flight_runs(
+            store=store,
+            retriever=retriever,
+            handlers=_make_handlers(failure_handler=failure_handler),
+            max_attempts=3,
+            max_age_seconds=None,
+        )
+        self.assertEqual(outcomes[0].state, "EXPIRED")
+        self.assertFalse(outcomes[0].applied)
+        self.assertIn("max attempts exceeded", outcomes[0].error)
+        self.assertEqual(retriever.calls, [])
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["state"].run_id, "run-1")
+        self.assertEqual(failures[0]["run"].state, "EXPIRED")
+        self.assertIn("max attempts exceeded", failures[0]["run"].status_message)
+        self.assertEqual(store.keys(RUN_STATE_KEY_PREFIX), [])
+
+    def test_max_age_expiration_invokes_failure_handler_and_drains_record(self) -> None:
+        store = InMemoryStateStore()
+        _seed(store, _state(dispatched_at=100.0))
+        retriever = _FakeRetriever({})
+
+        failures: list[dict[str, Any]] = []
+
+        def failure_handler(*, state: RunState, run: Any) -> None:
+            failures.append({"state": state, "run": run})
+
+        outcomes = drain_in_flight_runs(
+            store=store,
+            retriever=retriever,
+            handlers=_make_handlers(failure_handler=failure_handler),
+            max_attempts=None,
+            max_age_seconds=50,
+            now=151.0,
+        )
+        self.assertEqual(outcomes[0].state, "EXPIRED")
+        self.assertIn("max age exceeded", outcomes[0].error)
+        self.assertEqual(retriever.calls, [])
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["run"].state, "EXPIRED")
+        self.assertIn("max age exceeded", failures[0]["run"].status_message)
+        self.assertEqual(store.keys(RUN_STATE_KEY_PREFIX), [])
+
+    def test_expiration_deletes_record_when_failure_handler_raises(self) -> None:
+        store = InMemoryStateStore()
+        _seed(store, _state(attempts=3))
+        retriever = _FakeRetriever({})
+
+        def failure_handler(*, state: RunState, run: Any) -> None:
+            raise RuntimeError("github down")
+
+        outcomes = drain_in_flight_runs(
+            store=store,
+            retriever=retriever,
+            handlers=_make_handlers(failure_handler=failure_handler),
+            max_attempts=3,
+            max_age_seconds=None,
+        )
+        self.assertEqual(outcomes[0].state, "EXPIRED")
+        self.assertIn("max attempts exceeded", outcomes[0].error)
+        self.assertIn("failure handler failed: github down", outcomes[0].error)
+        self.assertEqual(retriever.calls, [])
+        self.assertEqual(store.keys(RUN_STATE_KEY_PREFIX), [])
+
+    def test_expiration_limits_can_be_disabled(self) -> None:
+        store = InMemoryStateStore()
+        _seed(store, _state(attempts=999, dispatched_at=1.0))
+        retriever = _FakeRetriever({"run-1": SimpleNamespace(state="RUNNING")})
+
+        outcomes = drain_in_flight_runs(
+            store=store,
+            retriever=retriever,
+            handlers=_make_handlers(),
+            max_attempts=None,
+            max_age_seconds=None,
+            now=10_000.0,
+        )
+        self.assertEqual(outcomes[0].state, "RUNNING")
+        self.assertEqual(retriever.calls, ["run-1"])
         self.assertEqual(len(store.keys(RUN_STATE_KEY_PREFIX)), 1)
 
     def test_apply_failure_keeps_record_for_retry(self) -> None:

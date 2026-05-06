@@ -20,15 +20,25 @@ processing the rest.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Protocol
 
-from .state import RunState, StateStore, delete_run_state, list_in_flight_runs, save_run_state
+from .state import (
+    RunState,
+    StateStore,
+    delete_run_state,
+    list_in_flight_runs,
+    save_run_state,
+)
 
 logger = logging.getLogger(__name__)
 
 TERMINAL_STATES = {"SUCCEEDED", "FAILED", "ERROR", "CANCELLED"}
 TERMINAL_FAILURE_STATES = {"FAILED", "ERROR", "CANCELLED"}
+DEFAULT_MAX_IN_FLIGHT_ATTEMPTS = 360
+DEFAULT_MAX_IN_FLIGHT_AGE_SECONDS = 7 * 24 * 60 * 60
 
 
 class RunRetriever(Protocol):
@@ -100,12 +110,69 @@ def _coerce_state(run: Any) -> str:
     return str(getattr(run, "state", "") or "").strip().upper()
 
 
+def _expiration_reason(
+    state: RunState,
+    *,
+    now: float,
+    max_attempts: int | None,
+    max_age_seconds: float | None,
+) -> str:
+    if max_attempts is not None and max_attempts > 0 and state.attempts >= max_attempts:
+        return f"max attempts exceeded ({state.attempts} >= {max_attempts})"
+    if (
+        max_age_seconds is not None
+        and max_age_seconds > 0
+        and state.dispatched_at > 0
+        and now - state.dispatched_at >= max_age_seconds
+    ):
+        age_seconds = int(now - state.dispatched_at)
+        return f"max age exceeded ({age_seconds}s >= {int(max_age_seconds)}s)"
+    return ""
+
+
+def _expire_state(
+    state: RunState,
+    *,
+    handler: WorkflowHandlers,
+    store: StateStore,
+    reason: str,
+) -> DrainOutcome:
+    run = SimpleNamespace(
+        run_id=state.run_id,
+        state="EXPIRED",
+        session_link="",
+        status_message=reason,
+    )
+    error_message = reason
+    if handler.failure_handler is not None:
+        try:
+            handler.failure_handler(state=state, run=run)
+        except Exception as exc:
+            logger.exception(
+                "failure_handler for expired run %s (%s) raised; deleting stale state anyway",
+                state.run_id,
+                state.workflow,
+            )
+            error_message = f"{reason}; failure handler failed: {exc}"
+    delete_run_state(store, state.run_id)
+    return DrainOutcome(
+        run_id=state.run_id,
+        workflow=state.workflow,
+        state="EXPIRED",
+        applied=False,
+        error=error_message,
+    )
+
+
 def _process_one(
     state: RunState,
     *,
     retriever: RunRetriever,
     handlers: Mapping[str, WorkflowHandlers],
     store: StateStore,
+    now: float,
+    max_attempts: int | None,
+    max_age_seconds: float | None,
 ) -> DrainOutcome:
     handler = handlers.get(state.workflow)
     if handler is None:
@@ -119,6 +186,25 @@ def _process_one(
             state="UNKNOWN_WORKFLOW",
             applied=False,
             error=f"no handler registered for workflow {state.workflow!r}",
+        )
+    reason = _expiration_reason(
+        state,
+        now=now,
+        max_attempts=max_attempts,
+        max_age_seconds=max_age_seconds,
+    )
+    if reason:
+        logger.warning(
+            "Expiring Oz run %s for workflow %s: %s",
+            state.run_id,
+            state.workflow,
+            reason,
+        )
+        return _expire_state(
+            state,
+            handler=handler,
+            store=store,
+            reason=reason,
         )
 
     try:
@@ -211,6 +297,9 @@ def drain_in_flight_runs(
     retriever: RunRetriever,
     handlers: Mapping[str, WorkflowHandlers],
     state_iterator: Callable[[StateStore], Any] = list_in_flight_runs,
+    max_attempts: int | None = DEFAULT_MAX_IN_FLIGHT_ATTEMPTS,
+    max_age_seconds: float | None = DEFAULT_MAX_IN_FLIGHT_AGE_SECONDS,
+    now: float | None = None,
 ) -> list[DrainOutcome]:
     """Process every in-flight run currently persisted in *store*.
 
@@ -218,6 +307,7 @@ def drain_in_flight_runs(
     deterministic iteration order without touching the underlying KV
     contract.
     """
+    current_time = time.time() if now is None else now
     outcomes: list[DrainOutcome] = []
     for state in state_iterator(store):
         outcomes.append(
@@ -226,6 +316,9 @@ def drain_in_flight_runs(
                 retriever=retriever,
                 handlers=handlers,
                 store=store,
+                now=current_time,
+                max_attempts=max_attempts,
+                max_age_seconds=max_age_seconds,
             )
         )
     return outcomes
@@ -233,6 +326,8 @@ def drain_in_flight_runs(
 
 __all__ = [
     "ArtifactLoader",
+    "DEFAULT_MAX_IN_FLIGHT_AGE_SECONDS",
+    "DEFAULT_MAX_IN_FLIGHT_ATTEMPTS",
     "DrainOutcome",
     "FailureHandler",
     "NonTerminalHandler",

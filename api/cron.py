@@ -20,7 +20,13 @@ from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler
 from typing import Any, Mapping
 
-from core.poll_runs import DrainOutcome, WorkflowHandlers, drain_in_flight_runs
+from core.poll_runs import (
+    DEFAULT_MAX_IN_FLIGHT_AGE_SECONDS,
+    DEFAULT_MAX_IN_FLIGHT_ATTEMPTS,
+    DrainOutcome,
+    WorkflowHandlers,
+    drain_in_flight_runs,
+)
 from core.state import StateStore
 
 logger = logging.getLogger(__name__)
@@ -147,11 +153,38 @@ def build_workflow_handlers() -> Mapping[str, WorkflowHandlers]:
     return build_handler_registry(github_client_factory=github_client_factory)
 
 
+def _optional_positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Ignoring invalid %s=%r; using default %s",
+            name,
+            raw,
+            default,
+        )
+        return default
+    if value <= 0:
+        logger.warning(
+            "Ignoring non-positive %s=%r; using default %s",
+            name,
+            raw,
+            default,
+        )
+        return default
+    return value
+
+
 def run_cron_tick(
     *,
     store: StateStore,
     retriever: Any,
     handlers: Mapping[str, WorkflowHandlers] | None = None,
+    max_attempts: int | None = None,
+    max_age_seconds: float | None = None,
 ) -> list[DrainOutcome]:
     """Process a single cron tick.
 
@@ -163,6 +196,16 @@ def run_cron_tick(
         store=store,
         retriever=retriever,
         handlers=handlers or build_workflow_handlers(),
+        max_attempts=(
+            DEFAULT_MAX_IN_FLIGHT_ATTEMPTS
+            if max_attempts is None
+            else max_attempts
+        ),
+        max_age_seconds=(
+            DEFAULT_MAX_IN_FLIGHT_AGE_SECONDS
+            if max_age_seconds is None
+            else max_age_seconds
+        ),
     )
 
 
@@ -204,6 +247,14 @@ class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel requires this exac
             outcomes = run_cron_tick(
                 store=store,
                 retriever=client.agent.runs,
+                max_attempts=_optional_positive_int_env(
+                    "OZ_IN_FLIGHT_MAX_ATTEMPTS",
+                    DEFAULT_MAX_IN_FLIGHT_ATTEMPTS,
+                ),
+                max_age_seconds=_optional_positive_int_env(
+                    "OZ_IN_FLIGHT_MAX_AGE_SECONDS",
+                    DEFAULT_MAX_IN_FLIGHT_AGE_SECONDS,
+                ),
             )
         except Exception as exc:
             logger.exception("Cron tick aborted")
