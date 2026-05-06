@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -10,6 +11,7 @@ from oz.agent_workflow import (
 )
 
 from core.routing import (
+    MAX_EXPLICIT_REVIEW_INVOCATIONS_PER_PR,
     WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
     WORKFLOW_CREATE_SPEC_FROM_ISSUE,
     WORKFLOW_PLAN_APPROVED,
@@ -17,9 +19,12 @@ from core.routing import (
     WORKFLOW_REVIEW_PR,
     WORKFLOW_TRIAGE_NEW_ISSUES,
     WORKFLOW_VERIFY_PR_COMMENT,
+    has_oz_review_command,
 )
 from core.state import RunState
 from core.workflow_adapters import reconstruct_progress
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_owner_repo(payload: Mapping[str, Any]) -> tuple[str, str, str]:
@@ -125,6 +130,40 @@ def _resolve_review_reply_target(payload: Mapping[str, Any], pr: Any) -> tuple[A
     return None
 
 
+def _get_field(obj: Any, name: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _is_automation_user(user: Any) -> bool:
+    user_type = str(_get_field(user, "type", "") or "").strip().lower()
+    if user_type == "bot":
+        return True
+    login = str(_get_field(user, "login", "") or "").strip().lower()
+    return bool(login) and login.endswith("[bot]")
+
+
+def _explicit_review_invocation_count(pr: Any) -> int:
+    """Count non-bot explicit review invocations already persisted on *pr*."""
+    count = 0
+    for comment in list(pr.get_issue_comments()) + list(pr.get_review_comments()):
+        body = str(_get_field(comment, "body", "") or "")
+        if not has_oz_review_command(body):
+            continue
+        if _is_automation_user(_get_field(comment, "user")):
+            continue
+        count += 1
+    return count
+
+
+def _is_explicit_review_invocation(payload: Mapping[str, Any]) -> bool:
+    comment = payload.get("comment")
+    if not isinstance(comment, dict):
+        return False
+    return has_oz_review_command(str(comment.get("body") or ""))
+
+
 class BaseWorkflow:
     workflow: str
     config_name: str
@@ -152,6 +191,31 @@ class ReviewWorkflow(BaseWorkflow):
         requester = _resolve_requester(payload)
         trigger_source = _resolve_trigger_source(payload)
         repo_handle = github_client.get_repo(full_name)
+        if _is_explicit_review_invocation(payload):
+            try:
+                invocation_count = _explicit_review_invocation_count(
+                    repo_handle.get_pull(pr_number)
+                )
+            except Exception:
+                # Fail open: if the throttle lookup itself fails for any
+                # reason (transient API error, permissions issue, etc.) we
+                # still honor the request rather than silently dropping a
+                # legitimate review trigger.
+                logger.exception(
+                    "Failed to count explicit /oz-review invocations for %s PR #%s; allowing review",
+                    full_name,
+                    pr_number,
+                )
+                invocation_count = 0
+            if invocation_count > MAX_EXPLICIT_REVIEW_INVOCATIONS_PER_PR:
+                logger.info(
+                    "Skipping /oz-review for %s PR #%s: invocation count %s exceeds limit %s",
+                    full_name,
+                    pr_number,
+                    invocation_count,
+                    MAX_EXPLICIT_REVIEW_INVOCATIONS_PER_PR,
+                )
+                return None
         context = gather_review_context(
             repo_handle,
             owner=owner,

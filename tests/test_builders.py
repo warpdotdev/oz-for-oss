@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -90,6 +90,7 @@ class _BuilderTestBase(unittest.TestCase):
         helpers.triggering_comment_prompt_text = MagicMock(  # type: ignore[attr-defined]
             return_value=""
         )
+
     def assert_deferred_progress(
         self,
         request: Any,
@@ -176,6 +177,50 @@ class BuildReviewRequestTest(_BuilderTestBase):
             "sender": {"login": "alice"},
         }
 
+    def _explicit_review_payload(self, body: str = "/oz-review") -> dict[str, Any]:
+        return {
+            "action": "created",
+            "repository": {"full_name": "acme/widgets"},
+            "installation": {"id": 1234},
+            "issue": {
+                "number": 42,
+                "pull_request": {"url": "https://example.test/pr/42"},
+            },
+            "comment": {
+                "id": 1001,
+                "body": body,
+                "user": {"login": "alice", "type": "User"},
+            },
+            "sender": {"login": "alice"},
+        }
+
+    def _review_comment(
+        self,
+        body: str,
+        *,
+        login: str = "alice",
+        user_type: str = "User",
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            body=body,
+            user=SimpleNamespace(login=login, type=user_type),
+        )
+
+    def _github_client_with_review_comments(
+        self,
+        *,
+        issue_comments: list[Any] | None = None,
+        review_comments: list[Any] | None = None,
+    ) -> tuple[MagicMock, MagicMock, MagicMock]:
+        github_client = MagicMock()
+        repo = MagicMock(name="repo")
+        pr = MagicMock(name="pr")
+        github_client.get_repo.return_value = repo
+        repo.get_pull.return_value = pr
+        pr.get_issue_comments.return_value = issue_comments or []
+        pr.get_review_comments.return_value = review_comments or []
+        return github_client, repo, pr
+
     def test_returns_dispatch_request_with_inlined_prompt(self) -> None:
         from core.builders import build_review_request
         from core.routing import WORKFLOW_REVIEW_PR
@@ -213,6 +258,113 @@ class BuildReviewRequestTest(_BuilderTestBase):
                 github_client=MagicMock(),
                 workspace_path=Path("/tmp/ws"),
             )
+
+    def test_allows_third_explicit_review_invocation(self) -> None:
+        from core.builders import build_review_request
+
+        github_client, repo, pr = self._github_client_with_review_comments(
+            issue_comments=[
+                self._review_comment("/oz-review"),
+                self._review_comment("please @oz-agent /review"),
+                self._review_comment("/oz-review again"),
+            ],
+        )
+
+        request = build_review_request(
+            self._explicit_review_payload(),
+            github_client=github_client,
+            workspace_path=Path("/tmp/ws"),
+        )
+
+        self.assertIsNotNone(request)
+        repo.get_pull.assert_called_once_with(42)
+        pr.get_issue_comments.assert_called_once_with()
+        pr.get_review_comments.assert_called_once_with()
+        review_module = sys.modules["workflows.review_pr"]
+        review_module.gather_review_context.assert_called_once()  # type: ignore[attr-defined]
+
+    def test_skips_fourth_explicit_review_invocation(self) -> None:
+        from core.builders import build_review_request
+
+        github_client, repo, pr = self._github_client_with_review_comments(
+            issue_comments=[
+                self._review_comment("/oz-review"),
+                self._review_comment("/oz-review again"),
+                self._review_comment("please @oz-agent /review"),
+            ],
+            review_comments=[self._review_comment("/oz-review inline")],
+        )
+
+        request = build_review_request(
+            self._explicit_review_payload(),
+            github_client=github_client,
+            workspace_path=Path("/tmp/ws"),
+        )
+
+        self.assertIsNone(request)
+        repo.get_pull.assert_called_once_with(42)
+        pr.get_issue_comments.assert_called_once_with()
+        pr.get_review_comments.assert_called_once_with()
+        review_module = sys.modules["workflows.review_pr"]
+        review_module.gather_review_context.assert_not_called()  # type: ignore[attr-defined]
+        review_module.build_review_prompt_for_dispatch.assert_not_called()  # type: ignore[attr-defined]
+        self.assertEqual(len(self.progress_instances), 0)
+
+    def test_ignores_bot_comments_when_counting_explicit_invocations(self) -> None:
+        from core.builders import build_review_request
+
+        github_client, repo, pr = self._github_client_with_review_comments(
+            issue_comments=[
+                self._review_comment("/oz-review"),
+                self._review_comment("/oz-review again"),
+                self._review_comment("please @oz-agent /review"),
+                self._review_comment(
+                    "/oz-review from automation",
+                    login="oz-for-oss[bot]",
+                    user_type="Bot",
+                ),
+            ],
+            review_comments=[
+                self._review_comment(
+                    "/oz-review bot suffix",
+                    login="dependabot[bot]",
+                    user_type="User",
+                )
+            ],
+        )
+
+        request = build_review_request(
+            self._explicit_review_payload(),
+            github_client=github_client,
+            workspace_path=Path("/tmp/ws"),
+        )
+
+        self.assertIsNotNone(request)
+        repo.get_pull.assert_called_once_with(42)
+        pr.get_issue_comments.assert_called_once_with()
+        pr.get_review_comments.assert_called_once_with()
+        review_module = sys.modules["workflows.review_pr"]
+        review_module.gather_review_context.assert_called_once()  # type: ignore[attr-defined]
+
+    def test_fails_open_when_explicit_invocation_count_lookup_fails(self) -> None:
+        from core.builders import build_review_request
+
+        github_client = MagicMock()
+        repo = MagicMock(name="repo")
+        github_client.get_repo.return_value = repo
+        repo.get_pull.side_effect = RuntimeError("GitHub API unavailable")
+
+        with self.assertLogs("core.workflows", level="ERROR"):
+            request = build_review_request(
+                self._explicit_review_payload(),
+                github_client=github_client,
+                workspace_path=Path("/tmp/ws"),
+            )
+
+        self.assertIsNotNone(request)
+        repo.get_pull.assert_called_once_with(42)
+        review_module = sys.modules["workflows.review_pr"]
+        review_module.gather_review_context.assert_called_once()  # type: ignore[attr-defined]
 
 
 class BuildRespondRequestTest(_BuilderTestBase):
@@ -430,7 +582,6 @@ class BuildVerifyRequestTest(_BuilderTestBase):
         self.assertEqual(request.payload_subset["pr_number"], 11)
         self.assertEqual(len(self.progress_instances), 0)
         self.assert_deferred_progress(request)
-
 
 
 class BuildTriageRequestTest(_BuilderTestBase):

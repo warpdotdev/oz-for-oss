@@ -69,6 +69,7 @@ Webhook coverage today:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -96,6 +97,15 @@ READY_TO_IMPLEMENT_LABEL = "ready-to-implement"
 OZ_AGENT_MENTION = "@oz-agent"
 OZ_REVIEW_COMMAND = "/oz-review"
 OZ_VERIFY_COMMAND = "/oz-verify"
+MAX_EXPLICIT_REVIEW_INVOCATIONS_PER_PR = 3
+OZ_REVIEW_COMMAND_PATTERN = re.compile(
+    r"(?:^|\s)(?:/oz-review|@oz-agent\s+/review)\b", re.IGNORECASE
+)
+
+
+def has_oz_review_command(body: str) -> bool:
+    """Return whether *body* carries an explicit Oz review invocation."""
+    return bool(OZ_REVIEW_COMMAND_PATTERN.search(body or ""))
 
 
 @dataclass(frozen=True)
@@ -172,7 +182,7 @@ def _route_issue_comment(payload: dict[str, Any]) -> RouteDecision:
         return _route_plain_issue_comment(issue=issue, comment=comment, body=body)
     if OZ_VERIFY_COMMAND in body:
         return RouteDecision(WORKFLOW_VERIFY_PR_COMMENT, "/oz-verify on PR comment")
-    if OZ_REVIEW_COMMAND in body:
+    if has_oz_review_command(body):
         return RouteDecision(WORKFLOW_REVIEW_PR, "/oz-review on PR comment")
     if OZ_AGENT_MENTION in body:
         return RouteDecision(WORKFLOW_RESPOND_TO_PR_COMMENT, "@oz-agent mention on PR")
@@ -403,7 +413,7 @@ def _route_pull_request_review_comment(payload: dict[str, Any]) -> RouteDecision
     if _is_bot(comment.get("user")):
         return RouteDecision(None, "review comment authored by automation user")
     body = str(comment.get("body") or "")
-    if OZ_REVIEW_COMMAND in body:
+    if has_oz_review_command(body):
         return RouteDecision(WORKFLOW_REVIEW_PR, "/oz-review on review comment")
     if OZ_VERIFY_COMMAND in body:
         return RouteDecision(WORKFLOW_VERIFY_PR_COMMENT, "/oz-verify on review comment")
@@ -459,8 +469,10 @@ __all__ = [
     "OZ_AGENT_LOGIN",
     "OZ_AGENT_MENTION",
     "OZ_REVIEW_COMMAND",
+    "OZ_REVIEW_COMMAND_PATTERN",
     "OZ_VERIFY_COMMAND",
     "OZ_REVIEW_LABEL",
+    "MAX_EXPLICIT_REVIEW_INVOCATIONS_PER_PR",
     "PLAN_APPROVED_LABEL",
     "READY_TO_IMPLEMENT_LABEL",
     "READY_TO_SPEC_LABEL",
@@ -474,5 +486,6 @@ __all__ = [
     "WORKFLOW_REVIEW_PR",
     "WORKFLOW_TRIAGE_NEW_ISSUES",
     "WORKFLOW_VERIFY_PR_COMMENT",
+    "has_oz_review_command",
     "route_event",
 ]
