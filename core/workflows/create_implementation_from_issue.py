@@ -64,12 +64,54 @@ def build_create_implementation_prompt(
     spec_driven_implementation_skill_path: str,
     implement_issue_skill_path: str,
     coauthor_directives: str,
+    selected_spec_pr_number: int = 0,
 ) -> str:
     """Render the cloud-mode create-implementation prompt.
 
     Used by the webhook dispatch path to feed the implementation agent
     the issue/spec context and required handoff contract.
     """
+    if selected_spec_pr_number:
+        branch_contract_lines = "\n        ".join(
+            [
+                "- This implementation is running on the approved spec PR branch, "
+                f"so keep spec and implementation changes together on `{target_branch}` exactly.",
+                f"- Do not append a descriptive suffix to `{target_branch}` or push "
+                "implementation changes to any other branch.",
+                "- If you produce changes, write `pr-metadata.json` at the repository "
+                "root containing a JSON object with these required fields:",
+                "  - `branch_name`: the approved spec PR branch you pushed to. "
+                f"It must equal `{target_branch}` exactly.",
+                "  - `pr_title`: a conventional-commit-style PR title derived from "
+                "the actual changes (e.g. `feat: add retry logic for transient API failures`).",
+                "  - `pr_summary`: the full markdown PR body. The first line must be "
+                f"`Closes #{issue_number}` so GitHub auto-closes the issue when the PR merges.",
+            ]
+        )
+        commit_branch_line = (
+            f"- If you produce changes, commit them to `{target_branch}` and push "
+            "that branch to origin."
+        )
+    else:
+        branch_contract_lines = "\n        ".join(
+            [
+                "- If you produce changes, write `pr-metadata.json` at the repository "
+                "root containing a JSON object with these required fields:",
+                "  - `branch_name`: the branch you pushed to. You may customize it by "
+                "appending a short descriptive slug to the default "
+                f"(e.g. `{target_branch}-add-retry-logic`), but it must start with "
+                f"`{target_branch}`.",
+                "  - `pr_title`: a conventional-commit-style PR title derived from "
+                "the actual changes (e.g. `feat: add retry logic for transient API failures`).",
+                "  - `pr_summary`: the full markdown PR body. The first line must be "
+                f"`Closes #{issue_number}` so GitHub auto-closes the issue when the PR merges.",
+            ]
+        )
+        commit_branch_line = (
+            "- If you produce changes, commit them to the branch specified in "
+            "your `pr-metadata.json` `branch_name` field and push that branch "
+            "to origin."
+        )
     return dedent(
         f"""
         Create an implementation update for GitHub issue #{issue_number} in repository {owner}/{repo}.
@@ -96,12 +138,9 @@ def build_create_implementation_prompt(
         - If that branch already exists, fetch it and continue from it. Otherwise create it from `{default_branch}`.
         - Align the implementation with the plan context above when present.
         - Run the most relevant validation available in the repository.
-        - If you produce changes, write `pr-metadata.json` at the repository root containing a JSON object with these required fields:
-          - `branch_name`: the branch you pushed to. You may customize it by appending a short descriptive slug to the default (e.g. `{target_branch}-add-retry-logic`), but it must start with `{target_branch}`.
-          - `pr_title`: a conventional-commit-style PR title derived from the actual changes (e.g. `feat: add retry logic for transient API failures`).
-          - `pr_summary`: the full markdown PR body. The first line must be `Closes #{issue_number}` so GitHub auto-closes the issue when the PR merges.
+        {branch_contract_lines}
         - After writing `pr-metadata.json`, upload it as an artifact via `oz artifact upload pr-metadata.json` (or `oz-preview artifact upload pr-metadata.json` if the `oz` CLI is not available). Either CLI is acceptable — use whichever one is installed in the environment. The subcommand is `artifact` (singular) on both CLIs; do not use `artifacts`.
-        - If you produce changes, commit them to the branch specified in your `pr-metadata.json` `branch_name` field and push that branch to origin.
+        {commit_branch_line}
         - After pushing, stop. Do not open or update the pull request yourself, and do not invoke `gh pr create`, `gh pr edit`, or equivalent commands.
         - The outer workflow owns any pull-request creation or pull-request title/body refresh after your branch push and `pr-metadata.json` upload.
         - If no implementation diff is warranted, do not push the branch.
@@ -314,6 +353,7 @@ def build_create_implementation_prompt_for_dispatch(
             context.get("implement_issue_skill_path") or ""
         ),
         coauthor_directives=str(context.get("coauthor_directives") or ""),
+        selected_spec_pr_number=int(context.get("selected_spec_pr_number") or 0),
     )
 
 
@@ -390,6 +430,11 @@ def apply_create_implementation_result(
 
     if metadata is not None:
         agent_branch = str(metadata.get("branch_name") or "").strip()
+        if selected_spec_pr_number and agent_branch and agent_branch != target_branch:
+            raise RuntimeError(
+                "pr-metadata.json branch_name must equal the approved spec PR "
+                f"branch {target_branch!r}, got {agent_branch!r}."
+            )
         # Allow the agent to extend the default target branch with a
         # descriptive slug. Reject any other branch name to avoid
         # accidentally pushing onto an unrelated branch.
@@ -402,7 +447,11 @@ def apply_create_implementation_result(
             )
         ):
             target_branch = agent_branch
-    created_after = created_at.replace(tzinfo=timezone.utc) if created_at.tzinfo is None else created_at
+    created_after = (
+        created_at.replace(tzinfo=timezone.utc)
+        if created_at.tzinfo is None
+        else created_at
+    )
     created_after = created_after - timedelta(minutes=1)
 
     if not branch_updated_since(

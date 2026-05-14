@@ -60,7 +60,7 @@ When the prompt asks for `pr-metadata.json`, the agent must produce a JSON file 
 }
 ```
 
-- **`branch_name`**: the branch the agent pushed to. Must start with the prefix supplied in the prompt (e.g. `oz-agent/implement--{N}`) and contain a short auto-generated suffix describing the change.
+- **`branch_name`**: the branch the agent pushed to. Follow the branch contract in the prompt exactly. When the prompt says the run is using an approved spec PR branch, `branch_name` must equal that branch exactly and must not include a descriptive suffix. For standalone implementation PR branches, a short descriptive suffix is allowed when the prompt permits it, as long as the branch starts with the supplied prefix (e.g. `oz-agent/implement-issue-{N}-add-retry-logic`).
 - **`pr_title`**: a conventional-commit-style PR title derived from the actual changes.
 - **`pr_summary`**: the full markdown PR body. The first line must be `Closes #<issue_number>` so GitHub auto-closes the issue when the PR merges.
 

@@ -8,6 +8,65 @@ from unittest.mock import MagicMock, patch
 from . import conftest  # noqa: F401
 
 
+class CreateImplementationPromptTest(unittest.TestCase):
+    def _prompt(self, **overrides: object) -> str:
+        from core.workflows.create_implementation_from_issue import (
+            build_create_implementation_prompt,
+        )
+
+        kwargs: dict[str, object] = {
+            "owner": "acme",
+            "repo": "widgets",
+            "issue_number": 12,
+            "issue_title": "Add retries",
+            "issue_labels": ["ready-to-implement"],
+            "issue_assignees": ["oz-agent"],
+            "spec_context_text": "Spec body",
+            "target_branch": "oz-agent/implement-issue-12",
+            "default_branch": "main",
+            "implement_specs_skill_path": ".agents/skills/implement-specs/SKILL.md",
+            "spec_driven_implementation_skill_path": (
+                ".agents/skills/spec-driven-implementation/SKILL.md"
+            ),
+            "implement_issue_skill_path": ".agents/skills/implement-issue/SKILL.md",
+            "coauthor_directives": "",
+        }
+        kwargs.update(overrides)
+        return build_create_implementation_prompt(**kwargs)  # type: ignore[arg-type]
+
+    def test_approved_spec_prompt_requires_exact_branch(self) -> None:
+        prompt = self._prompt(
+            target_branch="oz-agent/spec-issue-12",
+            selected_spec_pr_number=44,
+        )
+
+        self.assertIn(
+            "approved spec PR branch, so keep spec and implementation "
+            "changes together on `oz-agent/spec-issue-12` exactly",
+            prompt,
+        )
+        self.assertIn(
+            "Do not append a descriptive suffix to `oz-agent/spec-issue-12`",
+            prompt,
+        )
+        self.assertIn(
+            "`branch_name`: the approved spec PR branch you pushed to. It "
+            "must equal `oz-agent/spec-issue-12` exactly.",
+            prompt,
+        )
+        self.assertNotIn("You may customize it by appending", prompt)
+
+    def test_standalone_prompt_still_allows_suffixed_branch(self) -> None:
+        prompt = self._prompt()
+
+        self.assertIn(
+            "You may customize it by appending a short descriptive slug to "
+            "the default (e.g. `oz-agent/implement-issue-12-add-retry-logic`)",
+            prompt,
+        )
+        self.assertNotIn("approved spec PR branch", prompt)
+
+
 class CreateImplementationApplyTest(unittest.TestCase):
     def _context(self) -> dict[str, object]:
         return {
@@ -91,6 +150,46 @@ class CreateImplementationApplyTest(unittest.TestCase):
             branch_updated_since.call_args.kwargs["created_after"],
             run_created_at.replace(tzinfo=timezone.utc) - timedelta(minutes=1),
         )
+
+    def test_approved_spec_rejects_branch_override(self) -> None:
+        from core.workflows.create_implementation_from_issue import (
+            apply_create_implementation_result,
+        )
+
+        progress = MagicMock()
+        run = SimpleNamespace(
+            run_id="run-1",
+            created_at=datetime(2026, 4, 30, 12, 0, tzinfo=timezone.utc),
+        )
+        context = self._context()
+        context.update(
+            {
+                "target_branch": "oz-agent/spec-issue-12",
+                "selected_spec_pr_number": 44,
+                "selected_spec_pr_url": "https://github.com/acme/widgets/pull/44",
+            }
+        )
+        metadata = {
+            "branch_name": "oz-agent/spec-issue-12-add-retries",
+            "pr_title": "fix: add retries",
+            "pr_summary": "Closes #12\n\nSummary",
+        }
+
+        with patch(
+            "core.workflows.create_implementation_from_issue.branch_updated_since"
+        ) as branch_updated_since, self.assertRaisesRegex(
+            RuntimeError,
+            "branch_name must equal the approved spec PR branch",
+        ):
+            apply_create_implementation_result(
+                MagicMock(),
+                context=context,
+                run=run,
+                result=metadata,
+                progress=progress,
+            )
+
+        branch_updated_since.assert_not_called()
 
 
 class CreateSpecApplyTest(unittest.TestCase):
