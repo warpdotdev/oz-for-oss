@@ -28,6 +28,7 @@ from oz.helpers import (
     split_repo_full_name,
     WorkflowProgressComment,
 )
+from .repo_verification import format_repo_scoped_verification_section
 
 WORKFLOW_NAME = "respond-to-pr-comment"
 FETCH_CONTEXT_SCRIPT = ".agents/skills/implement-specs/scripts/fetch_github_context.py"
@@ -371,6 +372,15 @@ def build_pr_comment_prompt(context: Mapping[str, Any]) -> str:
         metadata_branch_line = f"`branch_name`: the branch you pushed to (use `{head_branch}` exactly)."
         metadata_requirement_line = "If your changes materially change what this PR contains (for example, adding implementation code on top of a PR that previously only contained spec changes, or otherwise substantially broadening or narrowing the PR's scope), write `pr-metadata.json` at the repository root containing a JSON object with these required fields so the workflow can refresh the PR title and body:"
     branch_instructions = indent(branch_instructions, "        ")
+    verification_section = indent(
+        format_repo_scoped_verification_section(
+            target_repo_full_name=agent_push_repo_full_name,
+            target_ref=agent_push_branch,
+            output_artifact="pr-metadata.json when it is required, otherwise implementation_summary.md or your final summary",
+            output_summary_location="`implementation_summary.md`, `pr-metadata.json` when present, and any final status summary",
+        ),
+        "        ",
+    )
     return dedent(
         f"""\
         Make changes for pull request #{pr_number} in repository {owner}/{repo}.
@@ -398,6 +408,7 @@ def build_pr_comment_prompt(context: Mapping[str, Any]) -> str:
 {branch_instructions}
         - Align any implementation changes with the plan context above when present.
         - Run the most relevant validation available in the repository.
+{verification_section}
         - If no implementation diff is warranted, do not push the branch.
 
         PR Description Refresh:

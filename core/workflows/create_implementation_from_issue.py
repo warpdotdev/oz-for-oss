@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from textwrap import dedent
+from textwrap import dedent, indent
 from typing import Any, Mapping, TypedDict
 
 from github.Repository import Repository
@@ -37,6 +37,7 @@ from oz.helpers import (
     WorkflowProgressComment,
 )
 from oz.oz_client import skill_file_path
+from .repo_verification import format_repo_scoped_verification_section
 
 WORKFLOW_NAME = "create-implementation-from-issue"
 IMPLEMENT_SPECS_SKILL = "implement-specs"
@@ -70,6 +71,15 @@ def build_create_implementation_prompt(
     Used by the webhook dispatch path to feed the implementation agent
     the issue/spec context and required handoff contract.
     """
+    verification_section = indent(
+        format_repo_scoped_verification_section(
+            target_repo_full_name=f"{owner}/{repo}",
+            target_ref=target_branch,
+            output_artifact="pr-metadata.json",
+            output_summary_location="`implementation_summary.md` and the `pr_summary` field of `pr-metadata.json`",
+        ),
+        "        ",
+    )
     return dedent(
         f"""
         Create an implementation update for GitHub issue #{issue_number} in repository {owner}/{repo}.
@@ -96,6 +106,7 @@ def build_create_implementation_prompt(
         - If that branch already exists, fetch it and continue from it. Otherwise create it from `{default_branch}`.
         - Align the implementation with the plan context above when present.
         - Run the most relevant validation available in the repository.
+{verification_section}
         - If you produce changes, write `pr-metadata.json` at the repository root containing a JSON object with these required fields:
           - `branch_name`: the branch you pushed to. You may customize it by appending a short descriptive slug to the default (e.g. `{target_branch}-add-retry-logic`), but it must start with `{target_branch}`.
           - `pr_title`: a conventional-commit-style PR title derived from the actual changes (e.g. `feat: add retry logic for transient API failures`).

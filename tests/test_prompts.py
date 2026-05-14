@@ -12,6 +12,8 @@ from workflows.respond_to_pr_comment import (
     build_pr_comment_prompt,
     gather_pr_comment_context,
 )
+from workflows.create_implementation_from_issue import build_create_implementation_prompt
+from workflows.review_pr import build_review_prompt_for_dispatch
 from workflows.verify_pr_comment import build_verification_prompt
 
 
@@ -66,6 +68,90 @@ class FetchContextCommandPromptTest(unittest.TestCase):
             prompt,
         )
         self.assertNotIn("fetch_github_context.py pr --repo", prompt)
+
+class RepoScopedVerificationPromptTest(unittest.TestCase):
+    def test_review_prompt_requires_verifying_pr_head_repo_and_ref(self) -> None:
+        prompt = build_review_prompt_for_dispatch(
+            {
+                "owner": "warpdotdev",
+                "repo": "warp",
+                "pr_number": 88,
+                "pr_title": "feat: update review flow",
+                "pr_body": "body",
+                "base_branch": "main",
+                "head_branch": "feature/review-flow",
+                "head_repo_full_name": "warpdotdev/warp",
+                "head_sha": "abc123",
+                "trigger_source": "pull_request",
+                "focus_line": "Perform a general review.",
+                "issue_line": "No associated issue resolved for spec lookup.",
+                "skill_name": "review-pr",
+                "supplemental_skill_line": "Also apply security-review-pr.",
+                "repo_local_section": "",
+                "non_member_review_section": "",
+                "pr_description_text": "description",
+                "pr_diff_text": "diff",
+                "spec_context_text": "",
+            }
+        )
+
+        self.assertIn("Repository-Scoped Verification", prompt)
+        self.assertIn("Target repository: `warpdotdev/warp`", prompt)
+        self.assertIn("Target ref/branch: `feature/review-flow`", prompt)
+        self.assertIn("Target commit SHA: `abc123`", prompt)
+        self.assertIn("the top-level `body` field of `review.json`", prompt)
+        self.assertNotIn("Do not run `git fetch`, `git checkout`", prompt)
+        self.assertNotIn("webhook", prompt.lower())
+
+    def test_implementation_prompt_uses_target_repository_without_hardcoding(self) -> None:
+        prompt = build_create_implementation_prompt(
+            owner="acme",
+            repo="widgets",
+            issue_number=439,
+            issue_title="Run repo-scoped verification",
+            issue_labels=["enhancement"],
+            issue_assignees=["oz-agent"],
+            spec_context_text="No approved or repository spec context was found.",
+            target_branch="oz-agent/implement-issue-439",
+            default_branch="main",
+            implement_specs_skill_path=".agents/skills/implement-specs/SKILL.md",
+            spec_driven_implementation_skill_path=".agents/skills/spec-driven-implementation/SKILL.md",
+            implement_issue_skill_path=".agents/skills/implement-issue/SKILL.md",
+            coauthor_directives="",
+        )
+
+        self.assertIn("Target repository: `acme/widgets`", prompt)
+        self.assertIn("Target ref/branch: `oz-agent/implement-issue-439`", prompt)
+        self.assertIn("do not hard-code behavior for any one repository name", prompt)
+        self.assertIn("commands attempted", prompt)
+        self.assertNotIn("webhook", prompt.lower())
+
+    def test_pr_comment_prompt_verifies_agent_push_repository(self) -> None:
+        prompt = build_pr_comment_prompt(
+            {
+                "owner": "octo",
+                "repo": "tools",
+                "pr_number": 12,
+                "head_branch": "feature",
+                "head_repo_full_name": "octo/tools",
+                "base_branch": "main",
+                "base_repo_full_name": "octo/tools",
+                "pr_title": "feat: add tool",
+                "requester": "alice",
+                "trigger_kind": "conversation",
+                "trigger_comment_id": 99,
+                "spec_context_text": "No spec context.",
+                "coauthor_directives": "",
+                "branch_strategy": "push-head",
+                "agent_push_repo_full_name": "octo/tools",
+                "agent_push_branch": "feature",
+            }
+        )
+
+        self.assertIn("Target repository: `octo/tools`", prompt)
+        self.assertIn("Target ref/branch: `feature`", prompt)
+        self.assertIn("pass/fail/skipped status", prompt)
+        self.assertNotIn("webhook", prompt.lower())
 
 
 class PrCommentContextBranchSafetyTest(unittest.TestCase):
