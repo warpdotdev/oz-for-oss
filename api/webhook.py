@@ -39,6 +39,7 @@ from core.dispatch import (
 )
 from core.routing import (
     RouteDecision,
+    WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION,
     WORKFLOW_ANNOUNCE_READY_ISSUE,
     WORKFLOW_PLAN_APPROVED,
     needs_triage_bot_author_allowlist,
@@ -120,6 +121,26 @@ def _run_synchronous_announce_ready_issue(
     return sync_announce_ready_issue(payload)
 
 
+def _run_synchronous_acknowledge_unknown_mention(
+    payload: Mapping[str, Any],
+    *,
+    sync_acknowledge_unknown_mention: Callable[[Mapping[str, Any]], dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """Run the synchronous ``acknowledge-unknown-mention`` path inside the webhook.
+
+    The handler posts a one-shot acknowledgement comment on the PR
+    telling the commenter that the mentioned handle was not recognized
+    and pointing them at ``@oz-agent``. Like ``announce-ready-issue``
+    there is no cloud-agent dispatch fallback, so the helper always
+    returns a structured outcome dict (or ``None`` when the sync helper
+    itself wasn't wired in, which only happens for unit tests that
+    exercise pure routing).
+    """
+    if sync_acknowledge_unknown_mention is None:
+        return None
+    return sync_acknowledge_unknown_mention(payload)
+
+
 def process_webhook_request(
     *,
     body: bytes,
@@ -133,6 +154,7 @@ def process_webhook_request(
     store: StateStore | None = None,
     sync_plan_approved: Callable[[Mapping[str, Any]], dict[str, Any] | None] | None = None,
     sync_announce_ready_issue: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+    sync_acknowledge_unknown_mention: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     triage_bot_author_allowlist: Iterable[str] | None = None,
     triage_bot_author_allowlist_loader: Callable[[Mapping[str, Any]], Iterable[str]] | None = None,
 ) -> WebhookResponse:
@@ -265,6 +287,34 @@ def process_webhook_request(
             body={**base_body, "announce_ready_issue": outcome},
         )
 
+    # ``acknowledge-unknown-mention`` is fully synchronous: the webhook
+    # posts a one-shot comment letting the commenter know the mentioned
+    # handle was not recognized and never dispatches a cloud agent. The
+    # sync helper returns a structured outcome for observability; when it
+    # is not wired in (pure-routing unit tests) we surface the routed
+    # decision and skip the dispatch path entirely.
+    if decision.workflow == WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION:
+        try:
+            outcome = _run_synchronous_acknowledge_unknown_mention(
+                payload,
+                sync_acknowledge_unknown_mention=sync_acknowledge_unknown_mention,
+            )
+        except Exception as exc:
+            logger.exception("Synchronous acknowledge-unknown-mention run failed")
+            return WebhookResponse(
+                status=500,
+                body={
+                    **base_body,
+                    "error": f"acknowledge-unknown-mention path failed: {exc}",
+                },
+            )
+        if outcome is None:
+            return WebhookResponse(status=202, body=base_body)
+        return WebhookResponse(
+            status=202,
+            body={**base_body, "acknowledge_unknown_mention": outcome},
+        )
+
     if builder_registry is None or runner is None or config_factory is None or store is None:
         # The webhook handler is partially wired (e.g. unit tests that
         # only exercise routing). Keep returning 202 + reason so the
@@ -357,6 +407,9 @@ class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel requires this exac
             store=wiring["store"],
             sync_plan_approved=wiring["sync_plan_approved"],
             sync_announce_ready_issue=wiring["sync_announce_ready_issue"],
+            sync_acknowledge_unknown_mention=wiring[
+                "sync_acknowledge_unknown_mention"
+            ],
             triage_bot_author_allowlist_loader=wiring[
                 "triage_bot_author_allowlist_loader"
             ],
@@ -396,6 +449,9 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
     )
     from oz.workflow_config import (  # type: ignore[import-not-found]
         load_triage_bot_author_allowlist,
+    )
+    from workflows.acknowledge_unknown_mention import (  # type: ignore[import-not-found]
+        apply_acknowledge_unknown_mention_sync,
     )
     from workflows.announce_ready_issue import (  # type: ignore[import-not-found]
         apply_announce_ready_issue_sync,
@@ -529,6 +585,26 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
             repo_handle, payload=payload
         )
 
+    def sync_acknowledge_unknown_mention(
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        installation_id = int(
+            (payload.get("installation") or {}).get("id") or 0
+        )
+        full_name = str(
+            (payload.get("repository") or {}).get("full_name") or ""
+        )
+        if installation_id <= 0 or "/" not in full_name:
+            return {
+                "action": "skipped",
+                "reason": "missing installation_id or repository.full_name",
+            }
+        client = _mint_github_client(installation_id)
+        repo_handle = client.get_repo(full_name)
+        return apply_acknowledge_unknown_mention_sync(
+            repo_handle, payload=payload
+        )
+
     def triage_bot_author_allowlist_loader(payload: Mapping[str, Any]) -> frozenset[str]:
         full_name = str(
             (payload.get("repository") or {}).get("full_name") or ""
@@ -552,6 +628,7 @@ def _build_runtime_wiring(*, body: bytes) -> dict[str, Any]:
         "store": build_state_store(),
         "sync_plan_approved": sync_plan_approved,
         "sync_announce_ready_issue": sync_announce_ready_issue,
+        "sync_acknowledge_unknown_mention": sync_acknowledge_unknown_mention,
         "triage_bot_author_allowlist_loader": triage_bot_author_allowlist_loader,
     }
 

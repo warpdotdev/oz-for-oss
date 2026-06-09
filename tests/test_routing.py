@@ -17,6 +17,7 @@ from core.routing import (
     AUTO_IMPLEMENT_LABEL,
     OZ_AGENT_LOGIN,
     RouteDecision,
+    WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION,
     WORKFLOW_ANNOUNCE_READY_ISSUE,
     WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE,
     WORKFLOW_CREATE_SPEC_FROM_ISSUE,
@@ -25,6 +26,8 @@ from core.routing import (
     WORKFLOW_REVIEW_PR,
     WORKFLOW_TRIAGE_NEW_ISSUES,
     WORKFLOW_VERIFY_PR_COMMENT,
+    find_unrecognized_agent_mention,
+    has_agent_mention,
     route_event,
 )
 
@@ -502,6 +505,49 @@ class IssueCommentEventTest(unittest.TestCase):
         )
         self.assertEqual(decision.workflow, WORKFLOW_RESPOND_TO_PR_COMMENT)
 
+    def test_warp_agent_alias_on_pr_routes_to_respond_to_pr_comment(self) -> None:
+        # The legacy ``@warp-agent`` handle is kept as an alias after the
+        # rebrand so mentions written before the change still trigger a run.
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(pull_request={"url": "..."}),
+                "comment": _comment(body="@warp-agent please fix clippy/lint issues"),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_RESPOND_TO_PR_COMMENT)
+
+    def test_warp_agent_review_alias_on_pr_routes_to_review(self) -> None:
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(pull_request={"url": "..."}),
+                "comment": _comment(body="please @warp-agent /review"),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
+
+    def test_unrecognized_agent_handle_on_pr_routes_to_acknowledge(self) -> None:
+        # An agent-like but unrecognized handle (e.g. the pre-rebrand
+        # ``@warp-bot`` typo) should surface a clarifying acknowledgement
+        # instead of being silently dropped.
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(pull_request={"url": "..."}),
+                "comment": _comment(body="@warp-bot please fix lint"),
+            },
+        )
+        self.assertEqual(
+            decision.workflow, WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION
+        )
+        self.assertEqual(
+            (decision.extra or {}).get("mentioned_handle"), "warp-bot"
+        )
+
     def test_pr_comment_without_command_or_mention_skipped(self) -> None:
         decision = route_event(
             "issue_comment",
@@ -509,6 +555,19 @@ class IssueCommentEventTest(unittest.TestCase):
                 "action": "created",
                 "issue": _issue(pull_request={"url": "..."}),
                 "comment": _comment(body="thanks for the feedback"),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+
+    def test_unrelated_mention_on_pr_is_not_acknowledged(self) -> None:
+        # A non-agent mention (a normal teammate) must not trigger an
+        # acknowledgement; only agent-like handles do.
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(pull_request={"url": "..."}),
+                "comment": _comment(body="cc @alice can you take a look"),
             },
         )
         self.assertIsNone(decision.workflow)
@@ -585,6 +644,18 @@ class IssueCommentEventTest(unittest.TestCase):
                 "action": "created",
                 "issue": _issue(labels=[]),
                 "comment": _comment(body="@oz-agent please look"),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
+
+    def test_warp_agent_alias_on_plain_issue_routes_to_triage(self) -> None:
+        # The legacy alias works on plain issues too.
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(labels=[]),
+                "comment": _comment(body="@warp-agent please look"),
             },
         )
         self.assertEqual(decision.workflow, WORKFLOW_TRIAGE_NEW_ISSUES)
@@ -844,6 +915,31 @@ class PullRequestReviewCommentTest(unittest.TestCase):
         )
         self.assertEqual(decision.workflow, WORKFLOW_RESPOND_TO_PR_COMMENT)
 
+    def test_warp_agent_alias_routes_to_respond_to_pr_comment(self) -> None:
+        decision = route_event(
+            "pull_request_review_comment",
+            {
+                "action": "created",
+                "comment": _comment(body="@warp-agent address this"),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_RESPOND_TO_PR_COMMENT)
+
+    def test_unrecognized_handle_routes_to_acknowledge(self) -> None:
+        decision = route_event(
+            "pull_request_review_comment",
+            {
+                "action": "created",
+                "comment": _comment(body="@ozagent address this"),
+            },
+        )
+        self.assertEqual(
+            decision.workflow, WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION
+        )
+        self.assertEqual(
+            (decision.extra or {}).get("mentioned_handle"), "ozagent"
+        )
+
     def test_no_command_or_mention_skipped(self) -> None:
         decision = route_event(
             "pull_request_review_comment",
@@ -885,6 +981,31 @@ class PullRequestReviewTest(unittest.TestCase):
             },
         )
         self.assertEqual(decision.workflow, WORKFLOW_RESPOND_TO_PR_COMMENT)
+
+    def test_warp_agent_alias_in_review_body_routes_to_respond_to_pr_comment(self) -> None:
+        decision = route_event(
+            "pull_request_review",
+            {
+                "action": "submitted",
+                "review": _comment(body="@warp-agent please update this"),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_RESPOND_TO_PR_COMMENT)
+
+    def test_unrecognized_handle_in_review_body_routes_to_acknowledge(self) -> None:
+        decision = route_event(
+            "pull_request_review",
+            {
+                "action": "submitted",
+                "review": _comment(body="@oz_agent please update this"),
+            },
+        )
+        self.assertEqual(
+            decision.workflow, WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION
+        )
+        self.assertEqual(
+            (decision.extra or {}).get("mentioned_handle"), "oz_agent"
+        )
 
     def test_review_body_without_mention_is_dropped(self) -> None:
         decision = route_event(
@@ -935,6 +1056,37 @@ class RouteDecisionDefaultsTest(unittest.TestCase):
         # logging. The dataclass must accept it without breaking.
         decision = RouteDecision(workflow=None, reason="skip", extra={"trigger": "labeled"})
         self.assertEqual(decision.extra, {"trigger": "labeled"})
+
+
+class AgentMentionHelpersTest(unittest.TestCase):
+    """Unit coverage for the mention-detection helpers."""
+
+    def test_recognized_handles(self) -> None:
+        self.assertTrue(has_agent_mention("ping @oz-agent here"))
+        self.assertTrue(has_agent_mention("ping @warp-agent here"))
+        self.assertTrue(has_agent_mention("(@OZ-Agent)"))  # case-insensitive + punctuation
+
+    def test_non_agent_mentions_are_not_recognized(self) -> None:
+        self.assertFalse(has_agent_mention("cc @alice"))
+        self.assertFalse(has_agent_mention("email me at foo@oz-agent.com"))
+        self.assertFalse(has_agent_mention("no mentions at all"))
+        # A longer handle that merely starts with the recognized text.
+        self.assertFalse(has_agent_mention("@oz-agentx hello"))
+
+    def test_unrecognized_agent_like_handles(self) -> None:
+        self.assertEqual(find_unrecognized_agent_mention("@warp-bot go"), "warp-bot")
+        self.assertEqual(find_unrecognized_agent_mention("@ozagent go"), "ozagent")
+        self.assertEqual(find_unrecognized_agent_mention("@oz_agent go"), "oz_agent")
+        self.assertEqual(find_unrecognized_agent_mention("@warp-ai go"), "warp-ai")
+
+    def test_recognized_handles_are_not_flagged_as_unrecognized(self) -> None:
+        self.assertIsNone(find_unrecognized_agent_mention("@oz-agent go"))
+        self.assertIsNone(find_unrecognized_agent_mention("@warp-agent go"))
+
+    def test_unrelated_mentions_are_not_flagged(self) -> None:
+        self.assertIsNone(find_unrecognized_agent_mention("cc @alice"))
+        self.assertIsNone(find_unrecognized_agent_mention("@warp please"))  # bare product name
+        self.assertIsNone(find_unrecognized_agent_mention("@deploy-agent"))  # unrelated -agent user
 
 
 if __name__ == "__main__":

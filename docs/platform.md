@@ -44,7 +44,9 @@ The verification role uses [`verify-pr`](../.agents/skills/verify-pr/SKILL.md) a
 
 ### PR comment response
 
-The `respond-to-pr-comment` workflow handles `@oz-agent` mentions on PR conversations, inline review comments, and review bodies. It uses the implementation skill family with PR context and any available spec context.
+The `respond-to-pr-comment` workflow handles `@oz-agent` mentions (and the legacy `@warp-agent` alias, kept after the rebrand) on PR conversations, inline review comments, and review bodies. It uses the implementation skill family with PR context and any available spec context.
+
+When a PR comment, review comment, or review body mentions an agent-*like* handle that is not recognized — for example the pre-rebrand `@warp-bot` typo or a mistyped `@ozagent` — the `acknowledge-unknown-mention` synchronous path posts a one-shot comment letting the commenter know the mention was received but not recognized and points them at `@oz-agent`, instead of silently doing nothing.
 
 ## Repo-local companions
 
@@ -63,6 +65,7 @@ Each loop has a narrow write surface and keeps the core cross-repo skills stable
 Some routed webhook branches perform deterministic GitHub mutations without dispatching an Oz run:
 
 - `announce-ready-issue` posts fixed availability guidance when `ready-to-spec` or `ready-to-implement` is added without assigning `oz-agent`.
+- `acknowledge-unknown-mention` posts a one-shot comment when a PR mention uses an unrecognized but agent-like handle (e.g. `@warp-bot`), so the mention is acknowledged rather than dropped.
 - `plan-approved` performs approval bookkeeping synchronously and only falls through to implementation dispatch when the linked issue is ready.
 
 ## In one sentence

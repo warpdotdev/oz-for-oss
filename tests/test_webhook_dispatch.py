@@ -22,6 +22,7 @@ from . import conftest  # noqa: F401
 from api.webhook import process_webhook_request
 from core.dispatch import DispatchRequest
 from core.routing import (
+    WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION,
     WORKFLOW_ANNOUNCE_READY_ISSUE,
     WORKFLOW_PLAN_APPROVED,
     WORKFLOW_REVIEW_PR,
@@ -546,6 +547,107 @@ class SynchronousAnnounceReadyIssuePathTest(unittest.TestCase):
         self.assertEqual(response.status, 500)
         self.assertIn(
             "announce-ready-issue path failed", response.body["error"]
+        )
+
+
+class SynchronousAcknowledgeUnknownMentionPathTest(unittest.TestCase):
+    def _payload(self, *, body: str = "@warp-bot please fix lint") -> dict[str, Any]:
+        return {
+            "action": "created",
+            "repository": {"full_name": "acme/widgets"},
+            "installation": {"id": 1234},
+            "issue": {"number": 42, "pull_request": {"url": "..."}},
+            "comment": {
+                "id": 7,
+                "body": body,
+                "user": {"login": "alice", "type": "User"},
+            },
+        }
+
+    def test_acknowledge_outcome_short_circuits_dispatch(self) -> None:
+        # The acknowledge-unknown-mention workflow is fully synchronous;
+        # the webhook never falls through to a cloud-agent dispatch so
+        # neither the builder nor the runner should be invoked.
+        body, signature = _signed_envelope(self._payload())
+
+        sync_calls: list[Mapping[str, Any]] = []
+
+        def sync_acknowledge(payload: Mapping[str, Any]) -> dict[str, Any]:
+            sync_calls.append(payload)
+            return {
+                "action": "acknowledged",
+                "pr_number": 42,
+                "mentioned_handle": "warp-bot",
+            }
+
+        runner_called = MagicMock(side_effect=AssertionError("should not run"))
+
+        response = process_webhook_request(
+            body=body,
+            signature_header=signature,
+            event_header="issue_comment",
+            delivery_id="delivery-aum-1",
+            secret=_SECRET,
+            builder_registry={},
+            runner=runner_called,
+            config_factory=lambda name, role: {},
+            store=InMemoryStateStore(),
+            sync_acknowledge_unknown_mention=sync_acknowledge,
+        )
+        self.assertEqual(response.status, 202)
+        self.assertEqual(
+            response.body["workflow"], WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION
+        )
+        self.assertEqual(
+            response.body["acknowledge_unknown_mention"]["action"],
+            "acknowledged",
+        )
+        self.assertEqual(len(sync_calls), 1)
+        runner_called.assert_not_called()
+
+    def test_returns_202_without_outcome_when_sync_helper_not_wired(self) -> None:
+        body, signature = _signed_envelope(self._payload())
+
+        runner_called = MagicMock(side_effect=AssertionError("should not run"))
+        response = process_webhook_request(
+            body=body,
+            signature_header=signature,
+            event_header="issue_comment",
+            delivery_id="delivery-aum-2",
+            secret=_SECRET,
+            builder_registry={},
+            runner=runner_called,
+            config_factory=lambda name, role: {},
+            store=InMemoryStateStore(),
+        )
+        self.assertEqual(response.status, 202)
+        self.assertEqual(
+            response.body["workflow"], WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION
+        )
+        self.assertNotIn("acknowledge_unknown_mention", response.body)
+        runner_called.assert_not_called()
+
+    def test_500_when_sync_acknowledge_raises(self) -> None:
+        body, signature = _signed_envelope(self._payload())
+
+        def exploding_sync(_payload: Mapping[str, Any]) -> dict[str, Any]:
+            raise RuntimeError("github outage")
+
+        response = process_webhook_request(
+            body=body,
+            signature_header=signature,
+            event_header="issue_comment",
+            delivery_id="delivery-aum-3",
+            secret=_SECRET,
+            builder_registry={},
+            runner=lambda **_: SimpleNamespace(run_id="x"),
+            config_factory=lambda name, role: {},
+            store=InMemoryStateStore(),
+            sync_acknowledge_unknown_mention=exploding_sync,
+        )
+        self.assertEqual(response.status, 500)
+        self.assertIn(
+            "acknowledge-unknown-mention path failed", response.body["error"]
         )
 
 

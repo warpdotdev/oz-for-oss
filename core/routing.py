@@ -31,9 +31,15 @@ Webhook coverage today:
     ``oz-agent`` is assigned.
 - ``pull_request_review_comment`` events route to
   ``review-pull-request`` (``/oz-review``), ``verify-pr-comment``
-  (``/oz-verify``), or ``respond-to-pr-comment`` (``@oz-agent``).
+  (``/oz-verify``), or ``respond-to-pr-comment`` (``@oz-agent`` or the
+  legacy ``@warp-agent`` alias). A comment that mentions an
+  unrecognized but agent-like handle (for example ``@warp-bot``)
+  routes to ``acknowledge-unknown-mention`` so the bot posts a
+  clarifying comment instead of silently doing nothing.
 - ``pull_request_review`` events route to ``respond-to-pr-comment``
-  when the review body mentions ``@oz-agent``.
+  when the review body mentions ``@oz-agent`` / ``@warp-agent``, or to
+  ``acknowledge-unknown-mention`` when it mentions an unrecognized
+  agent-like handle.
 - ``issue_comment`` ``created`` events on a pull request route to the same
   set as ``pull_request_review_comment`` (GitHub delivers PR conversation
   comments under the ``issue_comment`` event). Edited issue comments are
@@ -91,6 +97,7 @@ WORKFLOW_CREATE_SPEC_FROM_ISSUE = "create-spec-from-issue"
 WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE = "create-implementation-from-issue"
 WORKFLOW_PLAN_APPROVED = "plan-approved"
 WORKFLOW_ANNOUNCE_READY_ISSUE = "announce-ready-issue"
+WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION = "acknowledge-unknown-mention"
 
 OZ_AGENT_LOGIN = "oz-agent"
 OZ_REVIEW_LABEL = "oz-review"
@@ -102,16 +109,76 @@ READY_TO_IMPLEMENT_LABEL = "ready-to-implement"
 AUTO_IMPLEMENT_LABEL = "auto-implement"
 
 OZ_AGENT_MENTION = "@oz-agent"
+# Pre-rebrand handle, retained as an alias so legacy ``@warp-agent``
+# mentions still trigger a run instead of silently doing nothing.
+WARP_AGENT_MENTION = "@warp-agent"
 OZ_REVIEW_COMMAND = "/oz-review"
 OZ_VERIFY_COMMAND = "/oz-verify"
 OZ_REVIEW_COMMAND_PATTERN = re.compile(
-    r"(?:^|\s)(?:/oz-review|@oz-agent\s+/review)(?![-\w])", re.IGNORECASE
+    r"(?:^|\s)(?:/oz-review|@(?:oz|warp)-agent\s+/review)(?![-\w])", re.IGNORECASE
 )
 MAX_DAILY_REVIEW_INVOCATIONS = 5
+
+# Handles (without the leading ``@``) that address the Oz agent. ``warp-agent``
+# is the pre-rebrand handle, kept as an alias so the branding change does not
+# silently break existing muscle memory.
+RECOGNIZED_AGENT_HANDLES = frozenset({"oz-agent", "warp-agent"})
+
+# Matches an ``@handle`` mention token. The leading boundary mirrors GitHub's
+# own mention parsing (start of string or a non-identifier char, and never the
+# local part of an email address) and the captured handle stops at the first
+# character that cannot appear in a login. Underscores are accepted in the
+# capture so typo variants like ``@oz_agent`` are detected, even though real
+# GitHub logins never contain them.
+_MENTION_TOKEN_PATTERN = re.compile(r"(?<![A-Za-z0-9_])@([A-Za-z0-9][A-Za-z0-9_-]*)")
+
+# Recognizes a near-miss variant of the Oz agent handle so an unrecognized
+# mention can be acknowledged rather than silently dropped. Underscores are
+# normalized to hyphens before matching. Examples: ``ozagent``, ``oz-bot``,
+# ``warpbot``, ``warp-ai``. Bare ``oz`` / ``warp`` are intentionally excluded
+# to avoid pinging unrelated users.
+_AGENT_LIKE_HANDLE_PATTERN = re.compile(r"(?:oz|warp)-?(?:agent|bot|ai)")
+
 
 def has_oz_review_command(body: str) -> bool:
     """Return whether *body* carries an explicit Oz review invocation."""
     return bool(OZ_REVIEW_COMMAND_PATTERN.search(body or ""))
+
+
+def _iter_mention_handles(body: str):
+    """Yield each ``@handle`` token (without the ``@``) found in *body*."""
+    for match in _MENTION_TOKEN_PATTERN.finditer(body or ""):
+        yield match.group(1)
+
+
+def has_agent_mention(body: str) -> bool:
+    """Return whether *body* mentions a recognized agent handle.
+
+    Both the current ``@oz-agent`` handle and the legacy ``@warp-agent``
+    alias count, so mentions written before the rebrand keep working.
+    """
+    return any(
+        handle.strip().lower() in RECOGNIZED_AGENT_HANDLES
+        for handle in _iter_mention_handles(body)
+    )
+
+
+def find_unrecognized_agent_mention(body: str) -> str | None:
+    """Return an agent-like handle in *body* that is not recognized, else ``None``.
+
+    Catches near-miss variants such as ``@warp-bot``, ``@oz-bot``,
+    ``@ozagent`` (missing hyphen), or ``@oz_agent`` (underscore) so the
+    bot can reply with the correct handle instead of ignoring the
+    mention. Recognized handles are skipped, so callers should use this
+    only after :func:`has_agent_mention` returns ``False``.
+    """
+    for handle in _iter_mention_handles(body):
+        normalized = handle.strip().lower()
+        if normalized in RECOGNIZED_AGENT_HANDLES:
+            continue
+        if _AGENT_LIKE_HANDLE_PATTERN.fullmatch(normalized.replace("_", "-")):
+            return handle
+    return None
 
 
 @dataclass(frozen=True)
@@ -213,8 +280,15 @@ def _route_issue_comment(payload: dict[str, Any]) -> RouteDecision:
         return RouteDecision(WORKFLOW_VERIFY_PR_COMMENT, "/oz-verify on PR comment")
     if has_oz_review_command(body):
         return RouteDecision(WORKFLOW_REVIEW_PR, "/oz-review on PR comment")
-    if OZ_AGENT_MENTION in body:
-        return RouteDecision(WORKFLOW_RESPOND_TO_PR_COMMENT, "@oz-agent mention on PR")
+    if has_agent_mention(body):
+        return RouteDecision(WORKFLOW_RESPOND_TO_PR_COMMENT, "agent mention on PR")
+    unknown_handle = find_unrecognized_agent_mention(body)
+    if unknown_handle is not None:
+        return RouteDecision(
+            WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION,
+            f"unrecognized agent handle @{unknown_handle} on PR comment",
+            extra={"mentioned_handle": unknown_handle},
+        )
     return RouteDecision(None, "PR comment without Oz command or mention")
 
 
@@ -239,7 +313,7 @@ def _route_plain_issue_comment(
     picks up the new context the reporter just supplied.
     """
     labels = _label_names(issue.get("labels"))
-    has_mention = OZ_AGENT_MENTION in body
+    has_mention = has_agent_mention(body)
     if has_mention:
         # ``ready-to-implement`` and ``ready-to-spec`` issues are
         # already past triage — a maintainer pinging ``@oz-agent``
@@ -465,10 +539,17 @@ def _route_pull_request_review_comment(payload: dict[str, Any]) -> RouteDecision
         return RouteDecision(WORKFLOW_REVIEW_PR, "/oz-review on review comment")
     if OZ_VERIFY_COMMAND in body:
         return RouteDecision(WORKFLOW_VERIFY_PR_COMMENT, "/oz-verify on review comment")
-    if OZ_AGENT_MENTION in body:
+    if has_agent_mention(body):
         return RouteDecision(
             WORKFLOW_RESPOND_TO_PR_COMMENT,
-            "@oz-agent mention on review comment",
+            "agent mention on review comment",
+        )
+    unknown_handle = find_unrecognized_agent_mention(body)
+    if unknown_handle is not None:
+        return RouteDecision(
+            WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION,
+            f"unrecognized agent handle @{unknown_handle} on review comment",
+            extra={"mentioned_handle": unknown_handle},
         )
     return RouteDecision(None, "review comment without Oz command or mention")
 
@@ -483,8 +564,15 @@ def _route_pull_request_review(payload: dict[str, Any]) -> RouteDecision:
     if _is_bot(review.get("user")):
         return RouteDecision(None, "review authored by automation user")
     body = str(review.get("body") or "")
-    if OZ_AGENT_MENTION in body:
-        return RouteDecision(WORKFLOW_RESPOND_TO_PR_COMMENT, "@oz-agent mention in PR review body")
+    if has_agent_mention(body):
+        return RouteDecision(WORKFLOW_RESPOND_TO_PR_COMMENT, "agent mention in PR review body")
+    unknown_handle = find_unrecognized_agent_mention(body)
+    if unknown_handle is not None:
+        return RouteDecision(
+            WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION,
+            f"unrecognized agent handle @{unknown_handle} in PR review body",
+            extra={"mentioned_handle": unknown_handle},
+        )
     return RouteDecision(None, "review body without Oz mention")
 
 
@@ -535,8 +623,11 @@ __all__ = [
     "PLAN_APPROVED_LABEL",
     "READY_TO_IMPLEMENT_LABEL",
     "READY_TO_SPEC_LABEL",
+    "RECOGNIZED_AGENT_HANDLES",
     "RouteDecision",
     "TRIAGED_LABEL",
+    "WARP_AGENT_MENTION",
+    "WORKFLOW_ACKNOWLEDGE_UNKNOWN_MENTION",
     "WORKFLOW_ANNOUNCE_READY_ISSUE",
     "WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE",
     "WORKFLOW_CREATE_SPEC_FROM_ISSUE",
@@ -545,6 +636,8 @@ __all__ = [
     "WORKFLOW_REVIEW_PR",
     "WORKFLOW_TRIAGE_NEW_ISSUES",
     "WORKFLOW_VERIFY_PR_COMMENT",
+    "find_unrecognized_agent_mention",
+    "has_agent_mention",
     "has_oz_review_command",
     "needs_triage_bot_author_allowlist",
     "route_event",
