@@ -135,6 +135,21 @@ class _BuilderTestBase(unittest.TestCase):
 class BuildReviewRequestTest(_BuilderTestBase):
     def setUp(self) -> None:
         super().setUp()
+        # ``ReviewWorkflow.build_dispatch`` lazily imports ``oz.ownership``
+        # to look up ``OWNERSHIP_REPO``. If not stubbed, the real
+        # ``oz/ownership.py`` is imported, which transitively imports
+        # ``oz/triage.py`` with ``from .helpers import get_field`` — that
+        # fails because ``oz.helpers`` is already stubbed as a bare module.
+        # Extend tracking so the stub is removed on tearDown.
+        self._module_keys.extend(["oz.ownership"])
+        self._original_modules["oz.ownership"] = sys.modules.get("oz.ownership")
+        oz_ownership = _ensure_module("oz.ownership")
+        oz_ownership.OWNERSHIP_REPO = "warpdotdev/warp-ownership"  # type: ignore[attr-defined]
+        oz_ownership.load_ownership_areas_from_repo = MagicMock(return_value=[])  # type: ignore[attr-defined]
+        oz_ownership.format_ownership_areas_for_prompt = MagicMock(  # type: ignore[attr-defined]
+            return_value=""
+        )
+        oz_ownership.ownership_area_lookup = MagicMock(return_value={})  # type: ignore[attr-defined]
         workflows = _ensure_module("workflows")
         review_module = _ensure_module("workflows.review_pr")
         workflows.review_pr = review_module  # type: ignore[attr-defined]
@@ -464,6 +479,119 @@ class BuildReviewRequestTest(_BuilderTestBase):
         review_module = sys.modules["workflows.review_pr"]
         review_module.enforce_pr_issue_state_for_review.assert_called_once()  # type: ignore[attr-defined]
         review_module.gather_review_context.assert_called_once()  # type: ignore[attr-defined]
+
+    def test_returns_none_and_posts_error_comment_when_gather_context_fails(self) -> None:
+        """When gather_review_context raises, dispatch is skipped with a user-facing comment.
+
+        The webhook handler would otherwise return a 500 with no user-visible
+        feedback. Catching here and posting a comment ensures the user knows
+        to retry with /oz-review.
+        """
+        from core.builders import build_review_request
+
+        github_client, repo, _pr = self._github_client_with_review_comments()
+        review_module = sys.modules["workflows.review_pr"]
+        review_module.gather_review_context.side_effect = RuntimeError(  # type: ignore[attr-defined]
+            "GitHub API error during diff fetch"
+        )
+
+        with self.assertLogs("core.workflows", level="ERROR"):
+            request = build_review_request(
+                self._payload(),
+                github_client=github_client,
+                workspace_path=Path("/tmp/ws"),
+            )
+
+        # Dispatch must be skipped.
+        self.assertIsNone(request)
+        # An error comment must be posted so the user knows to retry.
+        repo.get_issue.assert_called_with(42)
+        repo.get_issue.return_value.create_comment.assert_called_once()
+        comment_body: str = repo.get_issue.return_value.create_comment.call_args[0][0]
+        self.assertIn("/oz-review", comment_body)
+
+    def test_posts_rate_limit_message_when_gather_context_is_rate_limited(self) -> None:
+        """Rate-limit exceptions produce a specific rate-limit message in the error comment."""
+        from core.builders import build_review_request
+        from github.GithubException import RateLimitExceededException
+
+        github_client, repo, _pr = self._github_client_with_review_comments()
+        review_module = sys.modules["workflows.review_pr"]
+        review_module.gather_review_context.side_effect = RateLimitExceededException(  # type: ignore[attr-defined]
+            429, {"message": "API rate limit exceeded"}
+        )
+
+        with self.assertLogs("core.workflows", level="ERROR"):
+            request = build_review_request(
+                self._payload(),
+                github_client=github_client,
+                workspace_path=Path("/tmp/ws"),
+            )
+
+        self.assertIsNone(request)
+        repo.get_issue.assert_called_with(42)
+        comment_body: str = repo.get_issue.return_value.create_comment.call_args[0][0]
+        # The comment must mention rate limits and include the retrigger hint.
+        self.assertIn("rate limit", comment_body.lower())
+        self.assertIn("/oz-review", comment_body)
+
+    def test_requester_mention_included_in_context_error_comment(self) -> None:
+        """The requester login is @-mentioned in context-gathering error comments."""
+        from core.builders import build_review_request
+
+        payload = self._payload()
+        payload["sender"] = {"login": "alice"}
+        github_client, repo, _pr = self._github_client_with_review_comments()
+        review_module = sys.modules["workflows.review_pr"]
+        review_module.gather_review_context.side_effect = RuntimeError("API error")  # type: ignore[attr-defined]
+
+        with self.assertLogs("core.workflows", level="ERROR"):
+            request = build_review_request(
+                payload,
+                github_client=github_client,
+                workspace_path=Path("/tmp/ws"),
+            )
+
+        self.assertIsNone(request)
+        comment_body: str = repo.get_issue.return_value.create_comment.call_args[0][0]
+        self.assertIn("@alice", comment_body)
+
+
+class GithubRateLimitErrorDetectionTest(unittest.TestCase):
+    """Unit tests for the _is_github_rate_limit_error helper."""
+
+    def _detect(self, exc: Exception) -> bool:
+        from core.workflows import _is_github_rate_limit_error  # type: ignore[attr-defined]
+        return _is_github_rate_limit_error(exc)
+
+    def test_rate_limit_exception_detected(self) -> None:
+        from github.GithubException import RateLimitExceededException
+        exc = RateLimitExceededException(429, {"message": "rate limit exceeded"})
+        self.assertTrue(self._detect(exc))
+
+    def test_github_exception_with_429_detected(self) -> None:
+        from github.GithubException import GithubException
+        exc = GithubException(429, {"message": "rate limit exceeded"})
+        self.assertTrue(self._detect(exc))
+
+    def test_github_exception_403_with_rate_limit_message_detected(self) -> None:
+        from github.GithubException import GithubException
+        exc = GithubException(403, {"message": "You have exceeded a secondary rate limit"})
+        self.assertTrue(self._detect(exc))
+
+    def test_github_exception_403_without_rate_limit_message_not_detected(self) -> None:
+        from github.GithubException import GithubException
+        exc = GithubException(403, {"message": "Forbidden"})
+        self.assertFalse(self._detect(exc))
+
+    def test_generic_github_exception_500_not_detected(self) -> None:
+        from github.GithubException import GithubException
+        exc = GithubException(500, {"message": "Internal server error"})
+        self.assertFalse(self._detect(exc))
+
+    def test_non_github_exception_not_detected(self) -> None:
+        exc = RuntimeError("rate limit")
+        self.assertFalse(self._detect(exc))
 
 
 class BuildRespondRequestTest(_BuilderTestBase):
