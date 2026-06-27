@@ -459,6 +459,91 @@ class IssueCommentEventTest(unittest.TestCase):
         )
         self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
 
+    def test_oz_review_from_allowlisted_bot_on_pr_routes_to_review(self) -> None:
+        # A Warp-managed bot on the review allowlist may re-trigger a
+        # review via /oz-review even though it is an automation account.
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(pull_request={"url": "..."}),
+                "comment": _comment(
+                    body="/oz-review",
+                    login="warp-dev-github-integration[bot]",
+                    user_type="Bot",
+                ),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
+        self.assertIn("allowlisted bot", decision.reason)
+
+    def test_oz_review_from_allowlisted_bot_is_case_insensitive(self) -> None:
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(pull_request={"url": "..."}),
+                "comment": _comment(
+                    body="/oz-review",
+                    login="Warp-Dev-GitHub-Integration[Bot]",
+                    user_type="Bot",
+                ),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
+
+    def test_oz_review_from_non_allowlisted_bot_is_dropped(self) -> None:
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(pull_request={"url": "..."}),
+                "comment": _comment(
+                    body="/oz-review",
+                    login="dependabot[bot]",
+                    user_type="Bot",
+                ),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("automation", decision.reason)
+
+    def test_allowlisted_bot_without_review_command_is_dropped(self) -> None:
+        # The allowlist only bypasses the bot drop for /oz-review; other
+        # bot comments (e.g. @oz-agent mentions) are still dropped.
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(pull_request={"url": "..."}),
+                "comment": _comment(
+                    body="@oz-agent take a look",
+                    login="warp-dev-github-integration[bot]",
+                    user_type="Bot",
+                ),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("automation", decision.reason)
+
+    def test_oz_review_from_allowlisted_bot_on_plain_issue_is_dropped(self) -> None:
+        # /oz-review only makes sense on a PR; an allowlisted bot's
+        # /oz-review on a plain issue is still dropped as automation.
+        decision = route_event(
+            "issue_comment",
+            {
+                "action": "created",
+                "issue": _issue(),
+                "comment": _comment(
+                    body="/oz-review",
+                    login="warp-dev-github-integration[bot]",
+                    user_type="Bot",
+                ),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("automation", decision.reason)
+
     def test_oz_agent_review_alias_on_pr_routes_to_review(self) -> None:
         decision = route_event(
             "issue_comment",
@@ -874,6 +959,36 @@ class PullRequestReviewCommentTest(unittest.TestCase):
             },
         )
         self.assertIsNone(decision.workflow)
+
+    def test_oz_review_from_allowlisted_bot_routes_to_review(self) -> None:
+        decision = route_event(
+            "pull_request_review_comment",
+            {
+                "action": "created",
+                "comment": _comment(
+                    body="/oz-review",
+                    login="warp-dev-github-integration[bot]",
+                    user_type="Bot",
+                ),
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
+        self.assertIn("allowlisted bot", decision.reason)
+
+    def test_oz_review_from_non_allowlisted_bot_is_dropped(self) -> None:
+        decision = route_event(
+            "pull_request_review_comment",
+            {
+                "action": "created",
+                "comment": _comment(
+                    body="/oz-review",
+                    login="dependabot[bot]",
+                    user_type="Bot",
+                ),
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("automation", decision.reason)
 
     def test_bot_review_comment_skipped(self) -> None:
         decision = route_event(

@@ -34,6 +34,10 @@ Webhook coverage today:
 - ``pull_request_review_comment`` events route to
   ``review-pull-request`` (``/oz-review``), ``verify-pr-comment``
   (``/oz-verify``), or ``respond-to-pr-comment`` (``@oz-agent``).
+  Bot-authored comments are dropped, except that a Warp-managed bot in
+  ``REVIEW_INVOCATION_BOT_ALLOWLIST`` may invoke ``/oz-review`` so a
+  trusted automation (e.g. the factory-client agent) can re-trigger a
+  review after addressing feedback.
 - ``pull_request_review`` events route to ``respond-to-pr-comment``
   when the review body mentions ``@oz-agent``.
 - ``issue_comment`` ``created`` events on a pull request route to the same
@@ -112,6 +116,20 @@ OZ_REVIEW_COMMAND_PATTERN = re.compile(
 )
 MAX_DAILY_REVIEW_INVOCATIONS = 5
 
+# Warp-managed automation accounts permitted to invoke a PR review via
+# ``/oz-review`` even though they are bots. Bot-authored comments are
+# normally dropped (see ``_route_issue_comment`` /
+# ``_route_pull_request_review_comment``) so the control plane does not
+# spend API quota on automation chatter, but a trusted Warp bot — e.g.
+# the factory-client agent re-requesting review after addressing review
+# feedback — needs to be able to re-trigger a review. Logins are stored
+# lowercased (``[bot]`` suffix included) and matched case-insensitively,
+# mirroring the issue-triage allowlist. Kept intentionally narrow; only
+# add Warp-managed bots here. The downstream per-PR throttle in
+# ``resolve_review_context`` still bounds how many reviews any author can
+# trigger, so allowlisting does not enable unbounded re-reviews.
+REVIEW_INVOCATION_BOT_ALLOWLIST = frozenset({"warp-dev-github-integration[bot]"})
+
 def has_oz_review_command(body: str) -> bool:
     """Return whether *body* carries an explicit Oz review invocation."""
     return bool(OZ_REVIEW_COMMAND_PATTERN.search(body or ""))
@@ -185,6 +203,14 @@ def _is_issue_triage_allowlisted_bot(
     )
 
 
+def _is_review_invocation_allowlisted_bot(actor: Any) -> bool:
+    """Return True when *actor* is a Warp-managed bot allowed to invoke ``/oz-review``."""
+    return (
+        _is_bot(actor)
+        and _login(actor).lower() in REVIEW_INVOCATION_BOT_ALLOWLIST
+    )
+
+
 def needs_triage_bot_author_allowlist(event: str, payload: Mapping[str, Any]) -> bool:
     """Return True when *event*/*payload* is a bot-authored ``issues.opened``."""
     if event != "issues":
@@ -204,13 +230,28 @@ def _route_issue_comment(payload: dict[str, Any]) -> RouteDecision:
     comment = payload.get("comment") or {}
     if not isinstance(comment, dict):
         return RouteDecision(None, "missing comment payload")
-    if _is_bot(comment.get("user")):
-        return RouteDecision(None, "comment authored by automation user")
     body = str(comment.get("body") or "")
     issue = payload.get("issue") or {}
     if not isinstance(issue, dict):
         return RouteDecision(None, "missing issue payload")
-    if not issue.get("pull_request"):
+    is_pull_request = bool(issue.get("pull_request"))
+    if _is_bot(comment.get("user")):
+        # Automation-authored comments are dropped so the control plane
+        # does not spend API quota on bot chatter, with one exception: a
+        # Warp-managed bot on the review allowlist may invoke ``/oz-review``
+        # on a PR (e.g. the factory-client agent re-triggering review
+        # after addressing feedback). The per-PR throttle still applies.
+        if (
+            is_pull_request
+            and has_oz_review_command(body)
+            and _is_review_invocation_allowlisted_bot(comment.get("user"))
+        ):
+            return RouteDecision(
+                WORKFLOW_REVIEW_PR,
+                "/oz-review on PR comment from allowlisted bot",
+            )
+        return RouteDecision(None, "comment authored by automation user")
+    if not is_pull_request:
         return _route_plain_issue_comment(issue=issue, comment=comment, body=body)
     if OZ_VERIFY_COMMAND in body:
         return RouteDecision(WORKFLOW_VERIFY_PR_COMMENT, "/oz-verify on PR comment")
@@ -468,9 +509,18 @@ def _route_pull_request_review_comment(payload: dict[str, Any]) -> RouteDecision
     comment = payload.get("comment") or {}
     if not isinstance(comment, dict):
         return RouteDecision(None, "missing review comment payload")
-    if _is_bot(comment.get("user")):
-        return RouteDecision(None, "review comment authored by automation user")
     body = str(comment.get("body") or "")
+    if _is_bot(comment.get("user")):
+        # See ``_route_issue_comment``: allowlisted Warp bots may invoke
+        # ``/oz-review``; all other bot-authored comments are dropped.
+        if has_oz_review_command(body) and _is_review_invocation_allowlisted_bot(
+            comment.get("user")
+        ):
+            return RouteDecision(
+                WORKFLOW_REVIEW_PR,
+                "/oz-review on review comment from allowlisted bot",
+            )
+        return RouteDecision(None, "review comment authored by automation user")
     if has_oz_review_command(body):
         return RouteDecision(WORKFLOW_REVIEW_PR, "/oz-review on review comment")
     if OZ_VERIFY_COMMAND in body:
@@ -545,6 +595,7 @@ __all__ = [
     "PLAN_APPROVED_LABEL",
     "READY_TO_IMPLEMENT_LABEL",
     "READY_TO_SPEC_LABEL",
+    "REVIEW_INVOCATION_BOT_ALLOWLIST",
     "RouteDecision",
     "TRIAGED_LABEL",
     "WORKFLOW_ANNOUNCE_READY_ISSUE",
