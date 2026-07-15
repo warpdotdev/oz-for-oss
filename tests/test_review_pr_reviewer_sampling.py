@@ -19,6 +19,7 @@ from workflows.review_pr import (  # type: ignore[import-not-found]
     _is_team_slug,
     _parse_verdict,
     _resolve_recommended_reviewers,
+    _reviewer_from_linked_issue_assignees,
     _reviewer_from_pr_assignee,
     _split_reviewers,
     _stakeholder_pattern_matches,
@@ -112,6 +113,104 @@ class DeterministicReviewerFallbackTest(unittest.TestCase):
             pr_author_login="contributor",
         )
         self.assertEqual(reviewers, [])
+
+
+class LinkedIssueAssigneeReviewerTest(unittest.TestCase):
+    def test_returns_first_login(self) -> None:
+        self.assertEqual(
+            _reviewer_from_linked_issue_assignees(["triager", "other"]),
+            ["triager"],
+        )
+
+    def test_returns_empty_when_no_logins(self) -> None:
+        self.assertEqual(_reviewer_from_linked_issue_assignees([]), [])
+
+    def test_approve_non_member_pr_prefers_linked_issue_assignee_over_ownership_area(self) -> None:
+        pr = MagicMock()
+        github = MagicMock()
+        github.get_pull.return_value = pr
+        progress = MagicMock()
+        context = {
+            "owner": "acme",
+            "repo": "widgets",
+            "pr_number": 7,
+            "requester": "alice",
+            "is_non_member": True,
+            "requires_human_reviewer": True,
+            "pr_author_login": "contributor",
+            "stakeholder_entries": STAKEHOLDERS,
+            "stakeholder_logins": ["api-owner", "docs-owner", "fallback"],
+            "linked_issue_reviewer_logins": ["triager"],
+            "ownership_areas": [
+                {
+                    "name": "Docs API",
+                    "owners": ["api-owner"],
+                    "matches": "API reference docs",
+                }
+            ],
+            "ownership_areas_loaded": True,
+            "diff_line_map": {},
+            "diff_content_map": {},
+        }
+        with patch("workflows.review_pr._resolve_recommended_reviewers") as resolve:
+            apply_review_result(
+                github,
+                context=context,
+                run=MagicMock(),
+                result={
+                    "verdict": "APPROVE",
+                    "summary": "Looks good",
+                    "comments": [],
+                    "recommended_area": "Docs API",
+                },
+                progress=progress,
+            )
+        resolve.assert_not_called()
+        pr.create_review_request.assert_called_once_with(reviewers=["triager"])
+
+    def test_gather_context_stores_linked_issue_assignees(self) -> None:
+        pr = MagicMock()
+        pr.get_files.return_value = [
+            SimpleNamespace(
+                filename="src/app.py",
+                patch="+print('hi')",
+                status="modified",
+            )
+        ]
+        pr.user.login = "contributor"
+        pr.user.type = "User"
+        pr.author_association = "CONTRIBUTOR"
+        pr.assignees = []
+        pr.title = "feat: add app"
+        pr.body = ""
+        pr.base.ref = "main"
+        pr.head.ref = "feature"
+        issue = MagicMock()
+        issue.assignees = [SimpleNamespace(login="triager")]
+        github = MagicMock()
+        github.get_pull.return_value = pr
+        github.get_issue.return_value = issue
+
+        with (
+            patch("workflows.review_pr.resolve_issue_number_for_pr", return_value=42),
+            patch("workflows.review_pr.repo_local_skill_path_for_dispatch", return_value=None),
+            patch("workflows.review_pr.resolve_spec_context_for_pr_via_api", return_value={}),
+            patch("workflows.review_pr._build_diff_maps", return_value=({}, {})),
+            patch("workflows.review_pr.load_stakeholders_from_repo", return_value=STAKEHOLDERS),
+            patch("workflows.review_pr.load_ownership_areas_from_repo") as load_ownership,
+        ):
+            context = gather_review_context(
+                github,
+                owner="acme",
+                repo="widgets",
+                pr_number=7,
+                trigger_source="pull_request",
+                requester="alice",
+                workspace_path=MagicMock(),
+                ownership_repo_handle=MagicMock(),
+            )
+
+        self.assertEqual(context["linked_issue_reviewer_logins"], ["triager"])
 
 
 class OwnershipAreasResolveReviewerTest(unittest.TestCase):
