@@ -554,6 +554,59 @@ def _reviewer_from_pr_assignee(
     return []
 
 
+def _resolve_linked_issue_assignee_logins(
+    github: Repository,
+    issue_number: int | None,
+    *,
+    pr_author_login: str,
+) -> list[str]:
+    """Return non-automation assignee logins from the linked issue.
+
+    These are the triagers assigned to the backing issue. Used as a
+    deterministic reviewer source before falling back to ownership-area
+    random selection.
+    """
+    if not issue_number:
+        return []
+    try:
+        issue = github.get_issue(issue_number)
+    except Exception:
+        logger.exception(
+            "review-pr: failed to fetch linked issue #%s to resolve assignee reviewer",
+            issue_number,
+        )
+        return []
+    logins: list[str] = []
+    for assignee in get_field(issue, "assignees", []) or []:
+        if is_automation_user(assignee):
+            continue
+        login = _normalize_reviewer_login(
+            get_login(assignee),
+            pr_author_login=pr_author_login,
+        )
+        if login:
+            logins.append(login)
+    if logins:
+        logger.info(
+            "review-pr: resolved linked issue #%s assignees as candidate reviewers: %s",
+            issue_number,
+            logins,
+        )
+    return logins
+
+
+def _reviewer_from_linked_issue_assignees(logins: list[str]) -> list[str]:
+    """Return the first linked-issue assignee login as the reviewer."""
+    for login in logins or []:
+        if login:
+            logger.info(
+                "review-pr: using linked issue assignee %s as reviewer",
+                login,
+            )
+            return [login]
+    return []
+
+
 def _reviewer_from_existing_review_request(
     pr: Any,
     *,
@@ -1037,6 +1090,7 @@ class ReviewContext(TypedDict):
     # the agent's ``recommended_area`` back to an owner deterministically.
     ownership_areas: list[dict[str, Any]]
     ownership_areas_loaded: bool
+    linked_issue_reviewer_logins: list[str]
     progress_comment_id: int
 
 
@@ -1154,6 +1208,7 @@ def gather_review_context(
     non_member_review_section = ""
     stakeholders_entries: list[dict[str, Any]] = []
     pr_assignee_reviewers: list[str] = []
+    linked_issue_reviewer_logins: list[str] = []
     ownership_areas_serialized: list[dict[str, Any]] = []
     ownership_areas_loaded = False
     if requires_human_reviewer:
@@ -1162,6 +1217,11 @@ def gather_review_context(
             pr_author_login=pr_author_login,
         )
         if not pr_assignee_reviewers:
+            linked_issue_reviewer_logins = _resolve_linked_issue_assignee_logins(
+                github,
+                issue_number,
+                pr_author_login=pr_author_login,
+            )
             # Load ``.github/STAKEHOLDERS`` directly from the repository
             # that triggered the webhook. This is shown to the agent even
             # when ownership areas are available so the fallback path is
@@ -1257,6 +1317,7 @@ def gather_review_context(
         stakeholder_logins=sorted(_stakeholder_logins(stakeholders_entries)),
         stakeholder_entries=stakeholders_entries,
         pr_assignee_reviewers=pr_assignee_reviewers,
+        linked_issue_reviewer_logins=linked_issue_reviewer_logins,
         ownership_areas=ownership_areas_serialized,
         ownership_areas_loaded=bool(ownership_areas_loaded),
         progress_comment_id=int(progress_comment_id or 0),
@@ -1467,6 +1528,11 @@ def apply_review_result(
             for entry in (context.get("ownership_areas") or [])
             if isinstance(entry, dict) and entry.get("name")
         ]
+        linked_issue_reviewer_logins = [
+            str(login)
+            for login in (context.get("linked_issue_reviewer_logins") or [])
+            if isinstance(login, str) and login.strip()
+        ]
         recommended_reviewers = (
             _reviewer_from_existing_review_request(
                 pr,
@@ -1477,6 +1543,7 @@ def apply_review_result(
                 pr,
                 pr_author_login=pr_author_login,
             )
+            or _reviewer_from_linked_issue_assignees(linked_issue_reviewer_logins)
             or _resolve_recommended_reviewers(
                 result,
                 ownership_areas=ownership_areas,
