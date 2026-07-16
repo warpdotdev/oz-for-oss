@@ -15,6 +15,7 @@ from . import conftest  # noqa: F401
 from core.workflows.triage_new_issues import (
     COMMENT_TYPE_RESPONSE,
     COMMENT_TYPE_TRIAGE,
+    NEEDS_SUPPORT_LABEL,
     RESPONSE_DETAILS_SUMMARY,
     RESPONSE_FALLBACK_BODY,
     TRIAGE_DISCLAIMER,
@@ -27,6 +28,7 @@ from core.workflows.triage_new_issues import (
     build_follow_up_section,
     build_question_reasoning_section,
     build_statements_section,
+    extract_close_issue,
     extract_comment_type,
     extract_duplicate_of,
     extract_follow_up_questions,
@@ -1555,6 +1557,172 @@ class ApplyTriageResultForDispatchResponseModeTest(unittest.TestCase):
         self.assertIn("triaged", github.added_labels)
 
 
+class ExtractCloseIssueTest(unittest.TestCase):
+    """``extract_close_issue`` normalizes the close-request signal from a
+    triage result payload without raising on malformed input."""
+
+    def test_extraction_table(self) -> None:
+        cases = [
+            ("true_bool", {"close_issue": True}, True),
+            ("false_bool", {"close_issue": False}, False),
+            ("true_string", {"close_issue": "true"}, True),
+            ("true_string_case_insensitive", {"close_issue": " TRUE "}, True),
+            ("false_string", {"close_issue": "false"}, False),
+            ("missing_key", {}, False),
+            ("none", {"close_issue": None}, False),
+            ("int_is_not_true", {"close_issue": 1}, False),
+            ("list_is_not_true", {"close_issue": ["true"]}, False),
+            ("whitespace_string", {"close_issue": "   "}, False),
+        ]
+        for label, payload, expected in cases:
+            with self.subTest(label=label):
+                self.assertEqual(extract_close_issue(payload), expected)
+
+
+class ApplyTriageResultForDispatchCloseIssueTest(unittest.TestCase):
+    """``apply_triage_result_for_dispatch`` closes the issue and applies the
+    ``warp:needs-support`` label when the triage result signals a support
+    escalation, and leaves normal issues open otherwise."""
+
+    def _context(self, **overrides: object) -> dict[str, object]:
+        base: dict[str, object] = {
+            "owner": "acme",
+            "repo": "widgets",
+            "issue_number": 42,
+            "is_retriage": False,
+            "requester": "alice",
+            "configured_labels": {
+                "triaged": {"color": "0E8A16", "description": "done"},
+                NEEDS_SUPPORT_LABEL: {
+                    "color": "5319E7",
+                    "description": "support escalation",
+                },
+            },
+            "repo_label_names": ["triaged", NEEDS_SUPPORT_LABEL],
+            "issue_labels": [],
+        }
+        base.update(overrides)
+        return base
+
+    def test_closes_issue_and_applies_needs_support_label(self) -> None:
+        github = FakeTriageGitHubClient()
+        progress = MagicMock()
+        progress.session_link = ""
+        result = {
+            "summary": "this is a billing request that needs Warp support",
+            "labels": [NEEDS_SUPPORT_LABEL, "triaged"],
+            "statements": (
+                "For plan changes or refund requests, please contact Warp "
+                "support at support@warp.dev."
+            ),
+            "issue_body": "## Support escalation\nBilling inquiry.",
+            "close_issue": True,
+        }
+        apply_triage_result_for_dispatch(
+            github,
+            context=self._context(),
+            run=None,
+            result=result,
+            progress=progress,
+        )
+        self.assertIn(NEEDS_SUPPORT_LABEL, github.added_labels)
+        self.assertIn("triaged", github.added_labels)
+        self.assertIn(42, github.closed_issues)
+        rendered = progress.replace_body.call_args.args[0]
+        self.assertIn("contact Warp support", rendered)
+
+    def test_does_not_close_issue_for_normal_triage(self) -> None:
+        github = FakeTriageGitHubClient()
+        progress = MagicMock()
+        progress.session_link = ""
+        result = {
+            "summary": "a reproducible bug",
+            "labels": ["bug", "triaged"],
+            "issue_body": "## Triage summary",
+            "close_issue": False,
+        }
+        apply_triage_result_for_dispatch(
+            github,
+            context=self._context(
+                configured_labels={
+                    "triaged": {"color": "0E8A16", "description": "done"},
+                    "bug": {"color": "D73A4A", "description": "bug"},
+                },
+                repo_label_names=["triaged", "bug"],
+            ),
+            run=None,
+            result=result,
+            progress=progress,
+        )
+        self.assertEqual(github.closed_issues, [])
+        self.assertIn("bug", github.added_labels)
+        self.assertIn("triaged", github.added_labels)
+
+    def test_omitting_close_issue_leaves_issue_open(self) -> None:
+        github = FakeTriageGitHubClient()
+        progress = MagicMock()
+        progress.session_link = ""
+        result = {
+            "summary": "a reproducible bug",
+            "labels": ["bug", "triaged"],
+            "issue_body": "## Triage summary",
+        }
+        apply_triage_result_for_dispatch(
+            github,
+            context=self._context(
+                configured_labels={
+                    "triaged": {"color": "0E8A16", "description": "done"},
+                    "bug": {"color": "D73A4A", "description": "bug"},
+                },
+                repo_label_names=["triaged", "bug"],
+            ),
+            run=None,
+            result=result,
+            progress=progress,
+        )
+        self.assertEqual(github.closed_issues, [])
+
+    def test_string_true_closes_issue(self) -> None:
+        github = FakeTriageGitHubClient()
+        progress = MagicMock()
+        progress.session_link = ""
+        result = {
+            "labels": [NEEDS_SUPPORT_LABEL, "triaged"],
+            "statements": "Please contact Warp support.",
+            "close_issue": "true",
+        }
+        apply_triage_result_for_dispatch(
+            github,
+            context=self._context(),
+            run=None,
+            result=result,
+            progress=progress,
+        )
+        self.assertIn(42, github.closed_issues)
+
+    def test_response_mode_never_closes_issue(self) -> None:
+        github = FakeTriageGitHubClient()
+        progress = MagicMock()
+        progress.session_link = ""
+        result = {
+            "comment_type": "response",
+            "response_body": "Yes — supported since v2.0.",
+            "details": "",
+            "close_issue": True,
+        }
+        apply_triage_result_for_dispatch(
+            github,
+            context=self._context(),
+            run=None,
+            result=result,
+            progress=progress,
+        )
+        # Response mode is purely conversational and must not change the
+        # issue's lifecycle state even if close_issue is set.
+        self.assertEqual(github.closed_issues, [])
+        self.assertEqual(github.added_labels, [])
+
+
 class FakeTriageComment:
     """A minimal stand-in for ``github.IssueComment.IssueComment``."""
 
@@ -1617,6 +1785,12 @@ class FakeTriageIssue:
     def remove_from_labels(self, label_name: str) -> None:
         self._repo.removed_labels.append(label_name)
 
+    def edit(self, state: str | None = None, **kwargs: object) -> None:
+        if state is not None:
+            self._data["state"] = state
+            if state == "closed":
+                self._repo.closed_issues.append(self.number)
+
     def get_comments(self) -> list[FakeTriageComment]:
         return [FakeTriageComment(self._repo, c) for c in self._repo.comments]
 
@@ -1644,6 +1818,7 @@ class FakeTriageGitHubClient:
         self.removed_labels: list[str] = []
         self.updated_issue_body = ""
         self.deleted_comment_ids: list[int] = []
+        self.closed_issues: list[int] = []
 
     def issue(self, data: dict[str, object]) -> FakeTriageIssue:
         """Wrap *data* as a PyGitHub-like Issue bound to this fake repository."""

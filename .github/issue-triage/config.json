@@ -47,6 +47,10 @@
     "duplicate": {
       "color": "CFD3D7",
       "description": "This issue has been identified as a duplicate of one or more existing issues"
+    },
+    "warp:needs-support": {
+      "color": "5319E7",
+      "description": "This issue cannot be resolved via OSS contributions and should be handled by the Warp support team"
     }
   }
 }
