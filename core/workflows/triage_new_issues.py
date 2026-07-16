@@ -76,6 +76,12 @@ RESPONSE_FALLBACK_BODY = (
     "I don't have enough information to answer this question yet."
 )
 
+# Label applied to issues that cannot be resolved through OSS contributions
+# (billing, plan changes, refunds, subscription/account management, pricing,
+# payment issues) and must be escalated to the Warp support team. The triage
+# agent requests this label and sets ``close_issue`` so the workflow closes the
+# issue after posting the support-escalation comment.
+NEEDS_SUPPORT_LABEL = "warp:needs-support"
 
 
 def _lowercase_first(text: str) -> str:
@@ -187,6 +193,7 @@ def build_triage_prompt(
         - Infer the most likely root cause and relevant files from the current codebase when possible.
         - Identify the specific ambiguities that still require reporter input, especially when the issue is environment-sensitive, account/backend-sensitive, or framed with an unverified root-cause claim.
         - When an explicit triggering comment is present, treat it as additional triage guidance for this triage pass.
+        - Recognize reports that cannot be resolved through OSS contributions — billing inquiries, plan changes, refund requests, subscription or account management, pricing questions, and payment issues — and escalate them to the Warp support team instead of treating them as code defects.
 
         Output Requirements:
         - Use the repository's local `triage-issue` skill as the base workflow.
@@ -209,6 +216,7 @@ def build_triage_prompt(
             triage. Be direct and precise; do not re-emit the triage
             shape's fields when you choose this mode.
         - Prefer labels from the `triage_config` object in `{_REPOSITORY_TRIAGE_CONTEXT_ATTACHMENT}`.
+        - When the issue cannot be resolved through OSS contributions (billing inquiries, plan changes, refund requests, subscription or account management, pricing questions, payment issues), request the `warp:needs-support` label, set `close_issue` to `true`, and put a brief reporter-facing message in `statements` directing the user to contact Warp support (for example, "For plan changes or refund requests, please contact Warp support at support@warp.dev"). The workflow applies the label, posts that guidance as the triage comment, and closes the issue. Do not set `close_issue` for issues that can be addressed via OSS contributions; leave it `false` or omitted.
         - If the report is underspecified, say so directly and use `needs-info` plus `repro:unknown` when justified.
         - When ambiguity remains, include a `follow_up_questions` array with up to 5 short, issue-specific questions for the original reporter. Before including any question, first attempt to answer it yourself through code inspection, documentation lookup, or web search. Only ask questions that you genuinely cannot resolve and that only the reporter would know — subjective intent, environment details personal to the reporter, or decisions requiring human judgment. Do not ask about externally verifiable technical facts. Do not ask for information that is already present, and do not use generic placeholders.
         - When the triage surfaces concise, reporter-facing findings worth sharing immediately — for example that the behavior appears fixed in a newer release, that a specific setting or workaround may help, or that the issue looks limited to a particular environment based on the current code — include them in the `statements` string. Keep it to 1-3 short sentences or markdown bullet items, and leave it empty when there are no high-confidence findings worth surfacing above the fold.
@@ -232,7 +240,8 @@ def build_triage_prompt(
             "issue_body": "markdown triage summary to post as a standalone issue comment",
             "statements": "markdown string for reporter-facing findings, or empty string",
             "follow_up_questions": [{{"question": "question for the reporter", "reasoning": "why this question is needed"}}],
-            "duplicate_of": [{{"issue_number": 123, "title": "existing issue title", "similarity_reason": "why it matches"}}]
+            "duplicate_of": [{{"issue_number": 123, "title": "existing issue title", "similarity_reason": "why it matches"}}],
+            "close_issue": false
           }}
           Response shape (``comment_type`` is ``"response"``):
           {{
@@ -403,6 +412,26 @@ def extract_statements(result: dict[str, Any]) -> str:
     if not isinstance(raw_statements, str):
         return ""
     return raw_statements.strip()
+
+
+def extract_close_issue(result: Mapping[str, Any]) -> bool:
+    """Return whether the triage result asks the workflow to close the issue.
+
+    The agent sets ``close_issue`` to ``true`` for reports that cannot be
+    resolved through OSS contributions — billing inquiries, plan changes,
+    refund requests, subscription/account management, pricing questions, and
+    payment issues — so the workflow can apply the ``warp:needs-support``
+    label, post the support-escalation comment, and close the issue. Missing,
+    non-boolean, and non-"true" string values normalize to ``False`` so the
+    default behavior (leave the issue open) is unchanged for payloads that
+    predate the field.
+    """
+    raw = result.get("close_issue")
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() == "true"
+    return False
 
 
 def extract_comment_type(result: Mapping[str, Any]) -> str:
@@ -1030,6 +1059,25 @@ class _CloudIssueLike:
             )
 
 
+def _close_triaged_issue(issue: Any) -> None:
+    """Close a triaged issue when the triage result requests it.
+
+    Used by :func:`apply_triage_result_for_dispatch` after the
+    support-escalation comment has been posted, so the reporter sees the
+    guidance before the issue closes. Best-effort: a transient GitHub API
+    failure is logged so the rest of the triage application (labels +
+    comment) still lands even when the close call does not succeed.
+    """
+    issue_number = int(getattr(issue, "number", 0) or 0)
+    try:
+        issue.edit(state="closed")
+    except Exception:
+        logger.exception(
+            "Failed to close issue #%s after applying the triage result",
+            issue_number,
+        )
+
+
 def apply_triage_result_for_dispatch(
     github: Any,
     *,
@@ -1152,3 +1200,5 @@ def apply_triage_result_for_dispatch(
     )
     parts.append(TRIAGE_DISCLAIMER)
     progress.replace_body("\n\n".join(parts))
+    if extract_close_issue(result):
+        _close_triaged_issue(issue)

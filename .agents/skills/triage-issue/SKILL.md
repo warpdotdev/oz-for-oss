@@ -40,7 +40,7 @@ If a companion file is not referenced in the prompt, rely on the core contract a
    - the user's observed symptoms
    - the user's hypotheses, proposed fixes, or root-cause claims
    - the missing details that block confident triage
-2. Classify whether the issue is primarily a bug report, enhancement request, documentation issue, or needs more information.
+2. Classify whether the issue is primarily a bug report, enhancement request, documentation issue, or needs more information. As part of classification, detect reports that cannot be resolved through OSS contributions — billing inquiries, plan changes, refund requests, subscription or account management, pricing questions, and payment issues. These belong with the Warp support team, not OSS contributors: request the `warp:needs-support` label, set `close_issue` to `true`, and put a brief reporter-facing message in `statements` directing the user to contact Warp support (for example, "For plan changes or refund requests, please contact Warp support at support@warp.dev"). For these reports, do not produce follow-up questions, root-cause analysis, or duplicate detection — the support escalation is the triage outcome. Do not set `close_issue` for issues that can be addressed via OSS contributions; leave it `false` or omitted.
 3. Inspect only the most relevant code and docs needed to understand the report. Avoid broad, unfocused repository scans.
 4. Infer the most likely related files and estimate reproducibility as `high`, `medium`, `low`, or `unknown`.
 5. Look for a plausible root cause in the current codebase. If the evidence is weak, say so clearly and use low confidence. Do not mistake a reporter-written diagnosis or code sketch for confirmed root cause.
@@ -73,6 +73,7 @@ If a companion file is not referenced in the prompt, rely on the core contract a
 ## Outputs
 
 - The result must be evidence-driven and conservative about uncertainty.
+- Set `close_issue` to `true` only for reports that cannot be resolved through OSS contributions and are being escalated to Warp support with the `warp:needs-support` label. The workflow applies the label, posts the support-escalation comment, and closes the issue. Leave it `false` or omitted for every other issue — never close an issue that can be addressed via OSS contributions.
 - When the issue is underspecified, prefer `needs-info` and `repro:unknown` over overconfident guesses.
 - Before populating follow-up questions, attempt to answer each candidate question through code inspection, documentation, or web search. Only include questions that the agent cannot resolve on its own and that only the reporter can answer.
 - When unanswered questions materially block accurate triage, populate the structured follow-up-question output field with the minimum issue-specific questions needed from the reporter. Each entry must be an object with `question` and `reasoning` fields.
