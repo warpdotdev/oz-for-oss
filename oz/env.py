@@ -19,6 +19,27 @@ def optional_env(name: str) -> str:
     return os.environ.get(name, "").strip()
 
 
+# Recognized boolean flag values (compared case-insensitively). An unset or
+# empty variable resolves to the helper's *default*, so opt-in flags stay off
+# unless a caller explicitly enables them. Any non-empty value that is not a
+# recognized truthy value is treated as falsy, keeping the safe default.
+_TRUTHY_FLAG_VALUES = {"1", "true", "yes", "on"}
+
+
+def flag_env(name: str, *, default: bool = False) -> bool:
+    """Return an environment variable interpreted as a boolean flag.
+
+    Truthy values (case-insensitive): ``1``, ``true``, ``yes``, ``on``.
+    Any other non-empty value is treated as falsy. An unset or empty
+    variable returns *default* (``False`` by default), so opt-in flags
+    default off unless explicitly enabled.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    return raw.lower() in _TRUTHY_FLAG_VALUES
+
+
 def repo_slug() -> str:
     """Return the current GitHub repository slug."""
     return require_env("GITHUB_REPOSITORY")

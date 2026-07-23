@@ -11,7 +11,14 @@ from unittest.mock import patch
 from . import conftest  # noqa: F401
 
 from oz.attachments import text_attachment
-from oz.oz_client import dispatch_run, skill_display_name, skill_file_path, skill_spec
+from oz.oz_client import (
+    ROLE_DEFAULT,
+    build_agent_config,
+    dispatch_run,
+    skill_display_name,
+    skill_file_path,
+    skill_spec,
+)
 
 
 def _write_skill(root: Path, name: str) -> Path:
@@ -172,6 +179,62 @@ class DispatchRunAttachmentTest(unittest.TestCase):
         )
 
         self.assertNotIn("attachments", client.agent.calls[0])
+
+
+class BuildAgentConfigComputerUseTest(unittest.TestCase):
+    """Computer use is an opt-in, env-gated per-run capability (REMOTE-2280).
+
+    ``build_agent_config`` must omit ``computer_use_enabled`` by default so the
+    OSS template never silently requires the warp-xvfb-sidecar, and must set it
+    to ``True`` only when ``WARP_COMPUTER_USE_ENABLED`` is truthy.
+    """
+
+    def _build(self, env: dict[str, str]) -> dict[str, Any]:
+        with patch.dict(os.environ, env, clear=True):
+            return build_agent_config(
+                config_name="review-pull-request",
+                workspace=Path("/tmp/workspace"),
+                role=ROLE_DEFAULT,
+            )
+
+    def test_omits_computer_use_enabled_by_default(self) -> None:
+        config = self._build({"WARP_ENVIRONMENT_ID": "env-1"})
+        self.assertEqual(config["environment_id"], "env-1")
+        self.assertEqual(config["name"], "review-pull-request")
+        self.assertNotIn("computer_use_enabled", config)
+
+    def test_sets_computer_use_enabled_when_flag_is_truthy(self) -> None:
+        config = self._build(
+            {
+                "WARP_ENVIRONMENT_ID": "env-1",
+                "WARP_COMPUTER_USE_ENABLED": "true",
+            }
+        )
+        self.assertIs(config["computer_use_enabled"], True)
+
+    def test_truthy_values_enable_computer_use(self) -> None:
+        for value in ("1", "true", "TRUE", "yes", "on"):
+            config = self._build(
+                {
+                    "WARP_ENVIRONMENT_ID": "env-1",
+                    "WARP_COMPUTER_USE_ENABLED": value,
+                }
+            )
+            self.assertIs(
+                config["computer_use_enabled"], True, msg=f"value={value!r}"
+            )
+
+    def test_falsy_values_keep_computer_use_off(self) -> None:
+        for value in ("0", "false", "no", "off", "garbage", ""):
+            config = self._build(
+                {
+                    "WARP_ENVIRONMENT_ID": "env-1",
+                    "WARP_COMPUTER_USE_ENABLED": value,
+                }
+            )
+            self.assertNotIn(
+                "computer_use_enabled", config, msg=f"value={value!r}"
+            )
 
 
 if __name__ == "__main__":

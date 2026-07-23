@@ -41,6 +41,7 @@ vercel deploy
 | `WARP_API_BASE_URL` | Defaults to `https://app.warp.dev/api/v1`. Override for staging. |
 | `WARP_ENVIRONMENT_ID` | Default Oz cloud environment UID. |
 | `WARP_REVIEW_TRIAGE_ENVIRONMENT_ID` | Optional override used by review/triage runs. Falls back to `WARP_ENVIRONMENT_ID` when empty. |
+| `WARP_COMPUTER_USE_ENABLED` | Optional. Set to a truthy value (`1`/`true`/`yes`/`on`) to request computer use for dispatched Oz runs. Defaults off so the OSS template never silently requires the GUI sidecar. Enabling it also requires the configured Oz environment (`WARP_ENVIRONMENT_ID`) to run on a host that supports the `warpdotdev/warp-xvfb-sidecar` — Warp-hosted environments provide this; self-hosted Direct backends generally do not. Configure the environment via the Oz web app or `oz environment`, not in this repo. |
 | `CRON_SECRET` | Required random secret used to authenticate Vercel cron requests. Local development can opt out with `OZ_ALLOW_UNAUTHENTICATED_CRON=true`. |
 | `GITHUB_API_BASE_URL` | Optional. Defaults to `https://api.github.com`. Override for GitHub Enterprise. |
 | `OZ_TRUSTED_GITHUB_ORG` | Optional. GitHub organization slug used to verify trusted fork-PR comment triggers when webhook author association is insufficient. |
