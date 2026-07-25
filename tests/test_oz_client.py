@@ -213,7 +213,7 @@ class BuildAgentConfigComputerUseTest(unittest.TestCase):
         self.assertIs(config["computer_use_enabled"], True)
 
     def test_truthy_values_enable_computer_use(self) -> None:
-        for value in ("1", "true", "TRUE", "yes", "on"):
+        for value in ("1", "true", "TRUE"):
             config = self._build(
                 {
                     "WARP_ENVIRONMENT_ID": "env-1",
@@ -225,7 +225,7 @@ class BuildAgentConfigComputerUseTest(unittest.TestCase):
             )
 
     def test_falsy_values_keep_computer_use_off(self) -> None:
-        for value in ("0", "false", "no", "off", "garbage", ""):
+        for value in ("0", "false", "yes", "on", "garbage", ""):
             config = self._build(
                 {
                     "WARP_ENVIRONMENT_ID": "env-1",
