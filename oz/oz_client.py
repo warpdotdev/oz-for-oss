@@ -160,12 +160,7 @@ def build_agent_config(
     if model_id:
         config["model_id"] = model_id
 
-    # Computer use is an opt-in per-run capability. It defaults off so this
-    # OSS template never silently requires the warp-xvfb-sidecar GUI sidecar
-    # on environments that lack it. Set WARP_COMPUTER_USE_ENABLED to a truthy
-    # value (1/true/yes/on) to request computer use for dispatched runs; the
-    # configured Oz environment (WARP_ENVIRONMENT_ID) must also support the
-    # sidecar or the flag has no effect at runtime.
+    # Computer use is opt-in per run and defaults off.
     if flag_env("WARP_COMPUTER_USE_ENABLED", default=False):
         config["computer_use_enabled"] = True
 

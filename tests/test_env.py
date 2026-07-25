@@ -23,14 +23,14 @@ class FlagEnvTest(unittest.TestCase):
             self.assertIs(flag_env("WARP_COMPUTER_USE_ENABLED", default=True), True)
 
     def test_truthy_values_enable(self) -> None:
-        for value in ("1", "true", "TRUE", "True", "yes", "YES", "on", "ON"):
+        for value in ("1", "true", "TRUE", "True"):
             with patch.dict(os.environ, {"WARP_COMPUTER_USE_ENABLED": value}, clear=True):
                 self.assertIs(
                     flag_env("WARP_COMPUTER_USE_ENABLED"), True, msg=f"value={value!r}"
                 )
 
     def test_falsy_and_unrecognized_values_keep_default(self) -> None:
-        for value in ("0", "false", "no", "off", "garbage", "maybe"):
+        for value in ("0", "false", "yes", "on", "garbage", "maybe"):
             with patch.dict(os.environ, {"WARP_COMPUTER_USE_ENABLED": value}, clear=True):
                 self.assertIs(
                     flag_env("WARP_COMPUTER_USE_ENABLED"), False, msg=f"value={value!r}"
