@@ -19,6 +19,18 @@ def optional_env(name: str) -> str:
     return os.environ.get(name, "").strip()
 
 
+def flag_env(name: str, *, default: bool = False) -> bool:
+    """Return an environment variable interpreted as a boolean flag.
+
+    ``true`` (case-insensitive) and ``1`` are true; any other non-empty
+    value is false. An unset or empty variable returns *default*.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    return raw.lower() in ("true", "1")
+
+
 def repo_slug() -> str:
     """Return the current GitHub repository slug."""
     return require_env("GITHUB_REPOSITORY")

@@ -10,7 +10,7 @@ from oz_agent_sdk.types.agent import RunItem
 from .attachments import SdkAttachment
 
 from core.skills import COMMON_SKILL_NAMES
-from .env import optional_env, require_env
+from .env import flag_env, optional_env, require_env
 from .workflow_paths import workflow_code_root
 
 
@@ -160,6 +160,9 @@ def build_agent_config(
     if model_id:
         config["model_id"] = model_id
 
+    # Computer use is opt-in per run and defaults off.
+    if flag_env("WARP_COMPUTER_USE_ENABLED", default=False):
+        config["computer_use_enabled"] = True
 
     profile = optional_env("WARP_AGENT_PROFILE")
     if profile:
