@@ -833,6 +833,86 @@ class PullRequestEventTest(unittest.TestCase):
         )
         self.assertEqual(decision.workflow, WORKFLOW_CANCEL_REVIEW_RUNS)
 
+    # GitHub user ID for warp-dev-github-integration[bot]
+    _SKIP_BOT_USER_ID = 240773466
+
+    def test_opened_pr_from_skip_bot_in_warp_server_is_dropped(self) -> None:
+        decision = route_event(
+            "pull_request",
+            {
+                "action": "opened",
+                "repository": {"full_name": "warpdotdev/warp-server"},
+                "pull_request": {
+                    "state": "open",
+                    "draft": False,
+                    "user": {"id": self._SKIP_BOT_USER_ID, "type": "Bot"},
+                },
+            },
+        )
+        self.assertIsNone(decision.workflow)
+        self.assertIn("skipped bot", decision.reason)
+
+    def test_opened_pr_from_skip_bot_in_warp_is_dropped(self) -> None:
+        decision = route_event(
+            "pull_request",
+            {
+                "action": "opened",
+                "repository": {"full_name": "warpdotdev/warp"},
+                "pull_request": {
+                    "state": "open",
+                    "draft": False,
+                    "user": {"id": self._SKIP_BOT_USER_ID, "type": "Bot"},
+                },
+            },
+        )
+        self.assertIsNone(decision.workflow)
+
+    def test_ready_for_review_pr_from_skip_bot_in_warp_server_is_dropped(self) -> None:
+        decision = route_event(
+            "pull_request",
+            {
+                "action": "ready_for_review",
+                "repository": {"full_name": "warpdotdev/warp-server"},
+                "pull_request": {
+                    "state": "open",
+                    "user": {"id": self._SKIP_BOT_USER_ID, "type": "Bot"},
+                },
+            },
+        )
+        self.assertIsNone(decision.workflow)
+
+    def test_opened_pr_from_skip_bot_in_other_repo_still_routes_to_review(self) -> None:
+        # The skip is scoped to warpdotdev/warp and warpdotdev/warp-server only.
+        decision = route_event(
+            "pull_request",
+            {
+                "action": "opened",
+                "repository": {"full_name": "warpdotdev/some-other-repo"},
+                "pull_request": {
+                    "state": "open",
+                    "draft": False,
+                    "user": {"id": self._SKIP_BOT_USER_ID, "type": "Bot"},
+                },
+            },
+        )
+        self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
+
+    def test_skip_is_case_insensitive_for_repo_name(self) -> None:
+        # Repo full_name matching is lowercased.
+        decision = route_event(
+            "pull_request",
+            {
+                "action": "opened",
+                "repository": {"full_name": "WarpDotDev/Warp-Server"},
+                "pull_request": {
+                    "state": "open",
+                    "draft": False,
+                    "user": {"id": self._SKIP_BOT_USER_ID, "type": "Bot"},
+                },
+            },
+        )
+        self.assertIsNone(decision.workflow)
+
 
 class PullRequestReviewCommentTest(unittest.TestCase):
     def test_oz_review_command_routes_to_review(self) -> None:

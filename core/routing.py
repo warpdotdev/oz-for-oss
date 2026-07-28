@@ -112,6 +112,17 @@ OZ_REVIEW_COMMAND_PATTERN = re.compile(
 )
 MAX_DAILY_REVIEW_INVOCATIONS = 5
 
+# Repos whose bot-authored PRs should be skipped for automatic oz review.
+# warp-dev-github-integration[bot] (user ID 240773466) opens PRs in these
+# repos that already have their own automated review, so dispatching a
+# second oz review run would produce duplicate comments. Explicit /oz-review
+# triggers are unaffected. This is intentionally hardcoded for now —
+# remove once oz-for-oss is retired.
+_SKIP_BOT_REVIEW: dict[str, frozenset[int]] = {
+    "warpdotdev/warp": frozenset({240773466}),
+    "warpdotdev/warp-server": frozenset({240773466}),
+}
+
 def has_oz_review_command(body: str) -> bool:
     """Return whether *body* carries an explicit Oz review invocation."""
     return bool(OZ_REVIEW_COMMAND_PATTERN.search(body or ""))
@@ -432,11 +443,25 @@ def _route_pull_request(payload: dict[str, Any]) -> RouteDecision:
     if pr.get("state") != "open":
         return RouteDecision(None, "pull_request is not open")
     if action in {"opened", "reopened"} and not pr.get("draft", False):
+        pr_author_id = (pr.get("user") or {}).get("id")
+        repo = str((payload.get("repository") or {}).get("full_name") or "").lower()
+        if pr_author_id in _SKIP_BOT_REVIEW.get(repo, frozenset()):
+            return RouteDecision(
+                None,
+                f"pull_request {action} authored by skipped bot (user_id={pr_author_id}) in {repo!r}",
+            )
         return RouteDecision(
             WORKFLOW_REVIEW_PR,
             f"pull_request {action} (non-draft)",
         )
     if action == "ready_for_review":
+        pr_author_id = (pr.get("user") or {}).get("id")
+        repo = str((payload.get("repository") or {}).get("full_name") or "").lower()
+        if pr_author_id in _SKIP_BOT_REVIEW.get(repo, frozenset()):
+            return RouteDecision(
+                None,
+                f"pull_request ready_for_review authored by skipped bot (user_id={pr_author_id}) in {repo!r}",
+            )
         return RouteDecision(WORKFLOW_REVIEW_PR, "pull_request ready_for_review")
     if action == "review_requested":
         requested = ((payload.get("requested_reviewer") or {}).get("login") or "").strip()
