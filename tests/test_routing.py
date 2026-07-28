@@ -833,6 +833,9 @@ class PullRequestEventTest(unittest.TestCase):
         )
         self.assertEqual(decision.workflow, WORKFLOW_CANCEL_REVIEW_RUNS)
 
+    # GitHub user ID for warp-dev-github-integration[bot]
+    _SKIP_BOT_USER_ID = 240773466
+
     def test_opened_pr_from_skip_bot_in_warp_server_is_dropped(self) -> None:
         decision = route_event(
             "pull_request",
@@ -842,7 +845,7 @@ class PullRequestEventTest(unittest.TestCase):
                 "pull_request": {
                     "state": "open",
                     "draft": False,
-                    "user": {"login": "warp-dev-github-integration[bot]", "type": "Bot"},
+                    "user": {"id": self._SKIP_BOT_USER_ID, "type": "Bot"},
                 },
             },
         )
@@ -858,7 +861,7 @@ class PullRequestEventTest(unittest.TestCase):
                 "pull_request": {
                     "state": "open",
                     "draft": False,
-                    "user": {"login": "warp-dev-github-integration[bot]", "type": "Bot"},
+                    "user": {"id": self._SKIP_BOT_USER_ID, "type": "Bot"},
                 },
             },
         )
@@ -872,7 +875,7 @@ class PullRequestEventTest(unittest.TestCase):
                 "repository": {"full_name": "warpdotdev/warp-server"},
                 "pull_request": {
                     "state": "open",
-                    "user": {"login": "warp-dev-github-integration[bot]", "type": "Bot"},
+                    "user": {"id": self._SKIP_BOT_USER_ID, "type": "Bot"},
                 },
             },
         )
@@ -888,13 +891,14 @@ class PullRequestEventTest(unittest.TestCase):
                 "pull_request": {
                     "state": "open",
                     "draft": False,
-                    "user": {"login": "warp-dev-github-integration[bot]", "type": "Bot"},
+                    "user": {"id": self._SKIP_BOT_USER_ID, "type": "Bot"},
                 },
             },
         )
         self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
 
-    def test_skip_is_case_insensitive(self) -> None:
+    def test_skip_is_case_insensitive_for_repo_name(self) -> None:
+        # Repo full_name matching is lowercased.
         decision = route_event(
             "pull_request",
             {
@@ -903,7 +907,7 @@ class PullRequestEventTest(unittest.TestCase):
                 "pull_request": {
                     "state": "open",
                     "draft": False,
-                    "user": {"login": "Warp-Dev-GitHub-Integration[Bot]", "type": "Bot"},
+                    "user": {"id": self._SKIP_BOT_USER_ID, "type": "Bot"},
                 },
             },
         )
