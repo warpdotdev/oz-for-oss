@@ -57,6 +57,7 @@ _TRIAGE_ATTACHMENT_PAYLOAD_FIELDS = {
     "template_context",
     "triage_companion_path",
     "dedupe_companion_path",
+    "factory_auto_implement_companion_path",
 }
 
 # Discriminator values for the agent's ``triage_result.json`` payload.
@@ -75,6 +76,11 @@ RESPONSE_DETAILS_SUMMARY = "Reasoning"
 RESPONSE_FALLBACK_BODY = (
     "I don't have enough information to answer this question yet."
 )
+# Distinct from the creation-time ``auto-implement`` routing label in
+# ``core/routing.py``. Qualifying triage results only queue factory work;
+# they must not assign ``oz-agent`` or start the immediate implementation
+# workflow.
+FACTORY_AUTO_IMPLEMENT_LABEL = "factory-auto-implement"
 
 # Label applied to issues that cannot be resolved through OSS contributions
 # (billing, plan changes, refunds, subscription/account management, pricing,
@@ -135,6 +141,7 @@ def build_triage_prompt(
     host_workspace: Path,
     triage_companion_override: Path | str | None = None,
     dedupe_companion_override: Path | str | None = None,
+    factory_auto_implement_companion_override: Path | str | None = None,
 ) -> str:
     """Return the triage prompt string for *issue_number*.
 
@@ -158,6 +165,11 @@ def build_triage_prompt(
         dedupe_companion_override
         if dedupe_companion_override is not None
         else resolve_repo_local_skill_path(host_workspace, "dedupe-issue")
+    )
+    factory_auto_implement_companion_path = (
+        factory_auto_implement_companion_override
+        if factory_auto_implement_companion_override is not None
+        else resolve_repo_local_skill_path(host_workspace, "evaluate-auto-implement-eligibility")
     )
     labels_line = ", ".join(issue_labels) or "None"
     assignees_line = ", ".join(issue_assignees) or "None"
@@ -194,6 +206,7 @@ def build_triage_prompt(
         - Identify the specific ambiguities that still require reporter input, especially when the issue is environment-sensitive, account/backend-sensitive, or framed with an unverified root-cause claim.
         - When an explicit triggering comment is present, treat it as additional triage guidance for this triage pass.
         - Recognize reports that cannot be resolved through OSS contributions — billing inquiries, plan changes, refund requests, subscription or account management, pricing questions, and payment issues — and escalate them to the Warp support team instead of treating them as code defects.
+        - Evaluate whether this issue qualifies for factory automatic implementation using the repository's local `evaluate-auto-implement-eligibility` companion skill. Qualifying issues receive the `factory-auto-implement` label only; do not assign `oz-agent` or use the creation-time `auto-implement` label.
 
         Output Requirements:
         - Use the repository's local `triage-issue` skill as the base workflow.
@@ -241,6 +254,8 @@ def build_triage_prompt(
             "statements": "markdown string for reporter-facing findings, or empty string",
             "follow_up_questions": [{{"question": "question for the reporter", "reasoning": "why this question is needed"}}],
             "duplicate_of": [{{"issue_number": 123, "title": "existing issue title", "similarity_reason": "why it matches"}}],
+            "factory_auto_implement": false,
+            "factory_auto_implement_reasoning": "one sentence naming the gate that failed, or the positive case when true",
             "close_issue": false
           }}
           Response shape (``comment_type`` is ``"response"``):
@@ -251,6 +266,7 @@ def build_triage_prompt(
           }}
           Do not mix the two shapes — when ``comment_type`` is ``"response"`` omit ``labels``, ``follow_up_questions``, ``statements``, ``duplicate_of``, ``issue_body``, etc., because the workflow ignores them in response mode.
         - Populate `issue_body` with the markdown triage summary that should be posted as a separate issue comment. Do not rewrite the original issue description, and do not include HTML metadata in `issue_body`.
+        - Evaluate whether this issue qualifies for factory automatic implementation by reading the repository's local `evaluate-auto-implement-eligibility` companion skill (when present) and applying every gate it defines. Set `factory_auto_implement` to `true` only when all gates pass; use `false` when the companion skill is absent, any gate fails, or follow-up questions were raised. Always populate `factory_auto_implement_reasoning` with one sentence. This path only signals the factory queue via the `factory-auto-implement` label and must not request `oz-agent` assignment or the creation-time `auto-implement` label.
         - Validate `triage_result.json` with `jq`.
         - Do not create issue comments or make other GitHub changes.
         - After validating the JSON, upload `triage_result.json` as an Oz run artifact via `oz artifact upload triage_result.json` (or `oz-preview artifact upload triage_result.json` if the `oz` CLI is not available). Either CLI is acceptable — use whichever one is installed in the environment. The subcommand is `artifact` (singular) on both CLIs; do not use `artifacts`.
@@ -272,6 +288,12 @@ def build_triage_prompt(
         companion_sections.append(
             format_repo_local_prompt_section(
                 "dedupe-issue", dedupe_companion_path
+            ).rstrip()
+        )
+    if factory_auto_implement_companion_path is not None:
+        companion_sections.append(
+            format_repo_local_prompt_section(
+                "evaluate-auto-implement-eligibility", factory_auto_implement_companion_path
             ).rstrip()
         )
     if companion_sections:
@@ -432,6 +454,18 @@ def extract_close_issue(result: Mapping[str, Any]) -> bool:
     if isinstance(raw, str):
         return raw.strip().lower() == "true"
     return False
+
+
+def extract_factory_auto_implement(result: dict[str, Any]) -> bool:
+    """Return whether the triage result requests factory auto-implementation.
+
+    Returns ``True`` only when the agent explicitly sets
+    ``factory_auto_implement`` to boolean ``True``. Missing, non-boolean,
+    stringy, or falsy values default to ``False`` so payloads predating this
+    field — and any legacy ``auto_implement`` field — are treated as not
+    requesting factory auto-implement.
+    """
+    return result.get("factory_auto_implement") is True
 
 
 def extract_comment_type(result: Mapping[str, Any]) -> str:
@@ -795,6 +829,7 @@ class TriageContext(TypedDict, total=False):
     repo_label_names: list[str]
     triage_companion_path: str
     dedupe_companion_path: str
+    factory_auto_implement_companion_path: str
 
 
 _TRIAGE_CONFIG_PATH = ".github/issue-triage/config.json"
@@ -970,6 +1005,7 @@ def gather_triage_context(
         repo_label_names=list(repo_label_names),
         triage_companion_path="",
         dedupe_companion_path="",
+        factory_auto_implement_companion_path="",
     )
 
 
@@ -995,12 +1031,16 @@ def build_triage_prompt_for_dispatch(
     """
     triage_companion: Path | str | None = None
     dedupe_companion: Path | str | None = None
+    factory_auto_implement_companion: Path | str | None = None
     if repo_handle is not None:
         triage_companion = repo_local_skill_path_for_dispatch(
             repo_handle, "triage-issue"
         )
         dedupe_companion = repo_local_skill_path_for_dispatch(
             repo_handle, "dedupe-issue"
+        )
+        factory_auto_implement_companion = repo_local_skill_path_for_dispatch(
+            repo_handle, "evaluate-auto-implement-eligibility"
         )
     return build_triage_prompt(
         owner=str(context["owner"]),
@@ -1024,6 +1064,7 @@ def build_triage_prompt_for_dispatch(
         host_workspace=workspace(),
         triage_companion_override=triage_companion,
         dedupe_companion_override=dedupe_companion,
+        factory_auto_implement_companion_override=factory_auto_implement_companion,
     )
 
 
@@ -1151,6 +1192,19 @@ def apply_triage_result_for_dispatch(
         result, current_issue_number=issue_number
     )
     statements = extract_statements(result)
+    factory_auto_implement = extract_factory_auto_implement(result)
+    factory_auto_implement_applied = (
+        factory_auto_implement and not follow_up_questions and not duplicates
+    )
+    if factory_auto_implement_applied:
+        try:
+            issue.add_to_labels(FACTORY_AUTO_IMPLEMENT_LABEL)
+        except Exception:
+            logger.exception(
+                "Failed to add %s label to issue #%s",
+                FACTORY_AUTO_IMPLEMENT_LABEL,
+                issue_number,
+            )
     show_statements = bool(statements and not duplicates)
     parts: list[str] = []
     if not show_statements and not follow_up_questions and not duplicates:
@@ -1172,6 +1226,10 @@ def apply_triage_result_for_dispatch(
         parts.append(build_duplicate_section(issue, duplicates))
     elif follow_up_questions:
         parts.append(build_follow_up_section(issue, follow_up_questions))
+    if factory_auto_implement_applied:
+        parts.append(
+            "I've flagged this for the factory auto-implement queue."
+        )
     maintainer_parts: list[str] = [f"I concluded that {summary}."]
     if not duplicates and issue_body:
         maintainer_parts.append(issue_body)
