@@ -25,10 +25,14 @@ The issue describes an observed behavior that is clearly wrong.
 Enhancements, feature requests, performance improvements, and vague
 improvement requests are never eligible, even if fully specified.
 
-### Gate 2: Not a visual or rendering bug
-Issues where the problem is appearance, layout, color, spacing, or
-anything requiring visual judgment to verify are excluded. A bug with
-visual symptoms but a clear non-visual root cause may still qualify.
+### Gate 2: Visual bugs must be objectively wrong, not a matter of taste
+Exclude issues where the desired outcome is a judgment call — e.g.
+"this button should be a different color", "this spacing feels off",
+or any report that expresses a personal opinion about appearance.
+A visual bug is eligible only when the correct state is unambiguous:
+a missing icon, a broken layout that clearly corrupts the UI, text
+that is visibly truncated or overlapping, or a rendering glitch with
+a clear non-rendering root cause. When in doubt, exclude it.
 
 ### Gate 3: Root cause known with high or medium confidence
 The triage investigation must have identified a plausible root cause and
