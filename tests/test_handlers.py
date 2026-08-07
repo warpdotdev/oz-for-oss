@@ -245,6 +245,10 @@ class ReviewHandlersTest(_HandlerTestBase):
         helpers.record_run_session_link.assert_called_once_with(  # type: ignore[attr-defined]
             self.progress_instances[-1], run
         )
+        self.assertEqual(
+            state.payload_subset["session_link"],
+            "https://app.warp.dev/run/abc",
+        )
 
 
 class RespondHandlersTest(_HandlerTestBase):
@@ -351,7 +355,6 @@ class VerifyHandlersTest(_HandlerTestBase):
         self.assertIs(artifacts_run.artifacts, terminal_run.artifacts)
 
 
-
 class TriageHandlersTest(_HandlerTestBase):
     def _state(self) -> RunState:
         return _state(
@@ -417,10 +420,73 @@ class TriageHandlersTest(_HandlerTestBase):
             session_link="https://app.warp.dev/run/abc",
             run_id="oz-run-321",
         )
-        handlers.non_terminal_handler(state=self._state(), run=run)
+        state = self._state()
+        handlers.non_terminal_handler(state=state, run=run)
         helpers = sys.modules["oz.helpers"]
         helpers.record_run_session_link.assert_called_once_with(  # type: ignore[attr-defined]
             self.progress_instances[-1], run
+        )
+        self.assertEqual(
+            state.payload_subset["session_link"],
+            "https://app.warp.dev/run/abc",
+        )
+
+    def test_result_applier_restores_persisted_session_link(self) -> None:
+        from core.handlers import build_triage_handlers
+
+        github_client = MagicMock()
+        repo_handle = MagicMock(name="repo")
+        github_client.get_repo.return_value = repo_handle
+        handlers = build_triage_handlers(_factory(github_client))
+        state = self._state()
+        state.payload_subset["session_link"] = "https://app.warp.dev/conversation/abc"
+
+        handlers.result_applier(
+            state=state,
+            result={"summary": "ok", "labels": []},
+            run=SimpleNamespace(state="SUCCEEDED"),
+        )
+
+        from workflows.triage_new_issues import (  # type: ignore[import-not-found]
+            apply_triage_result_for_dispatch,
+        )
+
+        progress = apply_triage_result_for_dispatch.call_args.kwargs["progress"]
+        self.assertEqual(
+            progress.session_link,
+            "https://app.warp.dev/conversation/abc",
+        )
+
+    def test_result_applier_uses_terminal_run_session_link(self) -> None:
+        from core.handlers import build_triage_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_triage_handlers(_factory(github_client))
+        state = self._state()
+        run = MagicMock(
+            state="SUCCEEDED",
+            session_link="https://app.warp.dev/conversation/terminal",
+        )
+
+        handlers.result_applier(
+            state=state,
+            result={"summary": "ok", "labels": []},
+            run=run,
+        )
+
+        from workflows.triage_new_issues import (  # type: ignore[import-not-found]
+            apply_triage_result_for_dispatch,
+        )
+
+        progress = apply_triage_result_for_dispatch.call_args.kwargs["progress"]
+        self.assertEqual(
+            progress.session_link,
+            "https://app.warp.dev/conversation/terminal",
+        )
+        self.assertEqual(
+            state.payload_subset["session_link"],
+            "https://app.warp.dev/conversation/terminal",
         )
 
 

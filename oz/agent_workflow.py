@@ -114,9 +114,12 @@ def make_run_adapter(*, state: Any, progress: Any, run: Any | None = None) -> An
             created_at = datetime.fromtimestamp(float(state.dispatched_at), timezone.utc)
         except (AttributeError, TypeError, ValueError, OSError):
             created_at = None
+    session_link = str(getattr(progress, "session_link", "") or "").strip()
+    if not session_link and run is not None:
+        session_link = str(getattr(run, "session_link", "") or "").strip()
     return SimpleNamespace(
         run_id=state.run_id,
-        session_link=getattr(progress, "session_link", ""),
+        session_link=session_link,
         created_at=created_at,
         artifacts=getattr(run, "artifacts", None) if run is not None else None,
     )
