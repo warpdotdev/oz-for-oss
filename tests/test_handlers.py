@@ -296,6 +296,57 @@ class RespondHandlersTest(_HandlerTestBase):
         # posting onto the PR conversation.
         repo_handle.get_pull.assert_called_once_with(7)
 
+    def test_result_applier_records_session_link_for_terminal_run(self) -> None:
+        # A run that is already terminal on the first cron poll never
+        # passes through ``non_terminal_handler``. The applier must still
+        # record the session link so the completion comment posted back
+        # to the PR (including the "completed with no work" message)
+        # links to the Warp conversation that explains what the agent did.
+        from core.handlers import build_respond_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_respond_handlers(_factory(github_client))
+
+        state = _state(
+            "respond-to-pr-comment",
+            payload_subset={
+                "owner": "acme",
+                "repo": "widgets",
+                "pr_number": 7,
+                "head_branch": "feature",
+                "trigger_kind": "conversation",
+                "requester": "alice",
+                "progress_comment_id": 6543,
+            },
+        )
+        run = MagicMock(
+            state="SUCCEEDED",
+            session_link="https://app.warp.dev/run/abc",
+            run_id="oz-run-123",
+        )
+        handlers.result_applier(state=state, result={}, run=run)
+
+        helpers = sys.modules["oz.helpers"]
+        helpers.record_run_session_link.assert_called_once_with(  # type: ignore[attr-defined]
+            self.progress_instances[-1], run
+        )
+
+    def test_result_applier_skips_session_link_when_run_missing(self) -> None:
+        # Synchronous callers and tests may invoke the applier without a
+        # run handle; recording must be skipped rather than passing
+        # ``None`` into ``record_run_session_link``.
+        from core.handlers import build_respond_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_respond_handlers(_factory(github_client))
+
+        handlers.result_applier(state=_state("respond-to-pr-comment"), result={})
+
+        helpers = sys.modules["oz.helpers"]
+        helpers.record_run_session_link.assert_not_called()  # type: ignore[attr-defined]
+
 
 class VerifyHandlersTest(_HandlerTestBase):
     def test_artifact_loader_calls_load_run_artifact_with_report_filename(self) -> None:
