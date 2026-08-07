@@ -1169,6 +1169,34 @@ class RequiresHumanReviewerEscalationTest(unittest.TestCase):
                 pr = self._apply_approve(context)
                 pr.create_review_request.assert_not_called()
 
+    def test_pr_description_marks_member_author_trusted(self) -> None:
+        context = self._gather(
+            self._make_pr(
+                login="maintainer",
+                user_type="User",
+                association="MEMBER",
+                filenames=["core/app.py"],
+            )
+        )
+        self.assertIn(
+            "- Author: @maintainer [association=MEMBER, trust=TRUSTED]",
+            context["pr_description_text"],
+        )
+
+    def test_pr_description_marks_external_author_unverified(self) -> None:
+        context = self._gather(
+            self._make_pr(
+                login="contributor",
+                user_type="User",
+                association="CONTRIBUTOR",
+                filenames=["core/app.py"],
+            )
+        )
+        self.assertIn(
+            "- Author: @contributor [association=CONTRIBUTOR, trust=UNVERIFIED]",
+            context["pr_description_text"],
+        )
+
     def test_oz_authored_reject_stays_comment_event(self) -> None:
         context = self._gather(
             self._make_pr(

@@ -959,6 +959,12 @@ def _format_non_member_review_section(
     ).strip()
 
 
+def _author_trust_label(author_association: str) -> str:
+    """Return ``TRUSTED`` for org members/collaborators, else ``UNVERIFIED``."""
+    normalized = str(author_association or "").strip().upper()
+    return "TRUSTED" if normalized in ORG_MEMBER_ASSOCIATIONS else "UNVERIFIED"
+
+
 def _format_pr_description(
     *,
     pr_number: int,
@@ -969,11 +975,19 @@ def _format_pr_description(
     trigger_source: str,
     focus_line: str,
     issue_line: str,
+    author_login: str,
+    author_association: str,
 ) -> str:
     body = pr_body.strip() or "No description provided."
+    association = str(author_association or "").strip().upper() or "NONE"
+    author = author_login.strip() or "unknown"
+    author_line = (
+        f"@{author} [association={association}, trust={_author_trust_label(association)}]"
+    )
     return (
         f"# Pull Request #{pr_number}\n\n"
         f"- Title: {pr_title}\n"
+        f"- Author: {author_line}\n"
         f"- Base branch: {base_branch}\n"
         f"- Head branch: {head_branch}\n"
         f"- Trigger: {trigger_source}\n"
@@ -1205,6 +1219,7 @@ def gather_review_context(
     pr_author_login = str(
         getattr(getattr(pr, "user", None), "login", "") or ""
     )
+    pr_author_association = str(getattr(pr, "author_association", "") or "")
     non_member_review_section = ""
     stakeholders_entries: list[dict[str, Any]] = []
     pr_assignee_reviewers: list[str] = []
@@ -1276,6 +1291,8 @@ def gather_review_context(
         trigger_source=trigger_source,
         focus_line=focus_line,
         issue_line=issue_line,
+        author_login=pr_author_login,
+        author_association=pr_author_association,
     )
     pr_diff_text = _format_pr_diff(pr_files)
     # Resolve the spec context entirely through the GitHub API. The
