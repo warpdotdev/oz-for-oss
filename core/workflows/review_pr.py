@@ -3,6 +3,7 @@ import fnmatch
 import json
 import logging
 import random
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
@@ -41,7 +42,7 @@ from oz.repo_local import (
 from oz.review_validation import (
     HUNK_HEADER_PATTERN,
     ReviewComment,
-    build_diff_maps_from_files as _build_diff_maps,
+    build_diff_maps_from_annotated_diff,
     deserialize_diff_content_map as _deserialize_diff_content_map,
     deserialize_diff_line_map as _deserialize_diff_line_map,
     normalize_review_path as _normalize_review_path,
@@ -1017,9 +1018,25 @@ def _annotate_patch(patch: str) -> str:
     return "\n".join(lines)
 
 
-def _format_pr_diff(files: list[File]) -> str:
-    """Return the annotated PR diff consumed by the review skills."""
+def _format_pr_diff(
+    files: list[File],
+    *,
+    full_diff_sections: Mapping[str, str] | None = None,
+) -> str:
+    """Return the annotated PR diff consumed by the review skills.
+
+    GitHub's Files API omits ``patch`` for any file whose diff exceeds its
+    internal size threshold — not only binaries, large text files hit this
+    too (see REMOTE-2757). When that happens, *full_diff_sections* — hunks
+    parsed from the PR-level ``.diff`` media type via
+    :func:`_split_unified_diff_by_file` — supplies the missing content so
+    the file is still annotated instead of dropped. Files with no
+    recoverable hunks (including genuinely binary files, where the ``.diff``
+    fallback itself only shows ``Binary files ... differ``) keep the
+    existing honest placeholder.
+    """
     sections: list[str] = []
+    full_diff_sections = full_diff_sections or {}
     for file in files:
         path = _normalize_review_path(file.filename)
         previous_path = _normalize_review_path(
@@ -1030,7 +1047,12 @@ def _format_pr_diff(files: list[File]) -> str:
         if status == "renamed" and previous_path and previous_path != path:
             section.append(f"rename from {previous_path}")
             section.append(f"rename to {path}")
-        if not file.patch:
+        patch = (
+            file.patch
+            or full_diff_sections.get(path)
+            or full_diff_sections.get(previous_path)
+        )
+        if not patch:
             section.append("(Patch unavailable from GitHub for this file.)")
             sections.append("\n".join(section))
             continue
@@ -1041,9 +1063,100 @@ def _format_pr_diff(files: list[File]) -> str:
         else:
             old_path = previous_path or path
             section.extend([f"--- a/{old_path}", f"+++ b/{path}"])
-        section.append(_annotate_patch(file.patch))
+        section.append(_annotate_patch(patch))
         sections.append("\n".join(section))
     return "\n\n".join(sections).rstrip() + "\n"
+
+
+_DIFF_GIT_HEADER_PATTERN = re.compile(r"^diff --git (?P<old>\S+) (?P<new>\S+)$")
+
+
+def _split_unified_diff_by_file(diff_text: str) -> dict[str, str]:
+    """Parse a full unified diff into per-file hunk text, keyed by path.
+
+    *diff_text* is the PR-level ``.diff`` media type payload (one or more
+    ``diff --git`` sections). Returns, for each file, only the hunk lines
+    starting at the first ``@@`` header — the same shape as the Files
+    API's per-file ``patch`` field — so the result feeds straight into
+    :func:`_annotate_patch`. Both the old and new path are used as keys so
+    renamed and deleted files resolve correctly. Sections with no hunks at
+    all (for example ``Binary files a/x and b/x differ``) are omitted,
+    which naturally keeps genuinely binary files on the placeholder path
+    in :func:`_format_pr_diff` instead of fabricating content for them.
+    """
+    sections: dict[str, str] = {}
+    current_old_path = ""
+    current_new_path = ""
+    hunk_lines: list[str] = []
+    in_hunk = False
+
+    def flush() -> None:
+        nonlocal hunk_lines, in_hunk
+        if hunk_lines:
+            text = "\n".join(hunk_lines)
+            for path in (current_new_path, current_old_path):
+                if path:
+                    sections[path] = text
+        hunk_lines = []
+        in_hunk = False
+
+    for raw_line in diff_text.splitlines():
+        if raw_line.startswith("diff --git "):
+            flush()
+            header_match = _DIFF_GIT_HEADER_PATTERN.match(raw_line)
+            if header_match:
+                current_old_path = _normalize_review_path(header_match.group("old"))
+                current_new_path = _normalize_review_path(header_match.group("new"))
+            else:
+                current_old_path = ""
+                current_new_path = ""
+            continue
+        if not in_hunk:
+            if raw_line.startswith("@@ "):
+                in_hunk = True
+                hunk_lines.append(raw_line)
+            # Extended header lines (``index ...``, mode changes, ``rename
+            # from``/``rename to``, ``Binary files ... differ``, the
+            # ``--- ``/``+++ `` path lines) carry no commentable content
+            # and are otherwise ignored here; _format_pr_diff renders its
+            # own header for the file.
+            continue
+        hunk_lines.append(raw_line)
+    flush()
+    return sections
+
+
+def _fetch_full_pr_diff(pr: Any) -> str | None:
+    """Fetch the PR-level unified diff via the ``.diff`` media type.
+
+    Used only to backfill files whose Files API ``patch`` is missing.
+    PyGithub does not wrap this media type, so the request goes through
+    the object's own ``requester`` — the documented escape hatch for
+    endpoints PyGithub does not cover — reusing the same installation
+    token as every other call in this workflow. Returns ``None`` on any
+    failure (including the 406 GitHub returns when a diff exceeds its
+    aggregate size ceiling) so callers fall back to the existing per-file
+    placeholder instead of raising out of context gathering.
+    """
+    requester = getattr(pr, "requester", None)
+    url = getattr(pr, "url", None)
+    if requester is None or not url:
+        return None
+    try:
+        status, _headers, output = requester.requestBlob(
+            "GET",
+            url,
+            headers={"Accept": "application/vnd.github.v3.diff"},
+        )
+    except Exception:
+        logger.exception("review-pr: failed to fetch PR .diff fallback for %s", url)
+        return None
+    if status != 200 or not isinstance(output, str):
+        logger.warning(
+            "review-pr: PR .diff fallback returned status %s for %s", status, url
+        )
+        return None
+    return output
 
 
 class ReviewContext(TypedDict):
@@ -1277,7 +1390,16 @@ def gather_review_context(
         focus_line=focus_line,
         issue_line=issue_line,
     )
-    pr_diff_text = _format_pr_diff(pr_files)
+    # GitHub's Files API omits ``patch`` for files whose diff exceeds its
+    # internal size threshold (REMOTE-2757). Only pay for the extra
+    # PR-level ``.diff`` request when at least one file actually needs
+    # the fallback; most PRs have every file's patch populated.
+    full_diff_sections: dict[str, str] = {}
+    if any(not file.patch for file in pr_files):
+        full_diff_text = _fetch_full_pr_diff(pr)
+        if full_diff_text:
+            full_diff_sections = _split_unified_diff_by_file(full_diff_text)
+    pr_diff_text = _format_pr_diff(pr_files, full_diff_sections=full_diff_sections)
     # Resolve the spec context entirely through the GitHub API. The
     # workspace-backed resolver shells out to the bundled
     # ``resolve_spec_context.py`` script with ``cwd=workspace_path``,
@@ -1288,7 +1410,13 @@ def gather_review_context(
     spec_context_text = _format_spec_context_text(
         resolve_spec_context_for_pr_via_api(github, owner, repo, pr)
     )
-    diff_line_map, diff_content_map = _build_diff_maps(pr_files)
+    # Build validation maps from the same annotated text attached to the
+    # agent (rather than re-deriving them from the raw Files API patches)
+    # so apply-time inline-comment validation always matches what the
+    # agent actually saw, including any .diff-fallback content above.
+    diff_line_map, diff_content_map = build_diff_maps_from_annotated_diff(
+        pr_diff_text
+    )
     return ReviewContext(
         owner=owner,
         repo=repo,

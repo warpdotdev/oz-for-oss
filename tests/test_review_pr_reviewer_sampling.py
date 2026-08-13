@@ -195,7 +195,6 @@ class LinkedIssueAssigneeReviewerTest(unittest.TestCase):
             patch("workflows.review_pr.resolve_issue_number_for_pr", return_value=42),
             patch("workflows.review_pr.repo_local_skill_path_for_dispatch", return_value=None),
             patch("workflows.review_pr.resolve_spec_context_for_pr_via_api", return_value={}),
-            patch("workflows.review_pr._build_diff_maps", return_value=({}, {})),
             patch("workflows.review_pr.load_stakeholders_from_repo", return_value=STAKEHOLDERS),
             patch("workflows.review_pr.load_ownership_areas_from_repo") as load_ownership,
         ):
@@ -340,7 +339,6 @@ class PrAssigneeReviewerTest(unittest.TestCase):
             patch("workflows.review_pr.resolve_issue_number_for_pr", return_value=None),
             patch("workflows.review_pr.repo_local_skill_path_for_dispatch", return_value=None),
             patch("workflows.review_pr.resolve_spec_context_for_pr_via_api", return_value={}),
-            patch("workflows.review_pr._build_diff_maps", return_value=({}, {})),
             patch("workflows.review_pr.load_ownership_areas_from_repo") as load_ownership,
         ):
             context = gather_review_context(
@@ -1079,8 +1077,6 @@ class RequiresHumanReviewerEscalationTest(unittest.TestCase):
         ), patch(
             "workflows.review_pr.load_stakeholders_from_repo",
             return_value=STAKEHOLDERS,
-        ), patch(
-            "workflows.review_pr._build_diff_maps", return_value=({}, {})
         ):
             return gather_review_context(
                 github,
