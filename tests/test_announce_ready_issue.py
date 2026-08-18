@@ -37,6 +37,21 @@ def _comment(body: str) -> Any:
     return SimpleNamespace(body=body)
 
 
+def _get_login(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("login") or "")
+    return str(getattr(item, "login", "") or "")
+
+
+def _is_automation_user(user: Any) -> bool:
+    login = _get_login(user).strip().lower()
+    user_type = str(
+        (user.get("type") if isinstance(user, dict) else getattr(user, "type", ""))
+        or ""
+    ).strip().lower()
+    return user_type == "bot" or (bool(login) and login.endswith("[bot]"))
+
+
 class _AnnounceReadyIssueTestBase(unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -63,6 +78,11 @@ class _AnnounceReadyIssueTestBase(unittest.TestCase):
                 '"workflow":"announce-ready-issue","issue":42} -->'
             )
         )
+        # Real (not mocked) mini-implementations mirroring the actual
+        # ``oz.helpers.get_login`` / ``is_automation_user`` so the
+        # assignment tests exercise real bot-detection semantics.
+        helpers.get_login = _get_login  # type: ignore[attr-defined]
+        helpers.is_automation_user = _is_automation_user  # type: ignore[attr-defined]
 
         # Drop any cached import of announce_ready_issue so the test
         # picks up the helper stubs above.
@@ -87,6 +107,7 @@ def _payload(
     state: str = "open",
     assignees: list[str] | None = None,
     full_name: str = "acme/widgets",
+    sender: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "action": "labeled",
@@ -101,7 +122,7 @@ def _payload(
             ],
             "user": {"login": "alice", "type": "User"},
         },
-        "sender": {"login": "alice"},
+        "sender": sender if sender is not None else {"login": "alice", "type": "User"},
     }
 
 
@@ -267,6 +288,77 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         )
         self.assertEqual(result["action"], "skipped")
         self.assertIn("failed to post", result["reason"])
+
+    def test_assigns_labeler_when_issue_is_unassigned(self) -> None:
+        # APP-5520: a human labeler on an unassigned issue should be
+        # assigned to it alongside the announcement comment.
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
+
+        issue = _issue_handle()
+        repo_handle = _repo_handle(issue=issue)
+
+        result = apply_announce_ready_issue_sync(
+            repo_handle,
+            payload=_payload(sender={"login": "bob", "type": "User"}),
+        )
+        self.assertEqual(result["action"], "announced")
+        self.assertTrue(result["assignee_added"])
+        issue.add_to_assignees.assert_called_once_with("bob")
+        issue.create_comment.assert_called_once()
+
+    def test_skips_assignment_when_issue_already_has_an_assignee(self) -> None:
+        # Decision 1: never add the labeler alongside an existing
+        # assignee, even a human one unrelated to oz-agent.
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
+
+        issue = _issue_handle()
+        repo_handle = _repo_handle(issue=issue)
+
+        result = apply_announce_ready_issue_sync(
+            repo_handle,
+            payload=_payload(
+                assignees=["carol"],
+                sender={"login": "bob", "type": "User"},
+            ),
+        )
+        self.assertEqual(result["action"], "announced")
+        self.assertFalse(result["assignee_added"])
+        issue.add_to_assignees.assert_not_called()
+        issue.create_comment.assert_called_once()
+
+    def test_skips_assignment_when_labeler_is_a_bot(self) -> None:
+        # Decision 2: skip the assignment when the actor who applied
+        # the label is a bot, but the announcement still posts.
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
+
+        issue = _issue_handle()
+        repo_handle = _repo_handle(issue=issue)
+
+        result = apply_announce_ready_issue_sync(
+            repo_handle,
+            payload=_payload(sender={"login": "some-app[bot]", "type": "Bot"}),
+        )
+        self.assertEqual(result["action"], "announced")
+        self.assertFalse(result["assignee_added"])
+        issue.add_to_assignees.assert_not_called()
+        issue.create_comment.assert_called_once()
+
+    def test_posts_comment_when_assignment_call_raises(self) -> None:
+        # Decision 3: a failed assignment call must never suppress the
+        # announcement comment or fail the webhook.
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
+
+        issue = _issue_handle()
+        issue.add_to_assignees.side_effect = RuntimeError("no repo access")
+        repo_handle = _repo_handle(issue=issue)
+
+        result = apply_announce_ready_issue_sync(
+            repo_handle,
+            payload=_payload(sender={"login": "bob", "type": "User"}),
+        )
+        self.assertEqual(result["action"], "announced")
+        self.assertFalse(result["assignee_added"])
+        issue.create_comment.assert_called_once()
 
 
 if __name__ == "__main__":
