@@ -62,7 +62,7 @@ Each loop has a narrow write surface and keeps the core cross-repo skills stable
 
 Some routed webhook branches perform deterministic GitHub mutations without dispatching an Oz run:
 
-- `announce-ready-issue` posts fixed availability guidance when `ready-to-spec` or `ready-to-implement` is added without assigning `oz-agent`.
+- `announce-ready-issue` posts fixed availability guidance when `ready-to-spec` or `ready-to-implement` is added without assigning `oz-agent`. If the issue has no assignee at all and the labeling actor is not a bot, it also assigns that actor to the issue.
 - `plan-approved` performs approval bookkeeping synchronously and only falls through to implementation dispatch when the linked issue is ready.
 
 ## In one sentence

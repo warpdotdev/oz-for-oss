@@ -13,6 +13,13 @@ on the issue letting contributors know:
 - that anyone can tag ``@oz-agent`` in a comment on the issue to have
   the bot pick up the work automatically.
 
+The handler also assigns the issue to whoever applied the label
+(APP-5520), so a maintainer opening an issue for community contribution
+doesn't leave it unassigned. This only happens when the issue currently
+has no assignee at all and the labeler is not an automation account; a
+failed assignment call is logged but never suppresses the announcement
+comment below.
+
 The handler is fully synchronous — there is no cloud agent to dispatch —
 and runs inline inside the Vercel webhook function. Idempotency is
 enforced via a workflow-scoped ``oz-agent-metadata`` marker so retried
@@ -33,6 +40,8 @@ from github.Repository import Repository
 from oz.helpers import (
     _workflow_metadata_prefix,
     comment_metadata,
+    get_login,
+    is_automation_user,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,6 +81,44 @@ def _build_announcement_body(label_name: str) -> str:
         "`@oz-agent` on this issue to have the bot draft the spec "
         "automatically."
     )
+
+
+def _maybe_assign_labeler(
+    issue_handle: Any,
+    *,
+    assignee_logins: set[str],
+    sender: Any,
+) -> dict[str, Any]:
+    """Assign the labeler to *issue_handle* when eligible (APP-5520).
+
+    Only assigns when the issue currently has no assignee at all — this
+    never adds the labeler alongside an existing assignee — and never
+    assigns when the labeling actor is an automation account (e.g. a
+    bot re-applying the label). The assignment call is best effort: a
+    failure is logged and returned as ``assigned: False`` so the caller
+    still posts the announcement comment.
+    """
+    if assignee_logins:
+        return {"assigned": False, "reason": "issue already has an assignee"}
+    if is_automation_user(sender):
+        return {"assigned": False, "reason": "label applied by automation user"}
+    sender_login = get_login(sender)
+    if not sender_login:
+        return {"assigned": False, "reason": "missing sender login"}
+    try:
+        issue_handle.add_to_assignees(sender_login)
+    except Exception:
+        logger.exception(
+            "Failed to assign %s to issue #%s after ready-to-* label",
+            sender_login,
+            getattr(issue_handle, "number", "?"),
+        )
+        return {
+            "assigned": False,
+            "reason": "assignment API call failed",
+            "login": sender_login,
+        }
+    return {"assigned": True, "login": sender_login}
 
 
 def _existing_announcement_comment(
@@ -169,6 +216,18 @@ def apply_announce_ready_issue_sync(
 
     issue_handle = repo_handle.get_issue(int(issue_number))
 
+    # Assign the issue to whoever applied the label, per APP-5520. This
+    # runs before the comment idempotency check below: it is naturally
+    # idempotent itself (a retried delivery either still sees no
+    # assignee, in which case re-assigning the same login is a no-op
+    # on GitHub's side, or sees the assignment already landed, in
+    # which case ``assignee_logins`` above would have short-circuited).
+    assignment = _maybe_assign_labeler(
+        issue_handle,
+        assignee_logins=assignee_logins,
+        sender=payload.get("sender"),
+    )
+
     # Idempotency: skip the comment post when a prior announcement
     # already exists. The metadata prefix pins the dedupe to this
     # workflow + issue so retried deliveries (or repeated label
@@ -180,6 +239,7 @@ def apply_announce_ready_issue_sync(
             "reason": "announcement already posted for this issue",
             "issue_number": issue_number,
             "label": label_name,
+            "assignee_added": assignment["assigned"],
         }
 
     body = _build_announcement_body(label_name)
@@ -198,12 +258,14 @@ def apply_announce_ready_issue_sync(
             "reason": "failed to post announcement comment",
             "issue_number": issue_number,
             "label": label_name,
+            "assignee_added": assignment["assigned"],
         }
 
     return {
         "action": "announced",
         "issue_number": issue_number,
         "label": label_name,
+        "assignee_added": assignment["assigned"],
     }
 
 
