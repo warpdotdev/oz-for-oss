@@ -35,7 +35,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping
 
+from github.GithubException import GithubException
 from github.Repository import Repository
+from requests.exceptions import RequestException
 
 from oz.helpers import (
     _workflow_metadata_prefix,
@@ -94,9 +96,14 @@ def _maybe_assign_labeler(
     Only assigns when the issue currently has no assignee at all — this
     never adds the labeler alongside an existing assignee — and never
     assigns when the labeling actor is an automation account (e.g. a
-    bot re-applying the label). The assignment call is best effort: a
-    failure is logged and returned as ``assigned: False`` so the caller
-    still posts the announcement comment.
+    bot re-applying the label). The assignment call is best effort
+    for *operational* GitHub failures only: a ``GithubException`` (bad
+    status code, e.g. the labeler lacks repo access) or a
+    ``RequestException`` (transport-level failure) is logged and
+    returned as ``assigned: False`` so the caller still posts the
+    announcement comment. Any other exception is a programming defect
+    and is left to propagate rather than silently downgraded to a log
+    line.
     """
     if assignee_logins:
         return {"assigned": False, "reason": "issue already has an assignee"}
@@ -107,7 +114,7 @@ def _maybe_assign_labeler(
         return {"assigned": False, "reason": "missing sender login"}
     try:
         issue_handle.add_to_assignees(sender_login)
-    except Exception:
+    except (GithubException, RequestException):
         logger.exception(
             "Failed to assign %s to issue #%s after ready-to-* label",
             sender_login,
@@ -216,15 +223,35 @@ def apply_announce_ready_issue_sync(
 
     issue_handle = repo_handle.get_issue(int(issue_number))
 
+    # Re-read the current assignee set from the freshly fetched issue
+    # rather than trusting the webhook payload's snapshot: a separate
+    # ``issues.assigned`` delivery can land between GitHub generating
+    # this payload and this handler running, so the payload can be
+    # stale by now. Abort the synchronous announce path if oz-agent
+    # has since been assigned (the spec/implementation flow now owns
+    # this issue) and use the live set — not the payload snapshot —
+    # to decide whether the issue is still unassigned.
+    current_assignee_logins = {
+        get_login(assignee) for assignee in (issue_handle.assignees or [])
+    }
+    if OZ_AGENT_LOGIN in current_assignee_logins:
+        return {
+            "action": "skipped",
+            "reason": "oz-agent is already assigned; spec/implementation flow handles it",
+            "issue_number": issue_number,
+            "label": label_name,
+        }
+
     # Assign the issue to whoever applied the label, per APP-5520. This
     # runs before the comment idempotency check below: it is naturally
     # idempotent itself (a retried delivery either still sees no
     # assignee, in which case re-assigning the same login is a no-op
     # on GitHub's side, or sees the assignment already landed, in
-    # which case ``assignee_logins`` above would have short-circuited).
+    # which case ``current_assignee_logins`` above would have
+    # short-circuited).
     assignment = _maybe_assign_labeler(
         issue_handle,
-        assignee_logins=assignee_logins,
+        assignee_logins=current_assignee_logins,
         sender=payload.get("sender"),
     )
 

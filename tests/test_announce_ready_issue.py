@@ -6,9 +6,11 @@ synchronously on every ``issues.labeled`` delivery for
 already assigned. The helper posts a one-shot announcement comment on
 the issue and never falls through to a cloud-agent dispatch path.
 
-These tests stub ``oz.helpers`` so the assertions stay
-focused on the sync helper's branching (announced vs. noop vs.
-skipped).
+These tests stub the ``oz.helpers`` module import surface, but wire
+``get_login`` / ``is_automation_user`` to the *real* production
+implementations (captured below before any stubbing happens) so the
+assignment tests exercise actual bot-detection semantics rather than a
+hand-copied approximation that could drift from the real helper.
 """
 
 from __future__ import annotations
@@ -18,6 +20,13 @@ import unittest
 from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
+
+from github.GithubException import GithubException
+
+# Captured at module-import time, before any test stubs ``oz.helpers``
+# in ``sys.modules``, so these are the genuine production functions.
+from oz.helpers import get_login as _real_get_login
+from oz.helpers import is_automation_user as _real_is_automation_user
 
 from . import conftest  # noqa: F401
 
@@ -37,19 +46,8 @@ def _comment(body: str) -> Any:
     return SimpleNamespace(body=body)
 
 
-def _get_login(item: Any) -> str:
-    if isinstance(item, dict):
-        return str(item.get("login") or "")
-    return str(getattr(item, "login", "") or "")
-
-
-def _is_automation_user(user: Any) -> bool:
-    login = _get_login(user).strip().lower()
-    user_type = str(
-        (user.get("type") if isinstance(user, dict) else getattr(user, "type", ""))
-        or ""
-    ).strip().lower()
-    return user_type == "bot" or (bool(login) and login.endswith("[bot]"))
+def _assignee(login: str) -> Any:
+    return SimpleNamespace(login=login)
 
 
 class _AnnounceReadyIssueTestBase(unittest.TestCase):
@@ -65,6 +63,7 @@ class _AnnounceReadyIssueTestBase(unittest.TestCase):
         oz = _ensure_module("oz")
         helpers = _ensure_module("oz.helpers")
         oz.helpers = helpers  # type: ignore[attr-defined]
+        self.helpers = helpers
 
         # Stub the helpers used by ``apply_announce_ready_issue_sync``.
         helpers._workflow_metadata_prefix = MagicMock(  # type: ignore[attr-defined]
@@ -78,11 +77,12 @@ class _AnnounceReadyIssueTestBase(unittest.TestCase):
                 '"workflow":"announce-ready-issue","issue":42} -->'
             )
         )
-        # Real (not mocked) mini-implementations mirroring the actual
-        # ``oz.helpers.get_login`` / ``is_automation_user`` so the
-        # assignment tests exercise real bot-detection semantics.
-        helpers.get_login = _get_login  # type: ignore[attr-defined]
-        helpers.is_automation_user = _is_automation_user  # type: ignore[attr-defined]
+        # Default to the real production implementations so most tests
+        # exercise genuine bot-detection semantics. Tests that need a
+        # specific predicate outcome override ``self.helpers.is_automation_user``
+        # with a controlled mock before importing the handler.
+        helpers.get_login = _real_get_login  # type: ignore[attr-defined]
+        helpers.is_automation_user = _real_is_automation_user  # type: ignore[attr-defined]
 
         # Drop any cached import of announce_ready_issue so the test
         # picks up the helper stubs above.
@@ -126,11 +126,20 @@ def _payload(
     }
 
 
-def _issue_handle(*, comments: list[str] | None = None) -> Any:
+def _issue_handle(
+    *, comments: list[str] | None = None, assignees: list[str] | None = None
+) -> Any:
+    """Build a mock issue handle with a live ``.assignees`` list.
+
+    ``assignees`` models the *current* (freshly fetched) assignee
+    state, which the handler now reads directly from the issue handle
+    rather than trusting the webhook payload's snapshot.
+    """
     handle = MagicMock(name="issue")
     handle.get_comments.return_value = [
         _comment(body) for body in (comments or [])
     ]
+    handle.assignees = [_assignee(login) for login in (assignees or [])]
     return handle
 
 
@@ -311,7 +320,7 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         # assignee, even a human one unrelated to oz-agent.
         from workflows.announce_ready_issue import apply_announce_ready_issue_sync
 
-        issue = _issue_handle()
+        issue = _issue_handle(assignees=["carol"])
         repo_handle = _repo_handle(issue=issue)
 
         result = apply_announce_ready_issue_sync(
@@ -326,12 +335,61 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         issue.add_to_assignees.assert_not_called()
         issue.create_comment.assert_called_once()
 
-    def test_skips_assignment_when_labeler_is_a_bot(self) -> None:
-        # Decision 2: skip the assignment when the actor who applied
-        # the label is a bot, but the announcement still posts.
+    def test_assignment_decision_uses_live_assignees_not_stale_payload(self) -> None:
+        # Race: a separate ``issues.assigned`` delivery can add a
+        # human assignee between GitHub generating this payload and
+        # this handler running. The payload snapshot still shows no
+        # assignees, but the freshly fetched issue now has one, so
+        # the labeler must not be added alongside it.
         from workflows.announce_ready_issue import apply_announce_ready_issue_sync
 
-        issue = _issue_handle()
+        issue = _issue_handle(assignees=["dave"])
+        repo_handle = _repo_handle(issue=issue)
+
+        result = apply_announce_ready_issue_sync(
+            repo_handle,
+            payload=_payload(
+                assignees=[],
+                sender={"login": "bob", "type": "User"},
+            ),
+        )
+        repo_handle.get_issue.assert_called_once()
+        self.assertEqual(result["action"], "announced")
+        self.assertFalse(result["assignee_added"])
+        issue.add_to_assignees.assert_not_called()
+        issue.create_comment.assert_called_once()
+
+    def test_aborts_announce_when_oz_agent_assigned_after_payload_snapshot(self) -> None:
+        # Same race, but the concurrent ``issues.assigned`` delivery
+        # assigned oz-agent itself: the spec/implementation flow now
+        # owns this issue, so the synchronous announce path (and the
+        # labeler assignment) must abort even though the stale payload
+        # snapshot showed no assignees.
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
+
+        issue = _issue_handle(assignees=["oz-agent"])
+        repo_handle = _repo_handle(issue=issue)
+
+        result = apply_announce_ready_issue_sync(
+            repo_handle,
+            payload=_payload(assignees=[], sender={"login": "bob", "type": "User"}),
+        )
+        repo_handle.get_issue.assert_called_once()
+        self.assertEqual(result["action"], "skipped")
+        self.assertIn("oz-agent", result["reason"])
+        issue.add_to_assignees.assert_not_called()
+        issue.create_comment.assert_not_called()
+
+    def test_skips_assignment_when_labeler_is_a_bot(self) -> None:
+        # Decision 2: skip the assignment when the actor who applied
+        # the label is a bot, but the announcement still posts. Uses a
+        # controlled mock for the predicate itself (real bot-shape
+        # coverage lives in IsAutomationUserProductionHelperTest below)
+        # so this test stays focused on the handler's branching.
+        self.helpers.is_automation_user = MagicMock(return_value=True)
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
+
+        issue = _issue_handle(assignees=[])
         repo_handle = _repo_handle(issue=issue)
 
         result = apply_announce_ready_issue_sync(
@@ -340,16 +398,21 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         )
         self.assertEqual(result["action"], "announced")
         self.assertFalse(result["assignee_added"])
+        self.helpers.is_automation_user.assert_called_once()
         issue.add_to_assignees.assert_not_called()
         issue.create_comment.assert_called_once()
 
-    def test_posts_comment_when_assignment_call_raises(self) -> None:
+    def test_posts_comment_when_assignment_call_raises_github_exception(self) -> None:
         # Decision 3: a failed assignment call must never suppress the
-        # announcement comment or fail the webhook.
+        # announcement comment or fail the webhook. Only the specific
+        # operational exceptions the handler catches (GithubException /
+        # RequestException) should be swallowed this way.
         from workflows.announce_ready_issue import apply_announce_ready_issue_sync
 
-        issue = _issue_handle()
-        issue.add_to_assignees.side_effect = RuntimeError("no repo access")
+        issue = _issue_handle(assignees=[])
+        issue.add_to_assignees.side_effect = GithubException(
+            422, {"message": "no repo access"}, None
+        )
         repo_handle = _repo_handle(issue=issue)
 
         result = apply_announce_ready_issue_sync(
@@ -359,6 +422,92 @@ class ApplyAnnounceReadyIssueSyncTest(_AnnounceReadyIssueTestBase):
         self.assertEqual(result["action"], "announced")
         self.assertFalse(result["assignee_added"])
         issue.create_comment.assert_called_once()
+
+    def test_unexpected_assignment_exception_propagates(self) -> None:
+        # A programming defect (anything other than the operational
+        # GithubException / RequestException surface) must not be
+        # silently downgraded to a log line and a 202.
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
+
+        issue = _issue_handle(assignees=[])
+        issue.add_to_assignees.side_effect = TypeError("boom")
+        repo_handle = _repo_handle(issue=issue)
+
+        with self.assertRaises(TypeError):
+            apply_announce_ready_issue_sync(
+                repo_handle,
+                payload=_payload(sender={"login": "bob", "type": "User"}),
+            )
+
+    def test_no_assignment_when_sender_is_absent(self) -> None:
+        # An absent ``sender`` field must not crash the handler; the
+        # announcement should still post.
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
+
+        issue = _issue_handle(assignees=[])
+        repo_handle = _repo_handle(issue=issue)
+        payload = _payload()
+        del payload["sender"]
+
+        result = apply_announce_ready_issue_sync(repo_handle, payload=payload)
+        self.assertEqual(result["action"], "announced")
+        self.assertFalse(result["assignee_added"])
+        issue.add_to_assignees.assert_not_called()
+        issue.create_comment.assert_called_once()
+
+    def test_no_assignment_when_sender_is_malformed(self) -> None:
+        # A ``sender`` that isn't a mapping/user-shaped object (e.g. a
+        # list, from a malformed or unexpected payload) must not crash
+        # the handler either.
+        from workflows.announce_ready_issue import apply_announce_ready_issue_sync
+
+        issue = _issue_handle(assignees=[])
+        repo_handle = _repo_handle(issue=issue)
+
+        result = apply_announce_ready_issue_sync(
+            repo_handle, payload=_payload(sender=["unexpected", "shape"])
+        )
+        self.assertEqual(result["action"], "announced")
+        self.assertFalse(result["assignee_added"])
+        issue.add_to_assignees.assert_not_called()
+        issue.create_comment.assert_called_once()
+
+
+class IsAutomationUserProductionHelperTest(unittest.TestCase):
+    """Direct coverage of the real ``oz.helpers.is_automation_user``.
+
+    Exercises the unmodified production helper (not the test module's
+    stub) against the bot shapes GitHub actually sends, so a future
+    change to the predicate's supported forms is caught here rather
+    than only in a handler-level test with a controlled mock.
+    """
+
+    def test_recognizes_type_bot(self) -> None:
+        self.assertTrue(
+            _real_is_automation_user({"login": "some-app", "type": "Bot"})
+        )
+
+    def test_recognizes_bot_suffixed_login_regardless_of_type(self) -> None:
+        # GitHub Apps always suffix their login with ``[bot]`` even in
+        # payload shapes that report a different/missing ``type``.
+        self.assertTrue(
+            _real_is_automation_user({"login": "dependabot[bot]", "type": "User"})
+        )
+
+    def test_recognizes_object_shaped_bot_sender(self) -> None:
+        self.assertTrue(
+            _real_is_automation_user(
+                SimpleNamespace(login="ci-bot[bot]", type="Bot")
+            )
+        )
+
+    def test_human_sender_is_not_automation(self) -> None:
+        self.assertFalse(
+            _real_is_automation_user({"login": "alice", "type": "User"})
+        )
+
+    def test_none_sender_is_not_automation(self) -> None:
+        self.assertFalse(_real_is_automation_user(None))
 
 
 if __name__ == "__main__":
