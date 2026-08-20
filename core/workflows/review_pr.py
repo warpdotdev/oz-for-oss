@@ -801,8 +801,7 @@ def _resolve_recommended_reviewers(
 # request another review by commenting ``/oz-review`` on the PR, subject
 # to the per-PR throttle enforced by ``resolve_review_context``.
 RETRIGGER_HINT = (
-    "Comment `/oz-review` on this pull request to retrigger a review "
-    "(up to 3 times on the same pull request)."
+    "Comment `/oz-review` on this pull request to request another review."
 )
 
 _STALE_REVIEW_DISMISSAL_MESSAGE = (

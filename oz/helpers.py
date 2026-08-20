@@ -704,7 +704,7 @@ class WorkflowProgressComment:
     def complete(self, status_line: str) -> None:
         self._append_sections([status_line])
 
-    def report_error(self) -> None:
+    def report_error(self, *, retrigger_hint: str = "") -> None:
         """Update the progress comment to indicate a workflow failure.
 
         ``report_error`` is the last-chance hook before the caller re-raises,
@@ -717,6 +717,10 @@ class WorkflowProgressComment:
         fallback comment write itself fails, surface the problem via logs
         and a CI-compatible ``::error::`` annotation instead of silently
         swallowing the exception.
+
+        *retrigger_hint* is an optional workflow-specific message (e.g.
+        "Comment `/oz-review` to try again.") appended after the error body
+        so users know how to recover without having to read workflow docs.
         """
         run_url = _workflow_run_url()
         if run_url:
@@ -731,6 +735,9 @@ class WorkflowProgressComment:
         if normalized_requester:
             sections.append(f"@{normalized_requester}")
         sections.append(message)
+        normalized_hint = (retrigger_hint or "").strip()
+        if normalized_hint:
+            sections.append(normalized_hint)
         if self.session_link:
             sections.append(_format_progress_link_section(self.session_link))
         body = build_comment_body("\n\n".join(sections), self.metadata)

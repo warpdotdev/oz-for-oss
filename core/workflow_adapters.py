@@ -90,9 +90,11 @@ def record_session_link_safely(progress: Any, run: Any) -> None:
         )
 
 
-def report_workflow_error_with_progress(progress: Any) -> None:
+def report_workflow_error_with_progress(
+    progress: Any, *, retrigger_hint: str = ""
+) -> None:
     try:
-        progress.report_error()
+        progress.report_error(retrigger_hint=retrigger_hint)
     except Exception:
         logger.exception(
             "Failed to update workflow error comment for %s on issue #%s in %s/%s",
@@ -184,7 +186,8 @@ def handlers_for_workflow(
         repo_handle = client.get_repo(state.repo)
         progress = workflow.progress_for_state(repo_handle, state=state)
         record_session_link_safely(progress, run)
-        report_workflow_error_with_progress(progress)
+        retrigger_hint = str(getattr(workflow, "error_retrigger_hint", "") or "")
+        report_workflow_error_with_progress(progress, retrigger_hint=retrigger_hint)
 
     def non_terminal(*, state: RunState, run: Any) -> None:
         client = _client_factory(state.installation_id, github_client_factory)

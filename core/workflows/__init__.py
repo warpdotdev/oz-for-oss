@@ -242,9 +242,90 @@ class BaseWorkflow:
         return make_run_adapter(state=state, progress=progress, run=run)
 
 
+# Retrigger hint included in review-run error comments so users know how to
+# recover from a failed review without consulting the documentation.
+_REVIEW_ERROR_RETRIGGER_HINT = (
+    "Comment `/oz-review` on this pull request to try again."
+)
+
+
+def _is_github_rate_limit_error(exc: Exception) -> bool:
+    """Return True when *exc* looks like a GitHub API rate-limit response.
+
+    Detects both primary rate limits (HTTP 429 / ``RateLimitExceededException``)
+    and secondary rate limits (HTTP 403 with a rate-limit message) so the
+    caller can emit a more specific user-facing message in each case.
+    """
+    try:
+        from github.GithubException import GithubException, RateLimitExceededException
+    except ImportError:
+        return False
+    if isinstance(exc, RateLimitExceededException):
+        return True
+    if isinstance(exc, GithubException):
+        status = int(getattr(exc, "status", 0) or 0)
+        if status == 429:
+            return True
+        if status == 403:
+            # Secondary rate limit: GitHub returns 403 with a message such as
+            # "You have exceeded a secondary rate limit" or "rate limit".
+            data = getattr(exc, "data", None) or {}
+            message = str(
+                data.get("message") if isinstance(data, dict) else data
+            ).lower()
+            if "rate limit" in message or "secondary rate" in message:
+                return True
+    return False
+
+
+def _post_review_context_error_comment(
+    exc: Exception,
+    *,
+    repo_handle: Any,
+    pr_number: int,
+    requester: str,
+    full_name: str,
+) -> None:
+    """Post a user-facing error comment when review context gathering fails.
+
+    Called from :meth:`ReviewWorkflow.build_dispatch` when ``gather_review_context``
+    raises an exception (e.g. due to GitHub API rate-limiting). Posts a comment
+    on the PR so the user knows what happened and how to retry, instead of the
+    webhook silently returning a 500 with no user-visible feedback.
+    """
+    if _is_github_rate_limit_error(exc):
+        error_body = (
+            "GitHub API rate limits prevented Oz from gathering pull request context. "
+            "Please comment `/oz-review` to retry once rate limits reset "
+            "(usually within an hour)."
+        )
+    else:
+        error_body = (
+            "Oz encountered a GitHub API error while gathering pull request context. "
+            "Comment `/oz-review` to retry."
+        )
+    normalized_requester = (requester or "").strip().removeprefix("@")
+    sections: list[str] = []
+    if normalized_requester:
+        sections.append(f"@{normalized_requester}")
+    sections.append(error_body)
+    comment_body = "\n\n".join(sections)
+    try:
+        repo_handle.get_issue(pr_number).create_comment(comment_body)
+    except Exception:
+        logger.exception(
+            "review-pr: failed to post context-gathering error comment for %s PR #%s",
+            full_name,
+            pr_number,
+        )
+
+
 class ReviewWorkflow(BaseWorkflow):
     workflow = WORKFLOW_REVIEW_PR
     config_name = WORKFLOW_REVIEW_PR
+    # Retrigger hint included in run-failure error comments so users know
+    # they can comment /oz-review to try again after a transient failure.
+    error_retrigger_hint = _REVIEW_ERROR_RETRIGGER_HINT
 
     def build_dispatch(
         self,
@@ -342,16 +423,37 @@ class ReviewWorkflow(BaseWorkflow):
                 OWNERSHIP_REPO,
             )
             ownership_repo_handle = None
-        context = review_workflow.gather_review_context(
-            repo_handle,
-            owner=owner,
-            repo=repo,
-            pr_number=pr_number,
-            trigger_source=trigger_source,
-            requester=requester,
-            workspace_path=workspace_path or Path("/tmp"),
-            ownership_repo_handle=ownership_repo_handle,
-        )
+        try:
+            context = review_workflow.gather_review_context(
+                repo_handle,
+                owner=owner,
+                repo=repo,
+                pr_number=pr_number,
+                trigger_source=trigger_source,
+                requester=requester,
+                workspace_path=workspace_path or Path("/tmp"),
+                ownership_repo_handle=ownership_repo_handle,
+            )
+        except Exception as exc:
+            # GitHub API errors (e.g. rate-limiting) during context gathering
+            # would otherwise propagate as a silent 500 from the webhook handler
+            # with no user-visible feedback on the PR. Catch here, post a
+            # comment so the user knows to retry with /oz-review, and return
+            # None to skip dispatch for this delivery.
+            logger.exception(
+                "review-pr: failed to gather review context for %s PR #%s; "
+                "posting error comment and skipping dispatch",
+                full_name,
+                pr_number,
+            )
+            _post_review_context_error_comment(
+                exc,
+                repo_handle=repo_handle,
+                pr_number=pr_number,
+                requester=requester,
+                full_name=full_name,
+            )
+            return None
         return WorkflowDispatch(
             workflow=self.workflow,
             repo=full_name,

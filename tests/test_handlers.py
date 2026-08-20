@@ -112,6 +112,10 @@ class _HandlerTestBase(unittest.TestCase):
             self.progress_instances.append(instance)
             return instance
 
+        # ``core/workflows/__init__.py`` imports ENFORCEMENT_COMMENT_RUN_ID at
+        # module level; the stub must carry it so the first import of
+        # ``core.workflows`` in this test session succeeds.
+        helpers.ENFORCEMENT_COMMENT_RUN_ID = "pr-issue-state-enforcement"  # type: ignore[attr-defined]
         helpers.WorkflowProgressComment = MagicMock(  # type: ignore[attr-defined]
             side_effect=_progress_factory
         )
@@ -220,6 +224,21 @@ class ReviewHandlersTest(_HandlerTestBase):
         # uses it to surface the error message in-place.
         self.assertEqual(len(self.progress_instances), 1)
         self.progress_instances[0].report_error.assert_called_once()
+
+    def test_failure_handler_passes_review_retrigger_hint(self) -> None:
+        """The review failure handler passes a /oz-review retrigger hint to report_error."""
+        from core.handlers import build_review_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_review_handlers(_factory(github_client))
+
+        state = _state("review-pull-request")
+        handlers.failure_handler(state=state, run=MagicMock(state="FAILED"))
+
+        call_kwargs = self.progress_instances[0].report_error.call_args.kwargs
+        self.assertIn("retrigger_hint", call_kwargs)
+        self.assertIn("/oz-review", call_kwargs["retrigger_hint"])
 
     def test_non_terminal_handler_records_session_link(self) -> None:
         from core.handlers import build_review_handlers
@@ -405,6 +424,19 @@ class TriageHandlersTest(_HandlerTestBase):
         handlers.failure_handler(state=self._state(), run=MagicMock(state="FAILED"))
         self.assertEqual(len(self.progress_instances), 1)
         self.progress_instances[0].report_error.assert_called_once()
+
+    def test_failure_handler_passes_no_retrigger_hint_for_triage(self) -> None:
+        """Non-review workflows do not pass a retrigger hint to report_error."""
+        from core.handlers import build_triage_handlers
+
+        github_client = MagicMock()
+        github_client.get_repo.return_value = MagicMock(name="repo")
+        handlers = build_triage_handlers(_factory(github_client))
+        handlers.failure_handler(state=self._state(), run=MagicMock(state="FAILED"))
+
+        call_kwargs = self.progress_instances[0].report_error.call_args.kwargs
+        self.assertIn("retrigger_hint", call_kwargs)
+        self.assertEqual(call_kwargs["retrigger_hint"], "")
 
     def test_non_terminal_handler_records_session_link(self) -> None:
         from core.handlers import build_triage_handlers
