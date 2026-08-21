@@ -326,7 +326,7 @@ def _format_pr_issue_state_failure_message(
             f"This PR is linked to {issue_text}, but no linked issue is marked "
             f"`{required_label}` yet. Only repository maintainers apply that label, "
             "so please wait for a maintainer to mark the issue. Once it is marked, "
-            "push a new commit or comment `/oz-review` to re-trigger review."
+            "push a new commit or comment `/warp-agent-review` to re-trigger review."
         )
     else:
         sections.append(
@@ -337,7 +337,7 @@ def _format_pr_issue_state_failure_message(
             "then link it to this PR by adding `Closes #123` to the PR description "
             "(or using the \"Development\" sidebar on GitHub). A maintainer will "
             f"mark the issue `{required_label}` when it is ready. Once it is marked, "
-            "comment `/oz-review` to re-trigger review."
+            "comment `/warp-agent-review` to re-trigger review."
         )
     if contributing_url:
         sections.append(
@@ -798,9 +798,19 @@ def _resolve_recommended_reviewers(
 
 
 # Hint appended to review-related comments so reviewers know they can
-# request another review by commenting ``/oz-review`` on the PR, subject
-# to the per-PR throttle enforced by ``resolve_review_context``.
+# request another review by commenting ``/warp-agent-review`` on the PR,
+# subject to the per-PR throttle enforced by ``resolve_review_context``.
 RETRIGGER_HINT = (
+    "Comment `/warp-agent-review` on this pull request to retrigger a review "
+    "(up to 3 times on the same pull request)."
+)
+
+# The pre-rename form of ``RETRIGGER_HINT``. Historical Oz reviews on
+# existing PRs still carry this exact text, so
+# ``_is_stale_oz_changes_requested_review`` must keep matching it to
+# continue dismissing stale request-changes reviews posted before the
+# command was renamed.
+_LEGACY_RETRIGGER_HINT = (
     "Comment `/oz-review` on this pull request to retrigger a review "
     "(up to 3 times on the same pull request)."
 )
@@ -811,7 +821,7 @@ _STALE_REVIEW_DISMISSAL_MESSAGE = (
 
 
 def _with_retrigger_hint(message: str) -> str:
-    """Append the ``/oz-review`` retrigger hint to a progress message."""
+    """Append the ``/warp-agent-review`` retrigger hint to a progress message."""
     base = message.rstrip()
     if not base:
         return RETRIGGER_HINT
@@ -845,7 +855,11 @@ def _is_stale_oz_changes_requested_review(review: Any) -> bool:
     body = str(getattr(review, "body", "") or "")
     if not is_automation_user(getattr(review, "user", None)):
         return False
-    return POWERED_BY_SUFFIX in body or RETRIGGER_HINT in body
+    return (
+        POWERED_BY_SUFFIX in body
+        or RETRIGGER_HINT in body
+        or _LEGACY_RETRIGGER_HINT in body
+    )
 
 
 def _dismiss_stale_oz_changes_requested_reviews(

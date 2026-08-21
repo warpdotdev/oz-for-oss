@@ -22,7 +22,7 @@ from core.routing import (
     WORKFLOW_REVIEW_PR,
     WORKFLOW_TRIAGE_NEW_ISSUES,
     WORKFLOW_VERIFY_PR_COMMENT,
-    has_oz_review_command,
+    has_review_command,
 )
 from core.state import RunState
 from core.workflow_adapters import reconstruct_progress
@@ -163,7 +163,7 @@ def _explicit_review_invocations_in_window(
 ) -> tuple[int, datetime | None]:
     """Count Oz review progress comments on *pr* within the rolling 24-hour window.
 
-    Each dispatched /oz-review run produces one bot-authored issue comment
+    Each dispatched /warp-agent-review run produces one bot-authored issue comment
     carrying the ``review-pull-request`` workflow metadata. Progress comments
     are the unit of counting; enforcement-only comments (identified by the
     ``pr-issue-state-enforcement`` run_id) are excluded because no review run
@@ -225,7 +225,7 @@ def _is_explicit_review_invocation(payload: Mapping[str, Any]) -> bool:
     comment = payload.get("comment")
     if not isinstance(comment, dict):
         return False
-    return has_oz_review_command(str(comment.get("body") or ""))
+    return has_review_command(str(comment.get("body") or ""))
 
 
 class BaseWorkflow:
@@ -272,7 +272,7 @@ class ReviewWorkflow(BaseWorkflow):
                 # still honor the request rather than silently dropping a
                 # legitimate review trigger.
                 logger.exception(
-                    "Failed to count explicit /oz-review invocations for %s PR #%s; allowing review",
+                    "Failed to count explicit /warp-agent-review invocations for %s PR #%s; allowing review",
                     full_name,
                     pr_number,
                 )
@@ -285,7 +285,7 @@ class ReviewWorkflow(BaseWorkflow):
             )
             if invocation_count >= MAX_DAILY_REVIEW_INVOCATIONS:
                 logger.info(
-                    "Skipping /oz-review for %s PR #%s: %s prior runs in window meets/exceeds daily limit %s",
+                    "Skipping /warp-agent-review for %s PR #%s: %s prior runs in window meets/exceeds daily limit %s",
                     full_name,
                     pr_number,
                     invocation_count,
@@ -293,7 +293,7 @@ class ReviewWorkflow(BaseWorkflow):
                 )
                 try:
                     repo_handle.get_issue(pr_number).create_comment(
-                        f"You've used all {MAX_DAILY_REVIEW_INVOCATIONS} `/oz-review` slots "
+                        f"You've used all {MAX_DAILY_REVIEW_INVOCATIONS} `/warp-agent-review` slots "
                         f"for the current 24-hour window.{retry_suffix}"
                     )
                 except Exception:
@@ -306,7 +306,7 @@ class ReviewWorkflow(BaseWorkflow):
             if invocation_count == MAX_DAILY_REVIEW_INVOCATIONS - 1:
                 try:
                     repo_handle.get_issue(pr_number).create_comment(
-                        f"This is your last `/oz-review` for the current 24-hour window.{retry_suffix}"
+                        f"This is your last `/warp-agent-review` for the current 24-hour window.{retry_suffix}"
                     )
                 except Exception:
                     logger.exception(
