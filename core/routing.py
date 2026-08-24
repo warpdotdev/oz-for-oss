@@ -32,7 +32,7 @@ Webhook coverage today:
     when the linked issue carries ``ready-to-implement`` and
     ``oz-agent`` is assigned.
 - ``pull_request_review_comment`` events route to
-  ``review-pull-request`` (``/oz-review``), ``verify-pr-comment``
+  ``review-pull-request`` (``/warp-agent-review``), ``verify-pr-comment``
   (``/oz-verify``), or ``respond-to-pr-comment`` (``@oz-agent``).
 - ``pull_request_review`` events route to ``respond-to-pr-comment``
   when the review body mentions ``@oz-agent``.
@@ -105,27 +105,37 @@ READY_TO_IMPLEMENT_LABEL = "ready-to-implement"
 AUTO_IMPLEMENT_LABEL = "auto-implement"
 
 OZ_AGENT_MENTION = "@oz-agent"
-OZ_REVIEW_COMMAND = "/oz-review"
+WARP_AGENT_REVIEW_COMMAND = "/warp-agent-review"
 OZ_VERIFY_COMMAND = "/oz-verify"
-OZ_REVIEW_COMMAND_PATTERN = re.compile(
-    r"(?:^|\s)(?:/oz-review|@oz-agent\s+/review)(?![-\w])", re.IGNORECASE
+# ``/oz-review`` was the original name of this command before it was
+# renamed to ``/warp-agent-review``. It is kept as an undocumented,
+# backwards-compatible alias — never advertised in new user-facing text —
+# so in-flight PRs and already-published docs that still reference it
+# keep working.
+REVIEW_COMMAND_PATTERN = re.compile(
+    r"(?:^|\s)(?:/warp-agent-review|/oz-review|@oz-agent\s+/review)(?![-\w])",
+    re.IGNORECASE,
 )
 MAX_DAILY_REVIEW_INVOCATIONS = 5
 
 # Repos whose bot-authored PRs should be skipped for automatic oz review.
 # warp-dev-github-integration[bot] (user ID 240773466) opens PRs in these
 # repos that already have their own automated review, so dispatching a
-# second oz review run would produce duplicate comments. Explicit /oz-review
-# triggers are unaffected. This is intentionally hardcoded for now —
-# remove once oz-for-oss is retired.
+# second oz review run would produce duplicate comments. Explicit
+# /warp-agent-review triggers are unaffected. This is intentionally
+# hardcoded for now — remove once oz-for-oss is retired.
 _SKIP_BOT_REVIEW: dict[str, frozenset[int]] = {
     "warpdotdev/warp": frozenset({240773466}),
     "warpdotdev/warp-server": frozenset({240773466}),
 }
 
-def has_oz_review_command(body: str) -> bool:
-    """Return whether *body* carries an explicit Oz review invocation."""
-    return bool(OZ_REVIEW_COMMAND_PATTERN.search(body or ""))
+def has_review_command(body: str) -> bool:
+    """Return whether *body* carries an explicit Oz review invocation.
+
+    Matches ``/warp-agent-review``, the legacy ``/oz-review`` alias, or
+    the ``@oz-agent /review`` mention form.
+    """
+    return bool(REVIEW_COMMAND_PATTERN.search(body or ""))
 
 
 @dataclass(frozen=True)
@@ -225,8 +235,8 @@ def _route_issue_comment(payload: dict[str, Any]) -> RouteDecision:
         return _route_plain_issue_comment(issue=issue, comment=comment, body=body)
     if OZ_VERIFY_COMMAND in body:
         return RouteDecision(WORKFLOW_VERIFY_PR_COMMENT, "/oz-verify on PR comment")
-    if has_oz_review_command(body):
-        return RouteDecision(WORKFLOW_REVIEW_PR, "/oz-review on PR comment")
+    if has_review_command(body):
+        return RouteDecision(WORKFLOW_REVIEW_PR, "/warp-agent-review on PR comment")
     if OZ_AGENT_MENTION in body:
         return RouteDecision(WORKFLOW_RESPOND_TO_PR_COMMENT, "@oz-agent mention on PR")
     return RouteDecision(None, "PR comment without Oz command or mention")
@@ -496,8 +506,8 @@ def _route_pull_request_review_comment(payload: dict[str, Any]) -> RouteDecision
     if _is_bot(comment.get("user")):
         return RouteDecision(None, "review comment authored by automation user")
     body = str(comment.get("body") or "")
-    if has_oz_review_command(body):
-        return RouteDecision(WORKFLOW_REVIEW_PR, "/oz-review on review comment")
+    if has_review_command(body):
+        return RouteDecision(WORKFLOW_REVIEW_PR, "/warp-agent-review on review comment")
     if OZ_VERIFY_COMMAND in body:
         return RouteDecision(WORKFLOW_VERIFY_PR_COMMENT, "/oz-verify on review comment")
     if OZ_AGENT_MENTION in body:
@@ -563,15 +573,15 @@ __all__ = [
     "NEEDS_INFO_LABEL",
     "OZ_AGENT_LOGIN",
     "OZ_AGENT_MENTION",
-    "OZ_REVIEW_COMMAND",
-    "OZ_REVIEW_COMMAND_PATTERN",
     "OZ_VERIFY_COMMAND",
     "OZ_REVIEW_LABEL",
     "PLAN_APPROVED_LABEL",
     "READY_TO_IMPLEMENT_LABEL",
     "READY_TO_SPEC_LABEL",
+    "REVIEW_COMMAND_PATTERN",
     "RouteDecision",
     "TRIAGED_LABEL",
+    "WARP_AGENT_REVIEW_COMMAND",
     "WORKFLOW_ANNOUNCE_READY_ISSUE",
     "WORKFLOW_CANCEL_REVIEW_RUNS",
     "WORKFLOW_CREATE_IMPLEMENTATION_FROM_ISSUE",
@@ -581,7 +591,7 @@ __all__ = [
     "WORKFLOW_REVIEW_PR",
     "WORKFLOW_TRIAGE_NEW_ISSUES",
     "WORKFLOW_VERIFY_PR_COMMENT",
-    "has_oz_review_command",
+    "has_review_command",
     "needs_triage_bot_author_allowlist",
     "route_event",
 ]

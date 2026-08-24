@@ -788,6 +788,47 @@ class ApplyReviewResultVerdictTest(unittest.TestCase):
         pr.create_review.assert_not_called()
         progress.complete.assert_called_once()
 
+    def test_approve_dismisses_legacy_oz_review_hint_request_changes_review(self) -> None:
+        # Reviews posted before the /oz-review -> /warp-agent-review rename
+        # carry this literal hint text. Spelled out verbatim (rather than via
+        # _LEGACY_RETRIGGER_HINT) so this test still fails if that
+        # compatibility branch is ever edited out from under it.
+        legacy_hint = (
+            "Comment `/oz-review` on this pull request to retrigger a review "
+            "(up to 3 times on the same pull request)."
+        )
+        stale_review = self._make_review(
+            state="CHANGES_REQUESTED",
+            body=f"Needs work\n\n{legacy_hint}",
+        )
+        human_review = self._make_review(
+            state="CHANGES_REQUESTED",
+            body=f"Please address this human feedback.\n\n{legacy_hint}",
+            is_bot=False,
+        )
+        dismissed_review = self._make_review(
+            state="DISMISSED",
+            body=f"Outdated\n\n{legacy_hint}",
+        )
+        pr = MagicMock()
+        pr.get_reviews.return_value = [
+            human_review,
+            stale_review,
+            dismissed_review,
+        ]
+        github = self._make_github(pr)
+        progress = MagicMock()
+        apply_review_result(
+            github,
+            context=self._make_context(is_non_member=False),
+            run=MagicMock(),
+            result={"verdict": "APPROVE", "summary": "", "comments": []},
+            progress=progress,
+        )
+        stale_review.dismiss.assert_called_once()
+        human_review.dismiss.assert_not_called()
+        dismissed_review.dismiss.assert_not_called()
+
     def test_reject_member_pr_with_no_feedback_short_circuits(self) -> None:
         pr = MagicMock()
         github = self._make_github(pr)

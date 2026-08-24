@@ -182,7 +182,7 @@ class BuildReviewRequestTest(_BuilderTestBase):
             "sender": {"login": "alice"},
         }
 
-    def _explicit_review_payload(self, body: str = "/oz-review") -> dict[str, Any]:
+    def _explicit_review_payload(self, body: str = "/warp-agent-review") -> dict[str, Any]:
         return {
             "action": "created",
             "repository": {"full_name": "acme/widgets"},
@@ -317,7 +317,7 @@ class BuildReviewRequestTest(_BuilderTestBase):
         # Advisory comment must be posted when the daily limit is reached.
         repo.get_issue.assert_called_with(42)
         advisory_body: str = repo.get_issue.return_value.create_comment.call_args[0][0]
-        self.assertIn("last `/oz-review`", advisory_body)
+        self.assertIn("last `/warp-agent-review`", advisory_body)
         self.assertIn("24-hour window", advisory_body)
 
     def test_skips_review_when_issue_state_enforcement_blocks(self) -> None:
@@ -370,14 +370,14 @@ class BuildReviewRequestTest(_BuilderTestBase):
         # Blocked comment must be posted when the limit is exceeded.
         repo.get_issue.assert_called_with(42)
         blocked_body: str = repo.get_issue.return_value.create_comment.call_args[0][0]
-        self.assertIn("all 5 `/oz-review` slots", blocked_body)
+        self.assertIn("all 5 `/warp-agent-review` slots", blocked_body)
         self.assertIn("24-hour window", blocked_body)
 
     def test_only_bot_progress_comments_count_toward_limit(self) -> None:
         from core.builders import build_review_request
 
-        # 3 bot progress comments count; user /oz-review commands and
-        # enforcement comments do not.
+        # 3 bot progress comments count; user /warp-agent-review commands
+        # and enforcement comments do not.
         enforcement_comment = SimpleNamespace(
             body=(
                 '<!-- oz-agent-metadata: {"type":"issue-status","workflow":"review-pull-request"'
@@ -392,7 +392,7 @@ class BuildReviewRequestTest(_BuilderTestBase):
                 self._bot_progress_comment(),
                 self._bot_progress_comment(),
                 enforcement_comment,
-                self._review_comment("/oz-review from user alice"),
+                self._review_comment("/warp-agent-review from user alice"),
             ],
         )
 
@@ -438,7 +438,7 @@ class BuildReviewRequestTest(_BuilderTestBase):
         # posted but review proceeds.
         self.assertIsNotNone(request)
         advisory_body: str = repo.get_issue.return_value.create_comment.call_args[0][0]
-        self.assertIn("last `/oz-review`", advisory_body)
+        self.assertIn("last `/warp-agent-review`", advisory_body)
         review_module = sys.modules["workflows.review_pr"]
         review_module.gather_review_context.assert_called_once()  # type: ignore[attr-defined]
 
