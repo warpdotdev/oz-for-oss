@@ -10,3 +10,9 @@ Agent-backed work runs through a Vercel-hosted webhook control plane (`api/`, `c
 - [Architecture](docs/architecture.md) — repository layout and the end-to-end webhook flow.
 - [Onboarding](docs/onboarding.md) — install the GitHub App and deploy the Vercel control plane.
 - [Contributing](CONTRIBUTING.md) — issue/PR workflow, label conventions, and local development.
+
+## Automate development with Warp Factories
+
+The agentic workflows this repo runs for issue triage, spec drafting, PR review, and implementation are one instance of a broader idea: [Warp Factories](https://www.warp.dev/factories), open infrastructure for cloud software factories — factories as code, on any model or harness, with evals, benchmarks, and self-improvement built in. Set up your first factory in about 5 minutes and build it out over time.
+
+[Request early access](https://www.warp.dev/factories/request-access), or read more in the [Warp Factories docs](https://docs.warp.dev/factories).
