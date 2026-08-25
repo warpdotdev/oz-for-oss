@@ -10,9 +10,3 @@ Agent-backed work runs through a Vercel-hosted webhook control plane (`api/`, `c
 - [Architecture](docs/architecture.md) — repository layout and the end-to-end webhook flow.
 - [Onboarding](docs/onboarding.md) — install the GitHub App and deploy the Vercel control plane.
 - [Contributing](CONTRIBUTING.md) — issue/PR workflow, label conventions, and local development.
-
-## Have an open-source project?
-
-Actively maintained open-source projects can apply for the [Oz Open Source Partnership](https://docs.warp.dev/support-and-community/community/open-source-partnership) to receive free Oz credits for using these workflows. Accepted projects can use Oz agents for tasks like issue triage, pull request review, documentation, and implementation support across their repositories.
-
-To apply, [fill out the application form](https://tally.so/r/LZWxqG) and we'll be in touch.
