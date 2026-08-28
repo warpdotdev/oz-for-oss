@@ -11,8 +11,10 @@ Agent-backed work runs through a Vercel-hosted webhook control plane (`api/`, `c
 - [Onboarding](docs/onboarding.md) — install the GitHub App and deploy the Vercel control plane.
 - [Contributing](CONTRIBUTING.md) — issue/PR workflow, label conventions, and local development.
 
-## Have an open-source project?
+## Automate development with Warp Factories
 
-Actively maintained open-source projects can apply for the [Oz Open Source Partnership](https://docs.warp.dev/support-and-community/community/open-source-partnership) to receive free Oz credits for using these workflows. Accepted projects can use Oz agents for tasks like issue triage, pull request review, documentation, and implementation support across their repositories.
+We're bringing the concepts found in this project to [Warp Factories](warp.dev/factories).
 
-To apply, [fill out the application form](https://tally.so/r/LZWxqG) and we'll be in touch.
+Warp Factories provide open, flexible infrastructure to automate triage, spec drafting, PR review, and implementation. They also bring evals, benchmarks, and self-improvement that work from your team's own conversation data.
+
+[Request early access](https://www.warp.dev/factories/request-access), or read more in the [Warp Factories docs](https://docs.warp.dev/factories).
