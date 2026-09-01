@@ -829,6 +829,43 @@ class ApplyReviewResultVerdictTest(unittest.TestCase):
         human_review.dismiss.assert_not_called()
         dismissed_review.dismiss.assert_not_called()
 
+    def test_approve_dismisses_legacy_powered_by_oz_request_changes_review(self) -> None:
+        # Reviews posted before the footer switched from Oz to Warp still
+        # carry this exact suffix. Spelled out verbatim so this test fails
+        # if that compatibility branch is removed.
+        legacy_suffix = "_Powered by [Oz](https://oz.warp.dev)_"
+        stale_review = self._make_review(
+            state="CHANGES_REQUESTED",
+            body=f"Needs work\n\n{legacy_suffix}",
+        )
+        human_review = self._make_review(
+            state="CHANGES_REQUESTED",
+            body=f"Please address this human feedback.\n\n{legacy_suffix}",
+            is_bot=False,
+        )
+        dismissed_review = self._make_review(
+            state="DISMISSED",
+            body=f"Outdated\n\n{legacy_suffix}",
+        )
+        pr = MagicMock()
+        pr.get_reviews.return_value = [
+            human_review,
+            stale_review,
+            dismissed_review,
+        ]
+        github = self._make_github(pr)
+        progress = MagicMock()
+        apply_review_result(
+            github,
+            context=self._make_context(is_non_member=False),
+            run=MagicMock(),
+            result={"verdict": "APPROVE", "summary": "", "comments": []},
+            progress=progress,
+        )
+        stale_review.dismiss.assert_called_once()
+        human_review.dismiss.assert_not_called()
+        dismissed_review.dismiss.assert_not_called()
+
     def test_reject_member_pr_with_no_feedback_short_circuits(self) -> None:
         pr = MagicMock()
         github = self._make_github(pr)
@@ -860,6 +897,7 @@ class ApplyReviewResultVerdictTest(unittest.TestCase):
         self.assertEqual(kwargs["event"], "REQUEST_CHANGES")
         # The placeholder body keeps the call valid for GitHub.
         self.assertIn("Automated review", kwargs["body"])
+        self.assertIn(POWERED_BY_SUFFIX, kwargs["body"])
 
     def test_approve_with_no_feedback_short_circuits(self) -> None:
         pr = MagicMock()
