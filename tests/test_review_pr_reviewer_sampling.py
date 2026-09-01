@@ -829,6 +829,44 @@ class ApplyReviewResultVerdictTest(unittest.TestCase):
         human_review.dismiss.assert_not_called()
         dismissed_review.dismiss.assert_not_called()
 
+    def test_approve_dismisses_legacy_oz_footer_request_changes_review(self) -> None:
+        # Reviews posted before the Powered-by footer was rebranded from Oz
+        # to Warp may carry only this suffix, with no retrigger hint. Spelled
+        # out verbatim so this test still fails if that provenance check is
+        # edited out from under it.
+        legacy_footer = "_Powered by [Oz](https://oz.warp.dev)_"
+        stale_review = self._make_review(
+            state="CHANGES_REQUESTED",
+            body=legacy_footer,
+        )
+        human_review = self._make_review(
+            state="CHANGES_REQUESTED",
+            body=legacy_footer,
+            is_bot=False,
+        )
+        dismissed_review = self._make_review(
+            state="DISMISSED",
+            body=legacy_footer,
+        )
+        pr = MagicMock()
+        pr.get_reviews.return_value = [
+            human_review,
+            stale_review,
+            dismissed_review,
+        ]
+        github = self._make_github(pr)
+        progress = MagicMock()
+        apply_review_result(
+            github,
+            context=self._make_context(is_non_member=False),
+            run=MagicMock(),
+            result={"verdict": "APPROVE", "summary": "", "comments": []},
+            progress=progress,
+        )
+        stale_review.dismiss.assert_called_once()
+        human_review.dismiss.assert_not_called()
+        dismissed_review.dismiss.assert_not_called()
+
     def test_reject_member_pr_with_no_feedback_short_circuits(self) -> None:
         pr = MagicMock()
         github = self._make_github(pr)

@@ -21,6 +21,7 @@ from oz.helpers import (
     is_automation_user,
     is_oz_bot_user,
     is_spec_only_pr,
+    LEGACY_POWERED_BY_SUFFIX,
     ORG_MEMBER_ASSOCIATIONS,
     POWERED_BY_SUFFIX,
     resolve_pr_association,
@@ -857,6 +858,7 @@ def _is_stale_oz_changes_requested_review(review: Any) -> bool:
         return False
     return (
         POWERED_BY_SUFFIX in body
+        or LEGACY_POWERED_BY_SUFFIX in body
         or RETRIGGER_HINT in body
         or _LEGACY_RETRIGGER_HINT in body
     )

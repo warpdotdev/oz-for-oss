@@ -300,13 +300,15 @@ def split_comment_body(body: str, metadata: str) -> tuple[str, str]:
     return body.strip(), metadata
 
 
-# Historical footer still present on in-flight comments. Strip it on
-# rebuild so a mid-run edit does not leave both Oz and Warp suffixes.
-_LEGACY_POWERED_BY_SUFFIX = "_Powered by [Oz](https://oz.warp.dev)_"
+# Historical Oz footer still present on in-flight comments and on already-
+# posted CHANGES_REQUESTED reviews. Strip it on comment rebuild so a mid-run
+# edit does not leave both Oz and Warp suffixes, and keep matching it when
+# dismissing stale bot reviews.
+LEGACY_POWERED_BY_SUFFIX = "_Powered by [Oz](https://oz.warp.dev)_"
 # Italicized suffix appended to every bot-authored progress comment and
 # auto-generated PR body so readers can click through to Warp.
 POWERED_BY_SUFFIX = "_Powered by [Warp](https://warp.dev)_"
-_POWERED_BY_SUFFIXES = frozenset({POWERED_BY_SUFFIX, _LEGACY_POWERED_BY_SUFFIX})
+_POWERED_BY_SUFFIXES = frozenset({POWERED_BY_SUFFIX, LEGACY_POWERED_BY_SUFFIX})
 
 
 def build_comment_body(content: str, metadata: str) -> str:
@@ -314,7 +316,7 @@ def build_comment_body(content: str, metadata: str) -> str:
     # Strip any previously-appended suffix so the one added below stays a
     # single, trailing section regardless of how many times the body is
     # rebuilt (e.g. across append/edit cycles).
-    for suffix in (POWERED_BY_SUFFIX, _LEGACY_POWERED_BY_SUFFIX):
+    for suffix in (POWERED_BY_SUFFIX, LEGACY_POWERED_BY_SUFFIX):
         if content.endswith(suffix):
             content = content[: -len(suffix)].rstrip()
     if content:
