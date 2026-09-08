@@ -17,6 +17,8 @@ from core.workflows.triage_new_issues import (
     COMMENT_TYPE_TRIAGE,
     NEEDS_SUPPORT_LABEL,
     FACTORY_AUTO_IMPLEMENT_LABEL,
+    PRIMARY_TRIAGE_LABELS,
+    PRIORITY_LABELS,
     RESPONSE_DETAILS_SUMMARY,
     RESPONSE_FALLBACK_BODY,
     TRIAGE_DISCLAIMER,
@@ -714,6 +716,116 @@ class ApplyTriageResultTest(unittest.TestCase):
         self.assertIn("triaged", github.removed_labels)
         self.assertIn("bug", github.removed_labels)
         self.assertNotIn("triaged", github.added_labels)
+
+    def test_applies_feature_security_and_priority_high(self) -> None:
+        github = FakeTriageGitHubClient()
+        issue = github.issue({
+            "number": 60,
+            "labels": [],
+            "body": "Original body",
+        })
+        apply_triage_result(
+            github,
+            "acme",
+            "widgets",
+            issue,
+            result={
+                "labels": ["feature", "security", "priority:high"],
+                "issue_body": "## Triage summary",
+            },
+            configured_labels={
+                "triaged": {"color": "0E8A16", "description": "done"},
+                "feature": {"color": "f47f64", "description": "feature"},
+                "security": {"color": "e11d48", "description": "security"},
+                "priority:high": {"color": "b60205", "description": "priority"},
+            },
+            repo_labels={
+                "triaged": {"name": "triaged"},
+                "feature": {"name": "feature"},
+                "security": {"name": "security"},
+                "priority:high": {"name": "priority:high"},
+            },
+        )
+        self.assertEqual(
+            github.added_labels,
+            ["feature", "security", "priority:high", "triaged"],
+        )
+
+    def test_replaces_prior_primary_labels_and_preserves_priority_high(self) -> None:
+        github = FakeTriageGitHubClient()
+        issue = github.issue({
+            "number": 61,
+            "labels": [
+                {"name": "bug"},
+                {"name": "priority:high"},
+                {"name": "triaged"},
+            ],
+            "body": "Original body",
+        })
+        apply_triage_result(
+            github,
+            "acme",
+            "widgets",
+            issue,
+            result={
+                "labels": ["feature"],
+                "issue_body": "## Retriage",
+            },
+            configured_labels={
+                "triaged": {"color": "0E8A16", "description": "done"},
+                "bug": {"color": "D73A4A", "description": "bug"},
+                "feature": {"color": "f47f64", "description": "feature"},
+                "priority:high": {"color": "b60205", "description": "priority"},
+            },
+            repo_labels={
+                "triaged": {"name": "triaged"},
+                "bug": {"name": "bug"},
+                "feature": {"name": "feature"},
+                "priority:high": {"name": "priority:high"},
+            },
+        )
+        self.assertEqual(github.removed_labels, ["bug"])
+        self.assertIn("feature", github.added_labels)
+        self.assertIn("priority:high", github.added_labels)
+        self.assertIn("triaged", github.added_labels)
+
+    def test_replaces_feature_and_security_on_retriage(self) -> None:
+        github = FakeTriageGitHubClient()
+        issue = github.issue({
+            "number": 62,
+            "labels": [
+                {"name": "feature"},
+                {"name": "triaged"},
+            ],
+            "body": "Original body",
+        })
+        apply_triage_result(
+            github,
+            "acme",
+            "widgets",
+            issue,
+            result={
+                "labels": ["security", "priority:high"],
+                "issue_body": "## Security vulnerability",
+            },
+            configured_labels={
+                "triaged": {"color": "0E8A16", "description": "done"},
+                "feature": {"color": "f47f64", "description": "feature"},
+                "security": {"color": "e11d48", "description": "security"},
+                "priority:high": {"color": "b60205", "description": "priority"},
+            },
+            repo_labels={
+                "triaged": {"name": "triaged"},
+                "feature": {"name": "feature"},
+                "security": {"name": "security"},
+                "priority:high": {"name": "priority:high"},
+            },
+        )
+        self.assertEqual(github.removed_labels, ["feature"])
+        self.assertEqual(
+            github.added_labels,
+            ["security", "priority:high", "triaged"],
+        )
 
 
 class ExtractDuplicateOfTest(unittest.TestCase):

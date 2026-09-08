@@ -8,6 +8,18 @@
       "color": "D73A4A",
       "description": "Something is not working as expected"
     },
+    "feature": {
+      "color": "f47f64",
+      "description": "This issue is a feature request, not a bug report."
+    },
+    "security": {
+      "color": "e11d48",
+      "description": "Security vulnerability or report."
+    },
+    "priority:high": {
+      "color": "b60205",
+      "description": "High-priority regression, crash, data loss, or security issue."
+    },
     "enhancement": {
       "color": "A2EEEF",
       "description": "New capability or improvement request"
