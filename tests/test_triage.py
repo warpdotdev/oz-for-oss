@@ -730,25 +730,25 @@ class ApplyTriageResultTest(unittest.TestCase):
             "widgets",
             issue,
             result={
-                "labels": ["agent:feature", "agent:security", "priority:high"],
+                "labels": ["agent:feature", "agent:security", "agent:priority-high"],
                 "issue_body": "## Triage summary",
             },
             configured_labels={
                 "triaged": {"color": "0E8A16", "description": "done"},
                 "agent:feature": {"color": "f47f64", "description": "feature"},
                 "agent:security": {"color": "a0ce9f", "description": "security"},
-                "priority:high": {"color": "b60205", "description": "priority"},
+                "agent:priority-high": {"color": "b60205", "description": "priority"},
             },
             repo_labels={
                 "triaged": {"name": "triaged"},
                 "agent:feature": {"name": "agent:feature"},
                 "agent:security": {"name": "agent:security"},
-                "priority:high": {"name": "priority:high"},
+                "agent:priority-high": {"name": "agent:priority-high"},
             },
         )
         self.assertEqual(
             github.added_labels,
-            ["agent:feature", "agent:security", "priority:high", "triaged"],
+            ["agent:feature", "agent:security", "agent:priority-high", "triaged"],
         )
 
     def test_replaces_prior_primary_labels_and_preserves_priority_high(self) -> None:
@@ -757,7 +757,7 @@ class ApplyTriageResultTest(unittest.TestCase):
             "number": 61,
             "labels": [
                 {"name": "agent:bug"},
-                {"name": "priority:high"},
+                {"name": "agent:priority-high"},
                 {"name": "triaged"},
             ],
             "body": "Original body",
@@ -775,18 +775,18 @@ class ApplyTriageResultTest(unittest.TestCase):
                 "triaged": {"color": "0E8A16", "description": "done"},
                 "agent:bug": {"color": "8ff8fd", "description": "bug"},
                 "agent:feature": {"color": "f47f64", "description": "feature"},
-                "priority:high": {"color": "b60205", "description": "priority"},
+                "agent:priority-high": {"color": "b60205", "description": "priority"},
             },
             repo_labels={
                 "triaged": {"name": "triaged"},
                 "agent:bug": {"name": "agent:bug"},
                 "agent:feature": {"name": "agent:feature"},
-                "priority:high": {"name": "priority:high"},
+                "agent:priority-high": {"name": "agent:priority-high"},
             },
         )
         self.assertEqual(github.removed_labels, ["agent:bug"])
         self.assertIn("agent:feature", github.added_labels)
-        self.assertIn("priority:high", github.added_labels)
+        self.assertIn("agent:priority-high", github.added_labels)
         self.assertIn("triaged", github.added_labels)
 
     def test_replaces_feature_and_security_on_retriage(self) -> None:
@@ -805,26 +805,26 @@ class ApplyTriageResultTest(unittest.TestCase):
             "widgets",
             issue,
             result={
-                "labels": ["agent:security", "priority:high"],
+                "labels": ["agent:security", "agent:priority-high"],
                 "issue_body": "## Security vulnerability",
             },
             configured_labels={
                 "triaged": {"color": "0E8A16", "description": "done"},
                 "agent:feature": {"color": "f47f64", "description": "feature"},
                 "agent:security": {"color": "a0ce9f", "description": "security"},
-                "priority:high": {"color": "b60205", "description": "priority"},
+                "agent:priority-high": {"color": "b60205", "description": "priority"},
             },
             repo_labels={
                 "triaged": {"name": "triaged"},
                 "agent:feature": {"name": "agent:feature"},
                 "agent:security": {"name": "agent:security"},
-                "priority:high": {"name": "priority:high"},
+                "agent:priority-high": {"name": "agent:priority-high"},
             },
         )
         self.assertEqual(github.removed_labels, ["agent:feature"])
         self.assertEqual(
             github.added_labels,
-            ["agent:security", "priority:high", "triaged"],
+            ["agent:security", "agent:priority-high", "triaged"],
         )
 
 

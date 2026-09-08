@@ -24,9 +24,9 @@
       "color": "5f966f",
       "description": "Missing documentation. Assigned by Warp triage agent."
     },
-    "priority:high": {
+    "agent:priority-high": {
       "color": "b60205",
-      "description": "High-priority issues that are immediately escalated for internal review."
+      "description": "High-priority issues that are immediately escalated. Assigned by Warp triage agent."
     },
     "enhancement": {
       "color": "A2EEEF",
