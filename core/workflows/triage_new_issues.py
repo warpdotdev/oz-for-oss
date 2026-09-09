@@ -55,7 +55,7 @@ PRIMARY_TRIAGE_LABELS = {
     "needs-info",
     "triaged",
 }
-PRIORITY_LABELS = {"agent:priority-high", "priority:high"}
+PRIORITY_LABELS = {"agent:priority-high"}
 REPRO_LABEL_PREFIX = "repro:"
 AGENT_PROHIBITED_LABELS = {"ready-to-implement", "ready-to-spec"}
 OZ_AGENT_METADATA_PREFIX = "<!-- oz-agent-metadata:"
