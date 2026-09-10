@@ -237,7 +237,10 @@ class EnforcePrIssueStateForReviewTest(unittest.TestCase):
         self.assertEqual(len(pr_issue.comments), 1)
         body = pr_issue.comments[0].body
         self.assertIn("@alice", body)
-        self.assertIn("Every PR must be linked to a same-repo issue", body)
+        self.assertIn(
+            "Every PR must be linked to a same-repo issue before review can start.",
+            body,
+        )
         self.assertIn("Next step", body)
         self.assertIn("Closes #123", body)
         self.assertIn(
@@ -247,7 +250,11 @@ class EnforcePrIssueStateForReviewTest(unittest.TestCase):
         # Verify REQUEST_CHANGES review was posted with the same body.
         self.assertEqual(len(reviews_created), 1)
         self.assertEqual(reviews_created[0]["event"], "REQUEST_CHANGES")
-        self.assertIn("Every PR must be linked to a same-repo issue", reviews_created[0]["body"])
+        self.assertIn(
+            "Every PR must be linked to a same-repo issue before review can start.",
+            reviews_created[0]["body"],
+        )
+        self.assertIn("_Powered by [Warp](https://www.warp.dev)_", reviews_created[0]["body"])
 
     def test_blocked_pr_with_linked_unready_issue_defers_to_maintainer(self) -> None:
         pr_issue = _IssueWithComments()
@@ -401,7 +408,10 @@ class EnforcePrIssueStateForReviewTest(unittest.TestCase):
             )
 
         body = pr_issue.comments[0].body
-        self.assertIn("Every PR must be linked to a same-repo issue", body)
+        self.assertIn(
+            "Every PR must be linked to a same-repo issue before review can start.",
+            body,
+        )
         self.assertNotIn("CONTRIBUTING.md", body)
 
     def test_org_member_pr_skips_enforcement(self) -> None:

@@ -300,19 +300,31 @@ def split_comment_body(body: str, metadata: str) -> tuple[str, str]:
     return body.strip(), metadata
 
 
-# Italicized suffix appended to every Oz-authored progress comment and
-# auto-generated PR body so readers can tell the message came from the Oz
-# agent and click through to the Oz landing page for more context.
-POWERED_BY_SUFFIX = "_Powered by [Oz](https://oz.warp.dev)_"
+# Italicized suffix appended to every bot-authored progress comment and
+# auto-generated PR body so readers can tell the message came from Warp
+# and click through to the Warp landing page for more context.
+POWERED_BY_SUFFIX = "_Powered by [Warp](https://www.warp.dev)_"
+
+# Pre-rename Oz footer still present on already-posted comments and
+# REQUEST_CHANGES reviews. Match and strip it so comment rebuilds and
+# stale-review detection keep recognizing that historical bot content.
+LEGACY_POWERED_BY_SUFFIX = "_Powered by [Oz](https://oz.warp.dev)_"
+
+_POWERED_BY_SUFFIXES = (POWERED_BY_SUFFIX, LEGACY_POWERED_BY_SUFFIX)
+
+
+def _strip_trailing_powered_by_suffix(content: str) -> str:
+    # Strip any previously-appended suffix so rebuilds keep a single trailing
+    # section across append/edit cycles, including historical Oz footers.
+    content = content.strip()
+    for suffix in _POWERED_BY_SUFFIXES:
+        if content.endswith(suffix):
+            return content[: -len(suffix)].rstrip()
+    return content
 
 
 def build_comment_body(content: str, metadata: str) -> str:
-    content = content.strip()
-    # Strip any previously-appended suffix so the one added below stays a
-    # single, trailing section regardless of how many times the body is
-    # rebuilt (e.g. across append/edit cycles).
-    if content.endswith(POWERED_BY_SUFFIX):
-        content = content[: -len(POWERED_BY_SUFFIX)].rstrip()
+    content = _strip_trailing_powered_by_suffix(content)
     if content:
         content = f"{content}\n\n{POWERED_BY_SUFFIX}"
     else:
@@ -516,7 +528,7 @@ def append_comment_sections(existing_body: str, metadata: str, sections: list[st
     updated_sections = [section.strip() for section in content.split("\n\n") if section.strip()]
     # Drop any prior "Powered by" suffix so ``build_comment_body`` can
     # re-add it as the last section after new sections are appended.
-    updated_sections = [s for s in updated_sections if s != POWERED_BY_SUFFIX]
+    updated_sections = [s for s in updated_sections if s not in _POWERED_BY_SUFFIXES]
     for section in normalized_sections:
         if section.startswith(_PROGRESS_LINK_PREFIXES):
             updated_sections = [

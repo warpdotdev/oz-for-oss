@@ -459,9 +459,7 @@ class IssueCommentEventTest(unittest.TestCase):
         )
         self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
 
-    def test_legacy_oz_review_command_on_pr_still_routes_to_review(self) -> None:
-        # ``/oz-review`` is an undocumented backwards-compatible alias:
-        # in-flight PRs and already-published docs still reference it.
+    def test_oz_review_command_on_pr_does_not_route_to_review(self) -> None:
         decision = route_event(
             "issue_comment",
             {
@@ -470,7 +468,7 @@ class IssueCommentEventTest(unittest.TestCase):
                 "comment": _comment(body="/oz-review please"),
             },
         )
-        self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
+        self.assertIsNone(decision.workflow)
 
     def test_oz_agent_review_alias_on_pr_routes_to_review(self) -> None:
         decision = route_event(
@@ -490,17 +488,6 @@ class IssueCommentEventTest(unittest.TestCase):
                 "action": "created",
                 "issue": _issue(pull_request={"url": "..."}),
                 "comment": _comment(body="/warp-agent-reviewed this already"),
-            },
-        )
-        self.assertIsNone(decision.workflow)
-
-    def test_oz_review_prefix_without_word_boundary_is_dropped(self) -> None:
-        decision = route_event(
-            "issue_comment",
-            {
-                "action": "created",
-                "issue": _issue(pull_request={"url": "..."}),
-                "comment": _comment(body="/oz-reviewed this already"),
             },
         )
         self.assertIsNone(decision.workflow)
@@ -949,7 +936,7 @@ class PullRequestReviewCommentTest(unittest.TestCase):
         )
         self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
 
-    def test_legacy_oz_review_command_on_review_comment_still_routes_to_review(self) -> None:
+    def test_oz_review_command_on_review_comment_does_not_route_to_review(self) -> None:
         decision = route_event(
             "pull_request_review_comment",
             {
@@ -957,7 +944,7 @@ class PullRequestReviewCommentTest(unittest.TestCase):
                 "comment": _comment(body="/oz-review"),
             },
         )
-        self.assertEqual(decision.workflow, WORKFLOW_REVIEW_PR)
+        self.assertIsNone(decision.workflow)
 
     def test_oz_agent_review_alias_on_review_comment_routes_to_review(self) -> None:
         decision = route_event(
