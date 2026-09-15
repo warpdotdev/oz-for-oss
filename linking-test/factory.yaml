@@ -1,0 +1,15 @@
+schemaVersion: v1alpha1
+name: Linking Test
+alias: linking-test
+credentialStrategy: EXECUTOR
+codeForges:
+    - GITHUB
+repositories:
+    - owner: warpdotdev
+      name: oz-for-oss
+    - owner: warpdotdev
+      name: warp-server
+integrations: []
+agentDefaults:
+    model: auto-genius
+    runner: default
