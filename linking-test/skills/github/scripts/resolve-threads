@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""Resolve specific review threads on a GitHub pull request after a revision.
+
+After a revision pushes commits that address review comments, call this script
+to resolve the specific review threads whose feedback was addressed.  Before
+resolving each thread this script posts a reply linking to the revision commit
+so resolved threads carry a traceable audit comment.  Only the explicitly
+listed thread IDs are touched; any other unresolved threads are left alone.
+
+Usage:
+  resolve-threads --repo <owner/repo> --pr <number> \\
+    --thread-ids <id1,id2,...> --revision <N> --commit-sha <sha> \\
+    --footer <footer>
+
+Arguments:
+  --repo          Repository in owner/repo format (e.g. warpdotdev/factory-agents).
+  --pr            Pull request number.
+  --thread-ids    Comma-separated list of GraphQL review thread node IDs to
+                  resolve.  Obtain these from the GraphQL reviewThreads query
+                  (each node's `id` field, e.g. PRRT_kwDOTEGiAs6NuFxg).
+                  Only these specific threads are touched; unrelated or
+                  unaddressed threads are not resolved.
+  --revision      Revision number (1 for the first revision of the PR).
+                  Used to compose the reply comment.
+  --commit-sha    SHA of the revision commit that addressed the threads.  Used
+                  to build a hyperlink in the reply: the posted comment reads
+                  "[addressed on revision # N](https://github.com/<owner>/<repo>/commit/<sha>)".
+                  Either --commit-sha or --commit-url must be provided.
+  --commit-url    Full URL of the revision commit (alternative to --commit-sha;
+                  use when you already have the complete URL).  If both are
+                  given, --commit-url takes precedence.
+  --footer        Footer line identifying the factory and the run (e.g.
+                  "Responding as <factory name>: [Open session](...) ·
+                  [View in factory](...)").  Appended to the reply posted
+                  on every resolved thread.  Required.
+
+Exits 0 on success (including when --thread-ids resolves to an empty list).
+Exits nonzero on hard errors (gh not installed, API failure, unknown thread ID).
+Prints a JSON summary: {"resolved": N} where N is the count of threads resolved.
+"""
+import argparse
+import json
+import subprocess
+import sys
+
+
+QUERY_THREADS = """
+query($owner: String!, $repo: String!, $pr: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          comments(first: 1) {
+            nodes { databaseId }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+MUTATION_RESOLVE = """
+mutation($threadId: ID!) {
+  resolveReviewThread(input: {threadId: $threadId}) {
+    thread { id isResolved }
+  }
+}
+"""
+
+
+def die(msg, code=1):
+    sys.stderr.write(msg.rstrip() + "\n")
+    sys.exit(code)
+
+
+def gh_graphql(query, **variables):
+    """Run a gh api graphql call with the given query and variables.
+
+    Variables are passed as -f/-F flags: strings with -f, integers with -F.
+    Returns the parsed JSON response dict. Fails loudly on any error.
+    """
+    args = ["gh", "api", "graphql", "-f", "query=" + query]
+    for key, value in variables.items():
+        if isinstance(value, int):
+            args += ["-F", f"{key}={value}"]
+        else:
+            args += ["-f", f"{key}={value}"]
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True)
+    except FileNotFoundError:
+        die("`gh` CLI not found on PATH; install/authenticate the GitHub CLI")
+    if proc.returncode != 0:
+        die("`gh api graphql` failed:\n" + (proc.stderr.strip() or "(no stderr)"))
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        die(f"unexpected non-JSON response from gh api graphql: {exc}")
+
+
+def gh_rest_post(path, payload):
+    """POST JSON payload to the GitHub REST API. Returns the parsed response."""
+    args = ["gh", "api", "--method", "POST", path, "--input", "-"]
+    try:
+        proc = subprocess.run(
+            args, capture_output=True, text=True, input=json.dumps(payload)
+        )
+    except FileNotFoundError:
+        die("`gh` CLI not found on PATH; install/authenticate the GitHub CLI")
+    if proc.returncode != 0:
+        die(
+            f"`gh api POST {path}` failed:\n"
+            + (proc.stderr.strip() or "(no stderr)")
+        )
+    if proc.stdout.strip():
+        try:
+            return json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            die(f"unexpected non-JSON response from gh api: {exc}")
+    return {}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="resolve-threads",
+        description=(
+            "Resolve specific review threads on a GitHub pull request after a revision. "
+            "Posts a markdown hyperlink reply linking to the revision commit on each "
+            "targeted thread before resolving it via resolveReviewThread. Only the "
+            "explicitly listed thread IDs are touched; unrelated or unaddressed "
+            "threads are left alone."
+        ),
+    )
+    parser.add_argument(
+        "--repo",
+        required=True,
+        help="Repository in owner/repo format (e.g. warpdotdev/factory-agents).",
+    )
+    parser.add_argument(
+        "--pr",
+        required=True,
+        type=int,
+        help="Pull request number.",
+    )
+    parser.add_argument(
+        "--thread-ids",
+        required=True,
+        help=(
+            "Comma-separated list of GraphQL review thread node IDs to resolve "
+            "(e.g. PRRT_kwDOTEGiAs6NuFxg,PRRT_kwDOTEGiAs6NuFxl). "
+            "Only these threads are touched; unrelated threads are left alone."
+        ),
+    )
+    parser.add_argument(
+        "--revision",
+        required=True,
+        type=int,
+        help=(
+            "Revision number (1 for the first revision of the PR). "
+            "Used to compose the reply comment label: 'addressed on revision # N'."
+        ),
+    )
+    parser.add_argument(
+        "--commit-sha",
+        default=None,
+        help=(
+            "SHA of the revision commit that addressed the threads. Used to build a "
+            "hyperlink in the reply: '[addressed on revision # N]("
+            "https://github.com/<owner>/<repo>/commit/<sha>)'. "
+            "Either --commit-sha or --commit-url must be provided."
+        ),
+    )
+    parser.add_argument(
+        "--commit-url",
+        default=None,
+        help=(
+            "Full URL of the revision commit (alternative to --commit-sha; use when "
+            "you already have the complete URL). If both are given, --commit-url "
+            "takes precedence."
+        ),
+    )
+    parser.add_argument(
+        "--footer",
+        required=True,
+        help=(
+            "Footer line identifying the factory and the run, appended to the reply "
+            "posted on every resolved thread."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    if not args.footer.strip():
+        die("--footer must not be blank")
+
+    if "/" not in args.repo:
+        die("--repo must be in owner/repo format")
+    owner, repo = args.repo.split("/", 1)
+
+    if not args.commit_sha and not args.commit_url:
+        die("one of --commit-sha or --commit-url is required")
+
+    # Build the commit URL from --commit-sha when --commit-url was not given.
+    if args.commit_url:
+        commit_url = args.commit_url
+    else:
+        commit_url = f"https://github.com/{owner}/{repo}/commit/{args.commit_sha}"
+
+    target_ids = [tid.strip() for tid in args.thread_ids.split(",") if tid.strip()]
+    if not target_ids:
+        print(json.dumps({"resolved": 0}))
+        return 0
+
+    # 1. Fetch all review threads to look up first-comment databaseIds.
+    response = gh_graphql(QUERY_THREADS, owner=owner, repo=repo, pr=args.pr)
+    try:
+        all_threads = (
+            response["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+        )
+    except (KeyError, TypeError) as exc:
+        die(f"unexpected GraphQL response shape: {exc}\nResponse: {json.dumps(response)}")
+
+    # Index by thread node ID for O(1) lookup.
+    thread_map = {t["id"]: t for t in all_threads}
+
+    # 2. For each targeted thread: reply then resolve.
+    resolved_count = 0
+    # Note the space between '#' and the number: `# N`, not `#N`. Without it,
+    # GitHub would auto-link `#N` to issue/PR number N in the target repo.
+    reply_body = f"[addressed on revision # {args.revision}]({commit_url})\n\n{args.footer}"
+    for thread_id in target_ids:
+        thread = thread_map.get(thread_id)
+        if thread is None:
+            die(
+                f"thread ID {thread_id!r} not found on PR #{args.pr} in "
+                f"{owner}/{repo}; verify the ID with the GraphQL reviewThreads query"
+            )
+
+        if thread.get("isResolved"):
+            # Already resolved from a previous attempt; count it and skip.
+            resolved_count += 1
+            continue
+
+        # Obtain the first comment's REST database ID (needed for in_reply_to).
+        first_comment_nodes = thread.get("comments", {}).get("nodes", [])
+        if not first_comment_nodes:
+            die(
+                f"thread {thread_id!r} has no comments; cannot post reply "
+                f"(unexpected state — verify the thread ID)"
+            )
+        first_comment_id = first_comment_nodes[0]["databaseId"]
+
+        # Post "addressed on rework # N" reply before resolving.
+        gh_rest_post(
+            f"/repos/{owner}/{repo}/pulls/{args.pr}/comments",
+            {"body": reply_body, "in_reply_to": first_comment_id},
+        )
+
+        # Resolve the thread via GraphQL.
+        gh_graphql(MUTATION_RESOLVE, threadId=thread_id)
+        resolved_count += 1
+
+    print(json.dumps({"resolved": resolved_count}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
