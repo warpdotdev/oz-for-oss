@@ -165,6 +165,18 @@ def handlers_for_workflow(
         client = _client_factory(state.installation_id, github_client_factory)
         repo_handle = client.get_repo(state.repo)
         progress = workflow.progress_for_state(repo_handle, state=state)
+        # Record the Oz session link onto the progress comment before
+        # applying the result. A run that reaches a terminal SUCCEEDED
+        # state on the first cron poll never passes through
+        # ``non_terminal_handler``, so without this the completion comment
+        # posted back to the PR/issue -- including the "completed with no
+        # work" message -- would omit the link back to the Warp
+        # conversation that explains what the agent did. ``run_adapter``
+        # derives its ``session_link`` from the progress comment, so this
+        # must run before the adapter is built. Mirrors the failure
+        # handler, which records the link before ``report_error``.
+        if run is not None:
+            record_session_link_safely(progress, run)
         run_adapter = workflow.run_adapter_for_state(state=state, progress=progress, run=run)
         try:
             workflow.apply_result(
