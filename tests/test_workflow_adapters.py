@@ -81,6 +81,7 @@ class WorkflowProgressAdapterTest(unittest.TestCase):
                 "pr_number": 12,
                 "requester": "alice",
                 "progress_comment_id": 4242,
+                "session_link": "https://app.warp.dev/conversation/abc",
             },
         )
 
@@ -96,6 +97,33 @@ class WorkflowProgressAdapterTest(unittest.TestCase):
         self.assertEqual(progress.kwargs["requester_login"], "alice")
         self.assertEqual(progress.kwargs["comment_id"], 4242)
         self.assertEqual(progress.kwargs["run_id"], "oz-run-123")
+        self.assertEqual(
+            progress.kwargs["session_link"],
+            "https://app.warp.dev/conversation/abc",
+        )
+
+    def test_make_run_adapter_uses_terminal_run_session_link_when_progress_lacks_it(self) -> None:
+        from oz.agent_workflow import make_run_adapter
+
+        state = RunState(
+            run_id="oz-run-456",
+            workflow="triage-new-issues",
+            repo="acme/widgets",
+            installation_id=42,
+        )
+        progress = type("_Progress", (), {"session_link": ""})()
+        run = type(
+            "_Run",
+            (),
+            {"session_link": "https://app.warp.dev/conversation/terminal"},
+        )()
+
+        adapter = make_run_adapter(state=state, progress=progress, run=run)
+
+        self.assertEqual(
+            adapter.session_link,
+            "https://app.warp.dev/conversation/terminal",
+        )
 
     def test_dispatch_request_for_workflow_preserves_attachments(self) -> None:
         from core.workflow_adapters import dispatch_request_for_workflow

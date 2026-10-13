@@ -73,8 +73,16 @@ def reconstruct_progress(
         review_reply_target=review_reply_target,
         comment_id=progress_comment_id or None,
         run_id=state.run_id,
+        session_link=str(payload.get("session_link") or ""),
     )
 
+
+def remember_run_session_link(state: RunState, run: Any) -> str:
+    """Persist the latest known Oz session link on the in-flight run state."""
+    session_link = str(getattr(run, "session_link", None) or "").strip()
+    if session_link:
+        state.payload_subset["session_link"] = session_link
+    return session_link
 
 def record_session_link_safely(progress: Any, run: Any) -> None:
     from oz.helpers import record_run_session_link  # type: ignore[import-not-found]
@@ -165,6 +173,11 @@ def handlers_for_workflow(
         client = _client_factory(state.installation_id, github_client_factory)
         repo_handle = client.get_repo(state.repo)
         progress = workflow.progress_for_state(repo_handle, state=state)
+        if run is not None:
+            record_session_link_safely(progress, run)
+            session_link = remember_run_session_link(state, run)
+            if session_link:
+                progress.session_link = session_link
         run_adapter = workflow.run_adapter_for_state(state=state, progress=progress, run=run)
         try:
             workflow.apply_result(
@@ -191,6 +204,9 @@ def handlers_for_workflow(
         repo_handle = client.get_repo(state.repo)
         progress = workflow.progress_for_state(repo_handle, state=state)
         record_session_link_safely(progress, run)
+        session_link = remember_run_session_link(state, run)
+        if session_link:
+            progress.session_link = session_link
 
     return WorkflowHandlers(
         artifact_loader=loader,
