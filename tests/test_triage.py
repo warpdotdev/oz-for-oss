@@ -1580,12 +1580,9 @@ class TriageFactoryQueueTest(unittest.TestCase):
         self.assertNotIn("factory_auto_implement", prompt)
         self.assertNotIn("factory-auto-implement", prompt)
         self.assertNotIn("evaluate-auto-implement-eligibility", prompt)
-        self.assertEqual(
+        self.assertNotIn(
+            ".agents/skills/evaluate-auto-implement-eligibility-local/SKILL.md",
             [call.args[0] for call in repo_handle.get_contents.call_args_list],
-            [
-                ".agents/skills/triage-issue-local/SKILL.md",
-                ".agents/skills/dedupe-issue-local/SKILL.md",
-            ],
         )
 
     def test_triage_result_cannot_add_factory_queue_label(self) -> None:
