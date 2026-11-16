@@ -467,11 +467,6 @@ class ExtractRequestedLabelsTest(unittest.TestCase):
                 ["bug", "repro:high", "area:workflow"],
             ),
             (
-                "strips_factory_queue_label_case_insensitively",
-                {"labels": ["bug", "Factory-Auto-Implement"]},
-                ["bug"],
-            ),
-            (
                 "returns_empty_when_only_prohibited",
                 {"labels": ["ready-to-implement", "ready-to-spec"]},
                 [],
@@ -1585,39 +1580,32 @@ class TriageFactoryQueueTest(unittest.TestCase):
             [call.args[0] for call in repo_handle.get_contents.call_args_list],
         )
 
-    def test_triage_result_cannot_add_factory_queue_label(self) -> None:
-        for result_fields in (
-            {"factory_auto_implement": True},
-            {"labels": ["bug", "factory-auto-implement"]},
-        ):
-            with self.subTest(result_fields=result_fields):
-                github = FakeTriageGitHubClient()
-                progress = MagicMock()
-                progress.session_link = ""
-                apply_triage_result_for_dispatch(
-                    github,
-                    context={
-                        "owner": "acme",
-                        "repo": "widgets",
-                        "issue_number": 42,
-                        "repo_label_names": [
-                            "bug", "triaged", "factory-auto-implement"
-                        ],
-                    },
-                    run=None,
-                    result={
-                        "labels": ["bug"],
-                        "summary": "localized crash with a clear fix",
-                        "issue_body": "Known root cause.",
-                        **result_fields,
-                    },
-                    progress=progress,
-                )
-                self.assertEqual(github.added_labels, ["bug", "triaged"])
-                self.assertEqual(github.added_assignees, [])
-                rendered = progress.replace_body.call_args.args[0]
-                self.assertIn("Known root cause.", rendered)
-                self.assertNotIn("factory auto-implement queue", rendered)
+    def test_ignores_factory_eligibility_result(self) -> None:
+        github = FakeTriageGitHubClient()
+        progress = MagicMock()
+        progress.session_link = ""
+        apply_triage_result_for_dispatch(
+            github,
+            context={
+                "owner": "acme",
+                "repo": "widgets",
+                "issue_number": 42,
+                "repo_label_names": ["bug", "triaged", "factory-auto-implement"],
+            },
+            run=None,
+            result={
+                "labels": ["bug"],
+                "summary": "localized crash with a clear fix",
+                "issue_body": "Known root cause.",
+                "factory_auto_implement": True,
+            },
+            progress=progress,
+        )
+        self.assertEqual(github.added_labels, ["bug", "triaged"])
+        self.assertEqual(github.added_assignees, [])
+        rendered = progress.replace_body.call_args.args[0]
+        self.assertIn("Known root cause.", rendered)
+        self.assertNotIn("factory auto-implement queue", rendered)
 
 
 class ApplyTriageResultForDispatchResponseModeTest(unittest.TestCase):

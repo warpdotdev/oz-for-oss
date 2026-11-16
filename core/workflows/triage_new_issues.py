@@ -57,11 +57,7 @@ PRIMARY_TRIAGE_LABELS = {
 }
 PRIORITY_LABELS = {"agent:priority-high", "priority:high"}
 REPRO_LABEL_PREFIX = "repro:"
-AGENT_PROHIBITED_LABELS = {
-    "ready-to-implement",
-    "ready-to-spec",
-    "factory-auto-implement",
-}
+AGENT_PROHIBITED_LABELS = {"ready-to-implement", "ready-to-spec"}
 OZ_AGENT_METADATA_PREFIX = "<!-- oz-agent-metadata:"
 TRIAGE_DISCLAIMER = "*This is my automated analysis and may be incorrect. A maintainer will verify the details.*"
 _ISSUE_BODY_ATTACHMENT = "issue_body.md"
@@ -430,7 +426,7 @@ def extract_requested_labels(result: dict[str, Any]) -> list[str]:
 
     Labels in ``AGENT_PROHIBITED_LABELS`` are silently removed so the
     triage agent cannot promote an issue to ``ready-to-implement`` or
-    ``ready-to-spec`` or queue factory implementation on its own.
+    ``ready-to-spec`` on its own.
     """
     raw_labels = result.get("labels")
     if not isinstance(raw_labels, list):
