@@ -16,7 +16,6 @@ from core.workflows.triage_new_issues import (
     COMMENT_TYPE_RESPONSE,
     COMMENT_TYPE_TRIAGE,
     NEEDS_SUPPORT_LABEL,
-    FACTORY_AUTO_IMPLEMENT_LABEL,
     PRIMARY_TRIAGE_LABELS,
     PRIORITY_LABELS,
     RESPONSE_DETAILS_SUMMARY,
@@ -26,6 +25,7 @@ from core.workflows.triage_new_issues import (
     _record_triage_session_link,
     apply_triage_result,
     apply_triage_result_for_dispatch,
+    build_triage_prompt_for_dispatch,
     build_response_comment_body,
     build_duplicate_section,
     build_follow_up_section,
@@ -34,7 +34,6 @@ from core.workflows.triage_new_issues import (
     extract_close_issue,
     extract_comment_type,
     extract_duplicate_of,
-    extract_factory_auto_implement,
     extract_follow_up_questions,
     extract_response_body,
     extract_response_details,
@@ -1565,166 +1564,48 @@ class BuildResponseCommentBodyTest(unittest.TestCase):
         self.assertNotIn("Here's what I found while triaging", body)
 
 
-class ExtractFactoryAutoImplementTest(unittest.TestCase):
-    """``extract_factory_auto_implement`` accepts only strict boolean True."""
+class TriageFactoryQueueTest(unittest.TestCase):
+    def test_prompt_does_not_request_factory_eligibility(self) -> None:
+        repo_handle = MagicMock()
+        repo_handle.get_contents.return_value.decoded_content = b"# Local guidance\n"
+        prompt = build_triage_prompt_for_dispatch(
+            {"owner": "acme", "repo": "widgets", "issue_number": 42},
+            repo_handle=repo_handle,
+        )
+        self.assertNotIn("factory_auto_implement", prompt)
+        self.assertNotIn("factory-auto-implement", prompt)
+        self.assertNotIn("evaluate-auto-implement-eligibility", prompt)
+        self.assertNotIn(
+            ".agents/skills/evaluate-auto-implement-eligibility-local/SKILL.md",
+            [call.args[0] for call in repo_handle.get_contents.call_args_list],
+        )
 
-    def test_strict_boolean_parsing_table(self) -> None:
-        cases = [
-            ("true_bool", {"factory_auto_implement": True}, True),
-            ("false_bool", {"factory_auto_implement": False}, False),
-            ("missing_field", {}, False),
-            ("none", {"factory_auto_implement": None}, False),
-            ("string_true", {"factory_auto_implement": "true"}, False),
-            ("string_True", {"factory_auto_implement": "True"}, False),
-            ("int_one", {"factory_auto_implement": 1}, False),
-            ("list_true", {"factory_auto_implement": [True]}, False),
-            (
-                "legacy_auto_implement_ignored",
-                {"auto_implement": True},
-                False,
-            ),
-            (
-                "legacy_and_false_factory",
-                {"auto_implement": True, "factory_auto_implement": False},
-                False,
-            ),
-        ]
-        for label, payload, expected in cases:
-            with self.subTest(label=label):
-                self.assertIs(
-                    extract_factory_auto_implement(payload), expected
-                )
-
-
-class ApplyFactoryAutoImplementForDispatchTest(unittest.TestCase):
-    """Triage may queue factory auto-implement via label only."""
-
-    def _context(self, **overrides: object) -> dict[str, object]:
-        base: dict[str, object] = {
-            "owner": "acme",
-            "repo": "widgets",
-            "issue_number": 42,
-            "is_retriage": False,
-            "requester": "alice",
-            "configured_labels": {
-                "bug": {"color": "D73A4A", "description": "bug"},
-                "triaged": {"color": "0E8A16", "description": "done"},
+    def test_ignores_factory_eligibility_result(self) -> None:
+        github = FakeTriageGitHubClient()
+        progress = MagicMock()
+        progress.session_link = ""
+        apply_triage_result_for_dispatch(
+            github,
+            context={
+                "owner": "acme",
+                "repo": "widgets",
+                "issue_number": 42,
+                "repo_label_names": ["bug", "triaged", "factory-auto-implement"],
             },
-            "repo_label_names": ["bug", "triaged", FACTORY_AUTO_IMPLEMENT_LABEL],
-            "issue_labels": [],
-        }
-        base.update(overrides)
-        return base
-
-    def _base_result(self, **overrides: object) -> dict[str, object]:
-        result: dict[str, object] = {
-            "summary": "this is a localized client crash with a clear fix",
-            "labels": ["bug"],
-            "issue_body": "## Triage summary\nKnown root cause.",
-            "statements": "",
-            "follow_up_questions": [],
-            "duplicate_of": [],
-            "factory_auto_implement": True,
-            "factory_auto_implement_reasoning": (
-                "client-side crash with known root cause and clear fix path"
-            ),
-        }
-        result.update(overrides)
-        return result
-
-    def test_positive_applies_factory_label_without_assignment(self) -> None:
-        github = FakeTriageGitHubClient()
-        progress = MagicMock()
-        progress.session_link = ""
-        apply_triage_result_for_dispatch(
-            github,
-            context=self._context(),
             run=None,
-            result=self._base_result(),
+            result={
+                "labels": ["bug"],
+                "summary": "localized crash with a clear fix",
+                "issue_body": "Known root cause.",
+                "factory_auto_implement": True,
+            },
             progress=progress,
         )
-        self.assertIn(FACTORY_AUTO_IMPLEMENT_LABEL, github.added_labels)
-        self.assertNotIn("auto-implement", github.added_labels)
+        self.assertEqual(github.added_labels, ["bug", "triaged"])
         self.assertEqual(github.added_assignees, [])
         rendered = progress.replace_body.call_args.args[0]
-        self.assertIn("factory auto-implement queue", rendered)
-        self.assertNotIn("oz-agent", rendered)
-        self.assertNotIn("`auto-implement`", rendered)
-
-    def test_skips_label_when_follow_up_questions_present(self) -> None:
-        github = FakeTriageGitHubClient()
-        progress = MagicMock()
-        progress.session_link = ""
-        apply_triage_result_for_dispatch(
-            github,
-            context=self._context(),
-            run=None,
-            result=self._base_result(
-                follow_up_questions=[
-                    {
-                        "question": "Which OS version?",
-                        "reasoning": "environment-specific",
-                    }
-                ]
-            ),
-            progress=progress,
-        )
-        self.assertNotIn(FACTORY_AUTO_IMPLEMENT_LABEL, github.added_labels)
-        self.assertEqual(github.added_assignees, [])
-        rendered = progress.replace_body.call_args.args[0]
+        self.assertIn("Known root cause.", rendered)
         self.assertNotIn("factory auto-implement queue", rendered)
-
-    def test_skips_label_when_duplicates_present(self) -> None:
-        github = FakeTriageGitHubClient()
-        progress = MagicMock()
-        progress.session_link = ""
-        apply_triage_result_for_dispatch(
-            github,
-            context=self._context(),
-            run=None,
-            result=self._base_result(
-                duplicate_of=[
-                    {
-                        "issue_number": 7,
-                        "title": "Same crash",
-                        "similarity_reason": "identical stack",
-                    }
-                ]
-            ),
-            progress=progress,
-        )
-        self.assertNotIn(FACTORY_AUTO_IMPLEMENT_LABEL, github.added_labels)
-        self.assertEqual(github.added_assignees, [])
-        rendered = progress.replace_body.call_args.args[0]
-        self.assertNotIn("factory auto-implement queue", rendered)
-
-    def test_legacy_or_missing_fields_default_safely(self) -> None:
-        cases = [
-            ("missing", {}),
-            ("legacy_true", {"auto_implement": True}),
-            ("string_true", {"factory_auto_implement": "true"}),
-            ("false", {"factory_auto_implement": False}),
-        ]
-        for label, extra in cases:
-            with self.subTest(label=label):
-                github = FakeTriageGitHubClient()
-                progress = MagicMock()
-                progress.session_link = ""
-                result = self._base_result()
-                result.pop("factory_auto_implement", None)
-                result.pop("factory_auto_implement_reasoning", None)
-                result.update(extra)
-                apply_triage_result_for_dispatch(
-                    github,
-                    context=self._context(),
-                    run=None,
-                    result=result,
-                    progress=progress,
-                )
-                self.assertNotIn(
-                    FACTORY_AUTO_IMPLEMENT_LABEL, github.added_labels
-                )
-                self.assertEqual(github.added_assignees, [])
 
 
 class ApplyTriageResultForDispatchResponseModeTest(unittest.TestCase):
