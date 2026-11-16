@@ -1,0 +1,5 @@
+platform:
+    os: linux
+    arch: x86_64
+    linux:
+        dockerImage: warpdotdev/dev-base:latest
