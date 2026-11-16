@@ -107,13 +107,8 @@ AUTO_IMPLEMENT_LABEL = "auto-implement"
 OZ_AGENT_MENTION = "@oz-agent"
 WARP_AGENT_REVIEW_COMMAND = "/warp-agent-review"
 OZ_VERIFY_COMMAND = "/oz-verify"
-# ``/oz-review`` was the original name of this command before it was
-# renamed to ``/warp-agent-review``. It is kept as an undocumented,
-# backwards-compatible alias — never advertised in new user-facing text —
-# so in-flight PRs and already-published docs that still reference it
-# keep working.
 REVIEW_COMMAND_PATTERN = re.compile(
-    r"(?:^|\s)(?:/warp-agent-review|/oz-review|@oz-agent\s+/review)(?![-\w])",
+    r"(?:^|\s)(?:/warp-agent-review|@oz-agent\s+/review)(?![-\w])",
     re.IGNORECASE,
 )
 MAX_DAILY_REVIEW_INVOCATIONS = 5
@@ -132,8 +127,7 @@ _SKIP_BOT_REVIEW: dict[str, frozenset[int]] = {
 def has_review_command(body: str) -> bool:
     """Return whether *body* carries an explicit Oz review invocation.
 
-    Matches ``/warp-agent-review``, the legacy ``/oz-review`` alias, or
-    the ``@oz-agent /review`` mention form.
+    Matches ``/warp-agent-review`` or the ``@oz-agent /review`` mention form.
     """
     return bool(REVIEW_COMMAND_PATTERN.search(body or ""))
 

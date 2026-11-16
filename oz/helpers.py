@@ -300,10 +300,9 @@ def split_comment_body(body: str, metadata: str) -> tuple[str, str]:
     return body.strip(), metadata
 
 
-# Italicized suffix appended to every Oz-authored progress comment and
-# auto-generated PR body so readers can tell the message came from the Oz
-# agent and click through to the Oz landing page for more context.
-POWERED_BY_SUFFIX = "_Powered by [Oz](https://oz.warp.dev)_"
+# Italicized suffix appended to every bot-authored progress comment and
+# auto-generated PR body so readers can click through to Warp.
+POWERED_BY_SUFFIX = "_Powered by [Warp](https://warp.dev)_"
 
 
 def build_comment_body(content: str, metadata: str) -> str:
